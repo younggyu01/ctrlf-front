@@ -41,13 +41,13 @@ services:
       KC_DB_USERNAME: ctrlf_user
       KC_DB_PASSWORD: 1a2s3d4f!
       KC_HOSTNAME: localhost
-      KC_IMPORT: /opt/keycloak/data/import/ctrlf-realm.json
+      KC_IMPORT: /opt/keycloak/data/import
       KC_IMPORT_STRATEGY: OVERWRITE_EXISTING
 
     volumes:
-      - ./realm/ctrlf-realm.json:/opt/keycloak/data/import/ctrlf-realm.json
-    command:
-      - start-dev
+      - ./realm:/opt/keycloak/data/import
+
+    command: ["start-dev"]
     ports:
       - "8080:8080"
     networks:

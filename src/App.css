@@ -1,16 +1,11 @@
-/* src/App.css */
-
-/* Vite 기본 스타일 초기화 */
 #root {
   margin: 0;
   padding: 0;
   max-width: 100%;
-  text-align: left;
 }
 
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
     sans-serif;
-  background-color: #ffffff;
 }

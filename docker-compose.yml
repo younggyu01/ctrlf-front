@@ -1,0 +1,61 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    container_name: ctrlf-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 1a2s3d4f!
+      MYSQL_DATABASE: ctrlf
+      MYSQL_USER: ctrlf_user
+      MYSQL_PASSWORD: 1a2s3d4f!
+      TZ: Asia/Seoul
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - ctrlf-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: ctrlf-keycloak
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: mysql
+      KC_DB_URL: jdbc:mysql://mysql:3306/ctrlf
+      KC_DB_USERNAME: ctrlf_user
+      KC_DB_PASSWORD: 1a2s3d4f!
+      KC_HOSTNAME: localhost
+      KC_IMPORT: /opt/keycloak/data/import/ctrlf-realm.json
+      KC_IMPORT_STRATEGY: OVERWRITE_EXISTING
+
+    volumes:
+      - ./realm/ctrlf-realm.json:/opt/keycloak/data/import/ctrlf-realm.json
+    command:
+      - start-dev
+    ports:
+      - "8080:8080"
+    networks:
+      - ctrlf-network
+
+volumes:
+  mysql-data:
+
+networks:
+  ctrlf-network:
+    driver: bridge

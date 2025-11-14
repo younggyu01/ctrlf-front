@@ -1,0 +1,1 @@
+docker logs -f ctrlf-keycloak

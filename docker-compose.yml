@@ -39,9 +39,14 @@ services:
       KC_DB_USERNAME: ctrlf_user
       KC_DB_PASSWORD: 1a2s3d4f!
       KC_HOSTNAME: localhost
+      KC_SPI_THEME_DEFAULT_LOGIN_THEME: ctrlf-theme
+      KC_SPI_THEME_CACHE_TEMPLATES: "false"
+      KC_SPI_THEME_CACHE_THEMES: "false"
     volumes:
-      # ./realm 폴더 안에 realm-export.json 있어야 함
+      # realm-export.json import
       - ./realm:/opt/keycloak/data/import
+      # 커스텀 로그인 테마(React 디자인)
+      - ./keycloak-themes/ctrlf-theme:/opt/keycloak/themes/ctrlf-theme
     command:
       - start-dev
       - --import-realm

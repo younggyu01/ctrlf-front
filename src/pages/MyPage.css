@@ -1,0 +1,106 @@
+/* ===== 마이페이지 메인 레이아웃 ===== */
+
+/* 대시보드 공통 레이아웃은 Dashboard.css에서 처리(dashboard-page, dashboard-topbar 등) */
+.mypage-main {
+  min-height: calc(100vh - 80px); /* 헤더 제외 영역 */
+  display: flex;
+  justify-content: center; /* 가로 중앙 */
+  align-items: center;     /* 세로 중앙 */
+  padding: 32px 0 56px;
+  box-sizing: border-box;
+}
+
+/* ===== ID 카드 + 끈 ===== */
+
+.idcard-wrapper {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 auto;
+}
+
+/* 위에서 내려오는 끈 */
+.idcard-strap {
+  width: 22px;
+  height: 220px;
+  background-color: #000000;
+}
+
+/* 카드 상단의 회색 클립 */
+.idcard-clip {
+  width: 72px;
+  height: 40px;
+  background-color: #dedede;
+  border-radius: 4px;
+  margin-top: -18px;
+  z-index: 1;
+}
+
+/* 바깥 진회색 카드 */
+.idcard-body-outer {
+  margin-top: -12px;
+  width: 100%;
+  height: 360px;             /* 기존 420px → 조금 줄여서 덜 비어 보이게 */
+  border-radius: 36px;
+  background-color: #686573;
+  padding: 24px 24px;        /* 패딩도 약간 줄임 */
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 안쪽 흰 카드 */
+.idcard-body-inner {
+  width: 100%;
+  height: 100%;
+  background-color: #ffffff;
+  border-radius: 28px;
+  padding: 40px 32px;        /* 기존 56px → 위아래 여백 조금 줄임 */
+  box-sizing: border-box;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* 프로필 아이콘 */
+.idcard-avatar {
+  width: 64px;
+  height: 64px;
+  display: block;
+  margin: 0 auto 12px;       /* 아이콘-이름 간격 살짝 좁힘 */
+}
+
+/* 이름 텍스트 */
+.idcard-name {
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 18px;       /* 이름-리스트 간격도 줄임 */
+}
+
+/* 정보 리스트(부서/직급/이메일) */
+.idcard-info-list {
+  align-self: stretch;
+  width: 100%;
+  list-style-type: disc;
+  padding: 0 0 0 20px;       /* 네가 맞춰둔 20px 유지 */
+  margin: 4px 0 0;           /* 위 여백만 살짝 */
+  font-size: 14px;           /* 조금 키워서 덜 휑하게 */
+  line-height: 1.8;
+  text-align: left;
+}
+
+.idcard-info-list li {
+  text-align: left;
+}
+
+.idcard-info-label {
+  font-weight: 600;
+}
+
+.idcard-email-value {
+  font-weight: 600;
+}

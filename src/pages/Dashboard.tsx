@@ -1,8 +1,9 @@
 // src/pages/Dashboard.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import "./Dashboard.css";
 import keycloak from "../keycloak";
-import type { KeycloakTokenParsed } from "keycloak-js";
+import { useNavigate } from "react-router-dom";
+import type { KeycloakProfile } from "keycloak-js";
 
 type InboxItem = {
   id: number;
@@ -69,28 +70,54 @@ const noticeItems: string[] = [
   "20년 하반기 직원 운임 시간 안내다",
 ];
 
-type ExtendedToken = KeycloakTokenParsed & {
-  email?: string;
-};
-
-const getUsernameFromKeycloak = (
-  token: ExtendedToken | undefined,
-  subject: string | undefined
-): string => {
-  if (token?.preferred_username) return token.preferred_username;
-  if (token?.email) return token.email;
-  if (subject) return subject;
-  return "User";
+type ExtendedProfile = KeycloakProfile & {
+  attributes?: {
+    [key: string]: string | string[];
+  };
 };
 
 const Dashboard: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const [profile, setProfile] = useState<ExtendedProfile | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const navigate = useNavigate();
 
-  const token = keycloak.tokenParsed as ExtendedToken | undefined;
-  const username = getUsernameFromKeycloak(token, keycloak.subject);
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const loaded = (await keycloak.loadUserProfile()) as ExtendedProfile;
+        setProfile(loaded);
+      } catch (err) {
+        console.error("Failed to load user profile", err);
+      } finally {
+        setLoadingProfile(false);
+      }
+    };
+
+    fetchProfile();
+  }, []);
+
+  // attributes 안전하게 꺼내는 헬퍼
+  const getAttr = (key: string): string | undefined => {
+    const raw = profile?.attributes?.[key];
+    if (!raw) return undefined;
+    if (Array.isArray(raw)) return raw[0];
+    return raw;
+  };
+
+  // 헤더에 표시할 이름: fullName attribute 우선, 없으면 username, 마지막으로 "User"
+  const displayName =
+    getAttr("fullName") ||
+    profile?.username ||
+    "User";
 
   const handleLogout = (): void => {
     void keycloak.logout();
+  };
+
+  const handleNavigate = (path: string): void => {
+    setIsSidebarOpen(false);
+    navigate(path);
   };
 
   return (
@@ -109,7 +136,9 @@ const Dashboard: React.FC = () => {
           </div>
 
           <div className="topbar-right">
-            <span className="topbar-username">{username}</span>
+            <span className="topbar-username">
+              {loadingProfile ? "..." : displayName}
+            </span>
             <button type="button" className="topbar-notice-btn">
               알림
             </button>
@@ -138,7 +167,8 @@ const Dashboard: React.FC = () => {
           </button>
         </div>
         <ul className="sidebar-nav">
-          <li>마이페이지</li>
+          <li onClick={() => handleNavigate("/dashboard")}>대시보드</li>
+          <li onClick={() => handleNavigate("/mypage")}>마이페이지</li>
           <li>전자결제</li>
           <li>메세지</li>
           <li>행사일정</li>

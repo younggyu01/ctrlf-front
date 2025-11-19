@@ -1,0 +1,367 @@
+/* ===== 전체 레이아웃 ===== */
+
+/* Dashboard 공통 레이아웃 안에서 전자결재 영역만 별도 그리드로 */
+.approval-main {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+  align-items: stretch;
+  width: 75%;
+  margin: 0 auto;
+}
+
+/* 각 패널(카드) 공통 스타일 */
+.approval-panel {
+  background: #ffffff;
+  border-radius: 20px;     
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.05);
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+/* 왼쪽/오른쪽 패널 둘 다 같은 높이가 되도록 */
+.approval-write,
+.approval-box {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== 패널 헤더 (제목) ===== */
+
+.panel-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 16px 0;   /* 20px → 16px */
+  color: #111827;
+  border-bottom: none;
+}
+
+/* ===== 폼 공통 요소 ===== */
+
+.field-group {
+  margin-bottom: 16px;
+}
+
+.field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+/* 타원형 인풋 */
+.text-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  font-size: 13px;
+  outline: none;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+
+.text-input:focus {
+  border-color: #111827;
+}
+
+/* ===== 결재자 입력 영역 ===== */
+
+.approver-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.circle-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.circle-button:hover {
+  background: #111827;
+  color: #f9fafb;
+}
+
+/* 결재자 라인 리스트 박스 */
+.approver-list-wrapper {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: #f9fafb;
+}
+
+.approver-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.approver-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.approver-order {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #111827;
+  color: #f9fafb;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.approver-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 작은 태그 모양 칩 */
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.remove-approver-button {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  color: #9ca3af;
+}
+
+.remove-approver-button:hover {
+  color: #ef4444;
+}
+
+/* 결재라인 추가 버튼 영역 */
+.align-right {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.secondary-button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.secondary-button:hover {
+  background: #111827;
+  color: #f9fafb;
+}
+
+/* ===== 내용(Textarea) & 하단 버튼 ===== */
+
+.content-area {
+  width: 100%;
+  min-height: 230px;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  padding: 14px 16px;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.content-area:focus {
+  border-color: #111827;
+  outline: none;
+}
+
+.form-footer {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.primary-button {
+  padding: 10px 24px;
+  border-radius: 999px;
+  border: none;
+  background: #111827;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary-button:hover {
+  background: #000000;
+}
+
+/* ===== 오른쪽: 결재함 ===== */
+
+.tab-row {
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tab-button {
+  border: none;
+  background: transparent;
+  padding: 0 0 8px 0;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.tab-button.active {
+  color: #111827;
+  font-weight: 600;
+  border-bottom: 2px solid #111827;
+}
+
+/* 리스트 영역이 남은 높이를 채우게 */
+.approval-list {
+  margin-top: 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.approval-card {
+  padding: 14px 0;
+}
+
+.approval-card + .approval-card {
+  border-top: 1px solid #f1f5f9;
+}
+
+.approval-card-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approval-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+}
+
+.approval-card-meta {
+  font-size: 11px;
+  color: #6b7280;
+  margin: 0;
+}
+
+/* 상태 배지 */
+.status-pill {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.status-pill.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-pill.approved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.card-divider {
+  border: none;
+  border-top: 1px solid #f1f5f9;
+  margin: 12px 0 0 0;
+}
+
+.empty-state {
+  margin-top: 24px;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+/* ===== 결재자 자동완성 드롭다운 (실시간 검색) ===== */
+
+.approver-suggestions {
+  margin-top: 6px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  list-style: none;
+  padding-left: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.approver-suggestion-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: background 0.15s ease, transform 0.1s ease,
+    box-shadow 0.15s ease;
+  font-size: 13px;
+}
+
+.approver-suggestion-item + .approver-suggestion-item {
+  margin-top: 4px;
+}
+
+.approver-suggestion-item:hover {
+  background: #111827;
+  color: #f9fafb;
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.18);
+  transform: translateY(-1px);
+}
+
+.suggestion-name {
+  font-weight: 600;
+}
+
+.suggestion-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.approver-suggestion-item:hover .suggestion-meta {
+  color: #e5e7eb;
+}
+
+.approver-search-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #9ca3af;
+}

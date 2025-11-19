@@ -1,9 +1,6 @@
 // src/pages/Dashboard.tsx
-import React, { useState, useEffect } from "react";
+import React from "react";
 import "./Dashboard.css";
-import keycloak from "../keycloak";
-import { useNavigate } from "react-router-dom";
-import type { KeycloakProfile } from "keycloak-js";
 
 type InboxItem = {
   id: number;
@@ -70,121 +67,10 @@ const noticeItems: string[] = [
   "20년 하반기 직원 운임 시간 안내다",
 ];
 
-type ExtendedProfile = KeycloakProfile & {
-  attributes?: {
-    [key: string]: string | string[];
-  };
-};
-
-const Dashboard: React.FC = () => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-  const [profile, setProfile] = useState<ExtendedProfile | null>(null);
-  const [loadingProfile, setLoadingProfile] = useState(true);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const loaded = (await keycloak.loadUserProfile()) as ExtendedProfile;
-        setProfile(loaded);
-      } catch (err) {
-        console.error("Failed to load user profile", err);
-      } finally {
-        setLoadingProfile(false);
-      }
-    };
-
-    fetchProfile();
-  }, []);
-
-  // attributes 안전하게 꺼내는 헬퍼
-  const getAttr = (key: string): string | undefined => {
-    const raw = profile?.attributes?.[key];
-    if (!raw) return undefined;
-    if (Array.isArray(raw)) return raw[0];
-    return raw;
-  };
-
-  // 헤더에 표시할 이름: fullName attribute 우선, 없으면 username, 마지막으로 "User"
-  const displayName =
-    getAttr("fullName") ||
-    profile?.username ||
-    "User";
-
-  const handleLogout = (): void => {
-    void keycloak.logout();
-  };
-
-  const handleNavigate = (path: string): void => {
-    setIsSidebarOpen(false);
-    navigate(path);
-  };
-
+const DashboardPage: React.FC = () => {
   return (
-    <div className="dashboard-page">
-      {/* ===== 상단바 ===== */}
-      <header className="dashboard-topbar">
-        <div className="topbar-inner">
-          <div className="topbar-left">
-            <button
-              type="button"
-              className="topbar-groupware-btn"
-              onClick={() => setIsSidebarOpen(true)}
-            >
-              Group ware
-            </button>
-          </div>
-
-          <div className="topbar-right">
-            <span className="topbar-username">
-              {loadingProfile ? "..." : displayName}
-            </span>
-            <button type="button" className="topbar-notice-btn">
-              알림
-            </button>
-            <button
-              type="button"
-              className="topbar-logout-btn"
-              onClick={handleLogout}
-            >
-              로그아웃
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* ===== 사이드바 ===== */}
-      <aside className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
-        <div className="sidebar-header">
-          <span className="sidebar-title">Group ware</span>
-          <button
-            type="button"
-            className="sidebar-close-btn"
-            onClick={() => setIsSidebarOpen(false)}
-            aria-label="사이드바 닫기"
-          >
-            ✕
-          </button>
-        </div>
-        <ul className="sidebar-nav">
-          <li onClick={() => handleNavigate("/dashboard")}>대시보드</li>
-          <li onClick={() => handleNavigate("/mypage")}>마이페이지</li>
-          <li>전자결재</li>
-          <li>메세지</li>
-          <li>행사일정</li>
-          <li>공지사항</li>
-          <li>조직도</li>
-          <li>교육</li>
-        </ul>
-      </aside>
-      {isSidebarOpen && (
-        <div
-          className="sidebar-backdrop"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
-
-      {/* ===== 메인 그리드 ===== */}
+    <>
+      {/* 본문 그리드만 렌더링 (헤더/사이드바는 Layout에서 처리) */}
       <main className="dashboard-main">
         <div className="dashboard-grid">
           {/* 1행 1열 - Welcome 카드 */}
@@ -207,7 +93,6 @@ const Dashboard: React.FC = () => {
           {/* 2행 1열 - 공지사항 */}
           <section className="card notice-card">
             <div className="notice-header">
-              {/* 경조사 탭 제거, 공지사항만 표시 */}
               <button className="notice-tab active">공지사항</button>
             </div>
 
@@ -238,7 +123,6 @@ const Dashboard: React.FC = () => {
           {/* 1~2행 3열 - 다가오는 일정 */}
           <aside className="card inbox-card">
             <div className="inbox-header">
-              {/* 제목만 변경 */}
               <h2>다가오는 일정</h2>
               <div className="inbox-filters">
                 <button className="filter-btn active">All</button>
@@ -261,7 +145,7 @@ const Dashboard: React.FC = () => {
         </div>
       </main>
 
-      {/* ===== 푸터 ===== */}
+      {/* 푸터는 대시보드에만 유지 */}
       <footer className="dashboard-footer">
         <div className="footer-inner">
           <div className="footer-left">
@@ -277,8 +161,8 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
       </footer>
-    </div>
+    </>
   );
 };
 
-export default Dashboard;
+export default DashboardPage;

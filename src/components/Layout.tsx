@@ -152,7 +152,12 @@ const Layout: React.FC<LayoutProps> = ({ children, pageClassName }) => {
           >
             메세지
           </li>
-          <li>행사일정</li>
+          <li
+            className={isActive("/events") ? "active" : ""}
+            onClick={() => handleNavigate("/events")}
+          >
+            행사일정
+          </li>
           <li>공지사항</li>
           <li>조직도</li>
           <li>교육</li>

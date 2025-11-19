@@ -1,0 +1,385 @@
+/* src/pages/EventPage.css */
+
+.event-page-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 40px 40px 60px;
+  box-sizing: border-box;
+}
+
+.event-page-title {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0 0 24px;
+}
+
+/* 상단: 캘린더 + 우측 카드 */
+.event-top-row {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+/* 카드 공통 */
+.event-card {
+  background-color: #ffffff;
+  border: 1px solid #e5e5e5;
+  border-radius: 16px;
+  padding: 24px 28px;
+  box-sizing: border-box;
+}
+
+.event-calendar-card {
+  flex: 1.6;
+  min-width: 0;
+}
+
+.event-legend-card {
+  flex: 1;
+  min-width: 260px;
+}
+
+/* 카드 헤더 (월 네비게이션) - 피그마처럼 왼쪽 정렬 */
+.event-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.month-label {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.month-nav-btn {
+  border: none;
+  background: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* 캘린더 */
+.event-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  row-gap: 10px;
+  column-gap: 0;
+  font-size: 14px;
+}
+
+.calendar-day-name {
+  text-align: center;
+  font-weight: 500;
+  color: #555555;
+}
+
+.calendar-cell {
+  min-height: 40px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+/* 날짜 버튼 + 내부 구조 */
+.calendar-date-inner {
+  width: 100%;
+  border: none;
+  background-color: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  padding: 0;
+}
+
+.calendar-date-number {
+  font-size: 14px;
+  color: #111111;
+}
+
+/* 선택된 날짜는 숫자에만 동그라미 */
+.calendar-date-inner.selected .calendar-date-number {
+  border-radius: 999px;
+  border: 1px solid #444444;
+  padding: 1px 6px;
+}
+
+/* --- 여러 행사 바들을 묶는 컨테이너 --- */
+.calendar-event-bars {
+  margin-top: 6px;
+  width: 100%;
+}
+
+/* --- 행사 바(bar) 한 줄 --- */
+.calendar-event-bar {
+  display: block;
+  height: 8px;
+  width: 100%;
+  border-radius: 999px;
+  margin-top: 4px; /* 여러 개 있을 때 간격 */
+}
+
+/* 색상 (행사 종류) */
+.calendar-event-bar.bar-briefing {
+  background-color: #d9ccff; /* 연보라 */
+}
+
+.calendar-event-bar.bar-workshop {
+  background-color: #f1d8dd; /* 연분홍 */
+}
+
+.calendar-event-bar.bar-etc {
+  background-color: #e0f2ff; /* 연파랑 */
+}
+
+/* 바의 시작/중간/끝 모양 */
+.calendar-event-bar.event-start {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.calendar-event-bar.event-middle {
+  border-radius: 0;
+}
+
+.calendar-event-bar.event-end {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* 우측 행사 요약 카드 */
+.event-legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+}
+
+.event-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+
+.event-legend-item.no-events {
+  color: #777777;
+}
+
+.legend-pill {
+  width: 40px;
+  height: 16px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.legend-briefing {
+  background-color: #d9ccff;
+}
+
+.legend-workshop {
+  background-color: #f1d8dd;
+}
+
+.legend-etc {
+  background-color: #cfe8ff;
+}
+
+.legend-name {
+  min-width: 80px;
+}
+
+.legend-dates {
+  color: #555555;
+}
+
+/* 중간 버튼 영역 */
+.event-middle-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.event-add-toggle-btn {
+  border-radius: 999px;
+  padding: 6px 14px;
+  border: 1px solid #cccccc;
+  background-color: #ffffff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.event-add-toggle-btn:hover {
+  background-color: #f5f5f5;
+}
+
+/* 검색 버튼 (기간/키워드) */
+.event-search-btn {
+  border-radius: 999px;
+  padding: 6px 16px;
+  border: 1px solid #cccccc;
+  background-color: #ffffff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.event-search-btn:hover {
+  background-color: #f5f5f5;
+}
+
+/* 필터 입력 영역 */
+.event-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.event-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.filter-label {
+  font-weight: 500;
+}
+
+.filter-separator {
+  margin: 0 4px;
+}
+
+.event-filter-row input[type="date"],
+.event-filter-row input[type="text"] {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid #d0d0d0;
+  font-size: 13px;
+}
+
+.filter-reset-btn {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #cccccc;
+  background-color: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-reset-btn:hover {
+  background-color: #f5f5f5;
+}
+
+/* 하단 카드 */
+.event-bottom-row {
+  margin-top: 4px;
+}
+
+.event-list-card {
+  margin-top: 8px;
+}
+
+/* 선택한 날짜 표시 */
+.event-selected-info {
+  font-size: 13px;
+  color: #666666;
+  margin-bottom: 8px;
+}
+
+/* 행사 추가 폼 */
+.event-add-form {
+  margin-bottom: 12px;
+}
+
+.event-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.event-add-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #555555;
+}
+
+.event-add-label input,
+.event-add-label select {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d0d0d0;
+  font-size: 13px;
+  min-width: 120px;
+}
+
+.event-add-submit-btn {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: none;
+  background-color: #3c4bff;
+  color: #ffffff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.event-add-submit-btn:hover {
+  opacity: 0.9;
+}
+
+/* 테이블 */
+.event-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.event-table tr + tr {
+  border-top: 1px solid #f0f0f0;
+}
+
+.event-table-name {
+  padding: 10px 0;
+  width: 180px;
+}
+
+.event-table-dates {
+  padding: 10px 0;
+  text-align: left;
+  color: #555555;
+}
+
+.event-table-actions {
+  padding: 10px 0;
+  text-align: right;
+  width: 80px;
+}
+
+.event-table-empty {
+  padding: 18px 0;
+  text-align: center;
+  color: #777777;
+}
+
+/* 삭제 버튼 */
+.event-delete-btn {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #e0e0e0;
+  background-color: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.event-delete-btn:hover {
+  background-color: #ffe4e4;
+}

@@ -4,6 +4,7 @@ import DashboardPage from "./pages/Dashboard";
 import MyPage from "./pages/MyPage";
 import ApprovalPage from "./pages/ApprovalPage";
 import MessagePage from "./pages/MessagePage";
+import EventPage from "./pages/EventPage";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -48,6 +49,16 @@ export default function App() {
         element={
           <Layout pageClassName="message-page">
             <MessagePage />
+          </Layout>
+        }
+      />
+
+      {/* 행사일정 */}
+      <Route
+        path="/events"
+        element={
+          <Layout pageClassName="event-page">
+            <EventPage />
           </Layout>
         }
       />

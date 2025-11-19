@@ -145,6 +145,13 @@ const ApprovalPage: React.FC = () => {
           department: "총무팀",
           position: "사원",
         },
+        {
+          id: "user-4",
+          username: "test4",
+          fullName: "최대현",
+          department: "인사팀",
+          position: "차장",
+        },
       ].filter(
         (u) =>
           u.fullName.includes(trimmed) ||

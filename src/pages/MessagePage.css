@@ -1,0 +1,317 @@
+/* src/pages/MessagePage.css */
+
+/* 메신저 페이지에서만 main 패딩 조절 */
+.message-page .dashboard-main {
+  padding: 40px 80px 40px;
+  box-sizing: border-box;
+}
+
+/* 카드형 메신저 박스 */
+.message-layout {
+  max-width: 1000px;
+  height: 520px;
+  margin: 0 auto; /* 가운데 정렬 */
+
+  border-radius: 16px;
+  border: 1px solid #eeeeee;
+  background-color: #ffffff;
+  display: grid;
+  grid-template-columns: 320px 1px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+/* 왼쪽 패널 */
+.message-left {
+  padding: 24px 24px 24px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 왼쪽 상단 타이틀 영역 ("메신저 / 팀원들과 소통하세요") */
+.message-left-header {
+  margin-bottom: 16px;
+}
+
+.message-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.message-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #666666;
+}
+
+/* 검색 영역 (돋보기 아이콘 제거 버전) */
+.message-search-wrapper {
+  margin-bottom: 24px;
+}
+
+.message-search-input {
+  width: 100%;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid #e0e0e0;
+  background-color: #fafafa;
+  padding: 0 16px; /* 왼쪽 아이콘 없어서 padding 축소 */
+  font-size: 13px;
+  outline: none;
+}
+
+.message-search-input::placeholder {
+  color: #b3b3b3;
+}
+
+/* 대화 리스트 */
+.message-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.message-thread-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.message-thread-item:hover {
+  background-color: #f5f5f5;
+}
+
+.message-thread-item.active {
+  background-color: #f7f7f7;
+  border-radius: 8px;
+}
+
+.message-thread-avatar img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: #dddddd;
+}
+
+.message-thread-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.message-thread-name {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.message-thread-preview {
+  font-size: 12px;
+  color: #999999;
+}
+
+.message-thread-meta {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.message-thread-time {
+  font-size: 11px;
+  color: #999999;
+}
+
+.message-thread-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background-color: #000000;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 가운데 구분선 */
+.message-divider {
+  width: 1px;
+  background-color: #e0e0e0;
+}
+
+/* 오른쪽 패널 */
+.message-right {
+  padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 상단 프로필 헤더 */
+.message-conversation-header {
+  display: flex;
+  align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+  margin-bottom: 24px;
+}
+
+.message-conversation-avatar img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: #dddddd;
+}
+
+.message-conversation-info {
+  margin-left: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.message-conversation-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.message-conversation-status {
+  font-size: 12px;
+  color: #00a651;
+}
+
+/* 메세지 본문 */
+.message-conversation-body {
+  flex: 1;
+  padding-top: 16px;
+  overflow-y: auto;
+}
+
+/* 공통 말풍선 행 */
+.message-bubble-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* 상대방 메시지 (기본) */
+.message-bubble-row.them {
+  justify-content: flex-start;
+}
+
+.message-bubble-avatar img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: #dddddd;
+}
+
+.message-bubble-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.message-bubble {
+  display: inline-block;
+  padding: 10px 16px;
+  border-radius: 16px;
+  border: 1px solid #dddddd;
+  background-color: #ffffff;
+  font-size: 13px;
+}
+
+/* 나의 메시지 (오른쪽 정렬) */
+.message-bubble-row.me {
+  justify-content: flex-end;
+}
+
+.message-bubble-row.me .message-bubble-avatar {
+  display: none;
+}
+
+.message-bubble-row.me .message-bubble {
+  background-color: #f1f3ff;
+  border-color: #d3d8ff;
+}
+
+.message-bubble-row.me .message-bubble-time {
+  text-align: right;
+}
+
+.message-bubble-time {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #999999;
+}
+
+/* 입력 영역 */
+.message-input-area {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #eeeeee;
+  display: flex;
+  gap: 8px;
+}
+
+.message-input {
+  flex: 1;
+  border-radius: 20px;
+  border: 1px solid #dddddd;
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+}
+
+.message-input:focus {
+  border-color: #999999;
+}
+
+.message-send-btn {
+  padding: 0 18px;
+  border-radius: 18px;
+  border: none;
+  background-color: #111111;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.message-send-btn:hover {
+  opacity: 0.9;
+}
+
+/* 반응형 */
+@media (max-width: 1024px) {
+  .message-page .dashboard-main {
+    padding: 40px 24px 24px;
+  }
+
+  .message-layout {
+    grid-template-columns: 280px 1px minmax(0, 1fr);
+    height: 480px;
+  }
+}
+
+@media (max-width: 768px) {
+  .message-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 260px 1px auto;
+  }
+
+  .message-divider {
+    width: 100%;
+    height: 1px;
+  }
+}

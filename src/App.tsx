@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import DashboardPage from "./pages/Dashboard";
 import MyPage from "./pages/MyPage";
 import ApprovalPage from "./pages/ApprovalPage";
+import MessagePage from "./pages/MessagePage";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -37,6 +38,16 @@ export default function App() {
         element={
           <Layout pageClassName="approval-page">
             <ApprovalPage />
+          </Layout>
+        }
+      />
+
+      {/* 메세지(메신저) */}
+      <Route
+        path="/message"
+        element={
+          <Layout pageClassName="message-page">
+            <MessagePage />
           </Layout>
         }
       />

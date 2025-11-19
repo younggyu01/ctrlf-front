@@ -146,7 +146,12 @@ const Layout: React.FC<LayoutProps> = ({ children, pageClassName }) => {
           >
             전자결재
           </li>
-          <li>메세지</li>
+          <li
+            className={isActive("/message") ? "active" : ""}
+            onClick={() => handleNavigate("/message")}
+          >
+            메세지
+          </li>
           <li>행사일정</li>
           <li>공지사항</li>
           <li>조직도</li>

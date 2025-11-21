@@ -1,0 +1,63 @@
+// src/components/chatbot/chatApi.ts
+
+// 백엔드와 약속할 최소 요청 포맷
+export type ChatMessagePayload = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+// 🔹 세션 도메인 타입 (1단계)
+export type ChatDomain =
+  | "general"
+  | "policy"
+  | "faq"
+  | "quiz"
+  | "edu"
+  | "security";
+
+export interface ChatRequest {
+  sessionId: string;
+  // 🔹 현재 세션의 도메인 (백엔드 라우팅 등에 활용 예정)
+  domain: ChatDomain;
+  messages: ChatMessagePayload[];
+}
+
+/**
+ * 실제로는 여기에서:
+ *   - fetch("/api/chat", { method: "POST", body: JSON.stringify(req) })
+ *   - 또는 SSE / WebSocket 등으로 AI 서버와 통신하게 될 예정.
+ *
+ * 지금은 데모용 Mock 함수로, 마지막 user 메시지를 기반으로
+ * 간단한 예시 답변만 반환한다.
+ */
+export async function sendChatToAI(req: ChatRequest): Promise<string> {
+  console.log("[Mock] sendChatToAI 요청:", req);
+
+  // 로딩 느낌만 내기 위한 지연
+  await new Promise((resolve) => setTimeout(resolve, 700));
+
+  // 대화 중 마지막 user 메시지 찾기
+  const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
+
+  if (!lastUser) {
+    return "무슨 말씀인지 잘 못 알아들었어요. 한 번만 더 질문해 주실 수 있을까요?";
+  }
+
+  // 너무 과하지 않게, 도메인 정보만 살짝 표시
+  const domainLabelMap: Record<ChatDomain, string> = {
+    general: "일반",
+    policy: "규정 안내",
+    faq: "FAQ",
+    quiz: "퀴즈",
+    edu: "교육",
+    security: "보안",
+  };
+  const domainLabel = domainLabelMap[req.domain] ?? "일반";
+
+  return (
+    `지금은 데모 모드라서 실제 AI 응답은 아니고요,\n\n` +
+    `현재 도메인: [${domainLabel}]\n\n` +
+    `방금 하신 질문은\n“${lastUser.content}”\n이었어요.\n\n` +
+    `나중에 백엔드/AI가 붙으면 이 부분에서 진짜 답변이 돌아오게 됩니다. 🙂`
+  );
+}

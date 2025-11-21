@@ -1,0 +1,130 @@
+/* 플로팅 아이콘 전체 컨테이너 */
+.ctrlf-floating-dock {
+  position: fixed;
+  z-index: 1500;
+  width: 80px;
+  height: 80px;
+  pointer-events: none; /* 아이콘 버튼만 클릭 가능하게 */
+}
+
+/* 실제 클릭 가능한 버튼 (얼굴 전체) */
+.ctrlf-floating-button {
+  width: 80px;
+  height: 75px;
+  border-radius: 9999px;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: grab;
+
+  /* 얼굴색: 연한 하늘색/민트톤 */
+  background: radial-gradient(circle at 30% 20%, #ffffff 0, #32bbdd 100%);
+
+  /* 2번째 이미지처럼 아래쪽으로 떨어지는 그림자 느낌 */
+  box-shadow:
+    0 10px 18px rgba(0, 0, 0, 0.18),
+    0 18px 40px rgba(0, 0, 0, 0.18);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ctrlf-floating-button:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 14px 22px rgba(0, 0, 0, 0.22),
+    0 22px 48px rgba(0, 0, 0, 0.22);
+}
+
+.ctrlf-floating-button:active {
+  cursor: grabbing;
+  transform: translateY(0);
+}
+
+/* 말하는 상태일 때 입 살짝 열림 */
+.ctrlf-floating-button-open .ctrlf-floating-mouth {
+  height: 10px;
+  border-radius: 999px;
+}
+
+/* 얼굴 내부 */
+.ctrlf-floating-face {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  position: relative;
+}
+
+/* 눈 */
+.ctrlf-floating-eye {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background-color: #ffffff;
+  box-shadow:
+    inset 0 0 0 1px rgba(148, 163, 184, 0.7),
+    inset 0 4px 6px rgba(0, 0, 0, 0.12); /* 살짝 안쪽 음영 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.ctrlf-floating-pupil {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background-color: #020617;
+  transition: transform 0.08s linear;
+}
+
+/* 입술 색상/모양 */
+.ctrlf-floating-mouth {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+
+  /* 2번째 이미지처럼 약간 더 긴 입술 */
+  width: 36px;
+  height: 6px;
+
+  border-radius: 999px;
+
+  /* 연한 핑크색 입술 */
+  background-color: #f4b6c6;
+  box-shadow: 0 1px 2px rgba(248, 113, 170, 0.35);
+  transition: height 0.12s ease;
+}
+
+/* 챗봇 패널 오버레이 */
+.ctrlf-chatbot-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 16px 24px 24px;
+  z-index: 1400;
+  pointer-events: none; /* 내부 패널만 클릭 가능하게 */
+}
+
+.ctrlf-chatbot-overlay-inner {
+  pointer-events: auto;
+}
+
+/* 모바일에서는 가운데 정렬 */
+@media (max-width: 768px) {
+  .ctrlf-chatbot-overlay {
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+}

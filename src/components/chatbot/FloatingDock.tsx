@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./FloatingDock.css";
-import ChatbotApp from "./ChatbotApp";
+import type { Anchor } from "../../utils/chat";
 
 type Position = { x: number; y: number };
 type EyeOffset = { x: number; y: number };
@@ -14,12 +14,12 @@ type DragState = {
   moved: boolean;
 };
 
-type ChatAnimationState = "opening" | "closing" | null;
-
-type Anchor = {
-  x: number;
-  y: number;
-};
+interface FloatingDockProps {
+  /** 챗봇 패널 열림 여부 (아이콘 상태 표현에 사용 가능) */
+  isChatbotOpen: boolean;
+  /** 아이콘 클릭 시, 현재 아이콘 기준 Anchor를 넘겨서 토글 요청 */
+  onToggleChatbot: (anchor: Anchor) => void;
+}
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -36,18 +36,14 @@ function getInitialPosition(): Position {
   };
 }
 
-const FloatingDock: React.FC = () => {
+const FloatingDock: React.FC<FloatingDockProps> = ({
+  isChatbotOpen,
+  onToggleChatbot,
+}) => {
   const iconRef = useRef<HTMLButtonElement | null>(null);
 
   // 아이콘 위치
   const [position, setPosition] = useState<Position>(() => getInitialPosition());
-  // 챗봇 표시 여부
-  const [isChatVisible, setIsChatVisible] = useState(false);
-  // 열림/닫힘 애니메이션 상태
-  const [chatAnimation, setChatAnimation] =
-    useState<ChatAnimationState>(null);
-  // 패널을 띄울 기준이 되는 아이콘 "입" 위치(앵커)
-  const [anchor, setAnchor] = useState<Anchor | null>(null);
   // 눈동자 위치
   const [eyeOffset, setEyeOffset] = useState<EyeOffset>({ x: 0, y: 0 });
 
@@ -96,37 +92,6 @@ const FloatingDock: React.FC = () => {
     const mouthY = rect.top + rect.height * 0.7;
 
     return { x: mouthX, y: mouthY };
-  };
-
-  /** 챗봇 열기 */
-  const openChat = () => {
-    if (chatAnimation) return; // 애니메이션 중에는 무시
-
-    const newAnchor = calcAnchorFromIcon();
-    if (!newAnchor) return;
-
-    setAnchor(newAnchor);
-    setIsChatVisible(true);
-    setChatAnimation("opening");
-  };
-
-  /** 챗봇 닫기(애니메이션 시작) */
-  const requestCloseChat = () => {
-    if (!isChatVisible || chatAnimation) return;
-
-    const newAnchor = calcAnchorFromIcon();
-    if (newAnchor) {
-      setAnchor(newAnchor);
-    }
-    setChatAnimation("closing");
-  };
-
-  /** 애니메이션 종료 콜백 */
-  const handleAnimationEnd = () => {
-    if (chatAnimation === "closing") {
-      setIsChatVisible(false);
-    }
-    setChatAnimation(null);
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -178,63 +143,52 @@ const FloatingDock: React.FC = () => {
     dragRef.current.dragging = false;
     dragRef.current.moved = false;
 
-    // 드래그가 아니면 클릭으로 처리 → 열기/닫기 토글
+    // 드래그가 아니면 클릭으로 처리 → 상위(FloatingChatbotRoot)에 토글 요청
     if (!moved) {
-      if (isChatVisible) {
-        requestCloseChat();
-      } else {
-        openChat();
-      }
+      const anchor = calcAnchorFromIcon();
+      if (!anchor) return;
+      onToggleChatbot(anchor);
     }
   };
 
   return (
-    <>
-      {/* 지니 효과 + 위치가 적용된 챗봇 패널 */}
-      {isChatVisible && (
-        <ChatbotApp
-          onClose={requestCloseChat}
-          anchor={anchor}
-          animationState={chatAnimation ?? undefined}
-          onAnimationEnd={handleAnimationEnd}
-        />
-      )}
-
-      {/* 플로팅 아이콘 (항상 화면 오른쪽 아래 떠 있음) */}
-      <div
-        className="ctrlf-floating-dock"
-        style={{ left: `${position.x}px`, top: `${position.y}px` }}
+    <div
+      className="ctrlf-floating-dock"
+      style={{ left: `${position.x}px`, top: `${position.y}px` }}
+    >
+      <button
+        ref={iconRef}
+        type="button"
+        className={`ctrlf-floating-button ${
+          isChatbotOpen ? "ctrlf-floating-button-open" : ""
+        }`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        aria-pressed={isChatbotOpen}
+        aria-label={isChatbotOpen ? "챗봇 닫기" : "챗봇 열기"}
       >
-        <button
-          ref={iconRef}
-          type="button"
-          className="ctrlf-floating-button"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-        >
-          <div className="ctrlf-floating-face">
-            <div className="ctrlf-floating-eye ctrlf-floating-eye-left">
-              <div
-                className="ctrlf-floating-pupil"
-                style={{
-                  transform: `translate(${eyeOffset.x}px, ${eyeOffset.y}px)`,
-                }}
-              />
-            </div>
-            <div className="ctrlf-floating-eye ctrlf-floating-eye-right">
-              <div
-                className="ctrlf-floating-pupil"
-                style={{
-                  transform: `translate(${eyeOffset.x}px, ${eyeOffset.y}px)`,
-                }}
-              />
-            </div>
-            <div className="ctrlf-floating-mouth" />
+        <div className="ctrlf-floating-face">
+          <div className="ctrlf-floating-eye ctrlf-floating-eye-left">
+            <div
+              className="ctrlf-floating-pupil"
+              style={{
+                transform: `translate(${eyeOffset.x}px, ${eyeOffset.y}px)`,
+              }}
+            />
           </div>
-        </button>
-      </div>
-    </>
+          <div className="ctrlf-floating-eye ctrlf-floating-eye-right">
+            <div
+              className="ctrlf-floating-pupil"
+              style={{
+                transform: `translate(${eyeOffset.x}px, ${eyeOffset.y}px)`,
+              }}
+            />
+          </div>
+          <div className="ctrlf-floating-mouth" />
+        </div>
+      </button>
+    </div>
   );
 };
 

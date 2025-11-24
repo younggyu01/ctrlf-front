@@ -255,7 +255,7 @@
   top: 8px;
   left: 12px;
   right: 12px;
-  height: 26px;
+  height: 12px;
   cursor: move;
   z-index: 4;
   background: transparent;
@@ -855,5 +855,443 @@
 
   .cb-input-pill {
     width: 90%;
+  }
+}
+
+/* =========================
+   교육 영상 패널 (외부 창)
+   ========================= */
+
+.cb-edu-wrapper {
+  position: fixed;
+  inset: 0;
+  z-index: 9999; /* 챗봇이랑 같은 레벨 이상으로 */
+  pointer-events: none;
+}
+
+.cb-edu-panel-container {
+  position: fixed;
+  pointer-events: auto;
+}
+
+.cb-edu-panel {
+  position: relative;
+  max-width: 100vw;
+  max-height: 100vh;
+  min-width: 520px;
+  min-height: 480px;
+
+  background-color: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 안쪽 레이아웃 */
+.cb-edu-panel-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 28px 20px;
+  min-height: 0;
+}
+
+.cb-edu-header {
+  margin-bottom: 24px;
+}
+
+.cb-edu-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #111827;
+}
+
+/* 세로 스크롤 영역 */
+.cb-edu-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.cb-edu-sections {
+  max-width: 1160px;
+  margin: 8px auto 24px;
+}
+
+/* 섹션 */
+.cb-edu-section + .cb-edu-section {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.cb-edu-section-title {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #111827;
+}
+
+/* 섹션 한 줄 */
+.cb-edu-section-row {
+  display: flex;
+  align-items: center; /* 버튼 + 카드 수직 가운데 정렬 */
+  justify-content: center;
+  gap: 24px;
+  margin: 0 auto;
+}
+
+/* 좌/우 네비 버튼 */
+.cb-edu-nav-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  background-color: #f3f4f6;
+  color: #6b7280;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: static;
+  transform: none;
+  margin: 0;
+}
+
+.cb-edu-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.cb-edu-nav-btn:not(:disabled):hover {
+  background-color: #e5e7eb;
+}
+
+/* 가운데 카드 영역 */
+.cb-edu-videos-row {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  flex-wrap: nowrap;
+}
+
+/* 카드 전체 */
+.cb-edu-video-card {
+  position: relative;
+  flex: 0 0 320px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 24px 20px;
+  background: #ffffff;
+  border-radius: 24px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  cursor: pointer;
+}
+
+/* 우측 상단 X 버튼 */
+.cb-edu-video-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+  color: #4b5563;
+}
+.cb-edu-video-close:hover {
+  background: #f3f4f6;
+}
+
+/* 썸네일 영역 */
+.cb-edu-video-thumbnail {
+  position: relative; 
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 20px;
+  overflow: hidden;  
+  background: #e5e7eb; 
+}
+
+/* 썸네일에서 실제 영상 첫 프레임을 보여주기 위한 <video> */
+.cb-edu-video-thumbnail-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 20px;
+  display: block;
+  pointer-events: none;        /* 클릭은 부모 썸네일 div가 받도록 */
+}
+
+/* 가운데 플레이 버튼(검은 원) – 썸네일 중앙에 고정 */
+.cb-edu-video-play-circle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: #111827;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.4);
+}
+
+.cb-edu-video-play-icon {
+  display: inline-block;
+  margin-left: 2px;
+  font-size: 20px;
+  color: #f9fafb;
+  line-height: 1;
+}
+
+/* 진행률 + 텍스트 영역 */
+.cb-edu-video-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 진행률 트랙 */
+.cb-edu-video-progress-track {
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+/* 진행률 채워지는 부분 */
+.cb-edu-video-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #111827;
+  transition: width 0.25s ease;
+}
+
+/* 하단 텍스트 (좌: 시청률, 우: 상태) */
+.cb-edu-video-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #111827;
+}
+
+.cb-edu-progress-text {
+  color: #111827;
+}
+
+/* 상태 뱃지 스타일 */
+.cb-edu-status {
+  font-weight: 500;
+}
+
+.cb-edu-status-not-started {
+  color: #6b7280; /* 회색 - 시청전 */
+}
+
+.cb-edu-status-in-progress {
+  color: #2563eb; /* 파란색 - 시청중 */
+}
+
+.cb-edu-status-completed {
+  color: #16a34a; /* 초록색 - 시청완료 */
+}
+
+/* 반응형: 패널이 작을 때 패딩/간격 살짝 줄이기 */
+@media (max-width: 768px) {
+  .cb-edu-panel-inner {
+    padding: 24px 20px 16px;
+  }
+
+  .cb-edu-section-row {
+    gap: 16px;
+  }
+
+  .cb-edu-videos-row {
+    gap: 16px;
+  }
+
+  .cb-edu-video-card {
+    flex: 0 0 260px;
+  }
+}
+
+/* ===== 시청 모드 레이아웃 ===== */
+
+.cb-edu-watch-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.cb-edu-watch-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cb-edu-watch-back-btn {
+  width: 24px;        /* 기본 32px였다면 28로 줄이기 */
+  height: 24px;
+  padding: 0;
+  font-size: 12px;    /* 화살표 아이콘도 조금 작게 */
+}
+
+/* 교육 영상 패널 전용 닫기 버튼 크기 조정 */
+.cb-edu-close-btn {
+  width: 24px;        /* 필요하면 24px까지 더 줄여도 됨 */
+  height: 24px;
+  font-size: 14px;
+  top: 12px;          /* 패널 위쪽에서 조금 더 붙이고 싶으면 값 줄이기 */
+  right: 16px;        /* 오른쪽 여백도 살짝 조정 가능 */
+}
+
+.cb-edu-watch-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-edu-watch-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column; /* 위: 비디오, 아래: 퀴즈 버튼 */
+}
+
+/* 비디오 영역 전체 박스 */
+.cb-edu-watch-player-wrapper {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  border-radius: 24px;
+  background: #000000;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 실제 비디오 */
+.cb-edu-watch-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 왼쪽 아래 커스텀 컨트롤 */
+.cb-edu-watch-overlay {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: #f9fafb;
+  font-size: 13px;
+  pointer-events: auto;
+}
+
+/* 동그란 재생/일시정지 버튼 */
+.cb-edu-watch-play-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  background: #f9fafb;
+  color: #111827;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.4);
+}
+
+.cb-edu-watch-play-btn:hover {
+  background: #e5e7eb;
+}
+
+.cb-edu-watch-play-icon {
+  font-size: 16px;
+  line-height: 1;
+  transform: translateX(1px); /* 살짝 가운데로 */
+}
+
+.cb-edu-watch-progress-text {
+  white-space: nowrap;
+}
+
+/* 아래 오른쪽 퀴즈 버튼 영역 */
+.cb-edu-watch-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 퀴즈 풀기 버튼 기본 스타일 (비활성) */
+.cb-edu-watch-quiz-btn {
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  background: #e5e7eb;
+  color: #9ca3af;
+  cursor: default;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+/* 100% 시청 후 활성 상태 */
+.cb-edu-watch-quiz-btn.is-active {
+  background: #111827;
+  color: #f9fafb;
+  cursor: pointer;
+}
+
+.cb-edu-watch-quiz-btn.is-active:hover {
+  background: #020617;
+}
+
+.cb-edu-watch-quiz-btn:disabled {
+  /* disabled일 때는 기본 cursor 유지 */
+}
+
+/* 모바일에서 시청 모드 패딩만 살짝 조정 */
+@media (max-width: 768px) {
+  .cb-edu-watch-overlay {
+    left: 16px;
+    bottom: 16px;
+    padding: 4px 10px;
+  }
+
+  .cb-edu-watch-footer {
+    margin-top: 8px;
   }
 }

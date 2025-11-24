@@ -24,6 +24,7 @@ interface ChatbotAppProps {
   anchor?: Anchor | null;
   animationState?: "opening" | "closing";
   onAnimationEnd?: () => void;
+  onOpenEduPanel?: () => void; // 🔹 교육 패널 열기 콜백 (외부에서 관리)
 }
 
 type Size = PanelSize;
@@ -73,6 +74,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   anchor,
   animationState,
   onAnimationEnd,
+  onOpenEduPanel,
 }) => {
   // 패널 크기 + 위치
   const [size, setSize] = useState<Size>(INITIAL_SIZE);
@@ -583,6 +585,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               onSendMessage={handleSendMessage}
               isSending={isSending}
               onChangeDomain={handleChangeSessionDomain}
+              onOpenEduPanel={onOpenEduPanel}
             />
           </div>
         </div>

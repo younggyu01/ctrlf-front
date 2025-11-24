@@ -6,7 +6,7 @@ import type { KeycloakProfile, KeycloakTokenParsed } from "keycloak-js";
 
 // 헤더/사이드바 스타일은 기존 Dashboard.css 재사용
 import "../pages/Dashboard.css";
-import FloatingDock from "./chatbot/FloatingDock";
+import FloatingChatbotRoot from "./chatbot/FloatingChatbotRoot";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -193,8 +193,8 @@ const Layout: React.FC<LayoutProps> = ({ children, pageClassName }) => {
       {/* 각 페이지의 본문이 들어가는 자리 */}
       {children}
 
-      {/* 로그인된 경우에만 플로팅 챗봇 표시 */}
-      {isAuthenticated && <FloatingDock />}
+      {/* 로그인된 경우에만 플로팅 챗봇 + 교육 패널 루트 표시 */}
+      {isAuthenticated && <FloatingChatbotRoot />}
     </div>
   );
 };

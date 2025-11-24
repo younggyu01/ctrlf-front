@@ -12,15 +12,17 @@ interface ChatWindowProps {
   onSendMessage: (text: string) => void;
   isSending: boolean; // 🔹 전송 중 여부
   onChangeDomain: (domain: ChatDomain) => void; // 🔹 도메인 변경 콜백
+  onOpenEduPanel?: () => void; // 🔹 교육 패널 열기 (외부 창)
 }
 
-type ViewKey = "home" | "policy" | "faq" | "quiz" | "edu";
+type ViewKey = "home" | "policy" | "faq" | "quiz";
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
   activeSession,
   onSendMessage,
   isSending,
   onChangeDomain,
+  onOpenEduPanel,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [activeView, setActiveView] = useState<ViewKey>("home");
@@ -54,11 +56,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // 🔹 홈 카드 클릭 시: 도메인 변경 + 전용 화면으로 전환
+  // 🔹 홈 카드 클릭 시: 도메인 변경 + 전용 화면으로 전환 (policy/faq/quiz)
   const handleFeatureClick = (targetDomain: ChatDomain, viewKey: ViewKey) => {
     if (isSending) return;
     onChangeDomain(targetDomain);
     setActiveView(viewKey);
+  };
+
+  // 🔹 교육 카드 클릭 시: 도메인만 edu로 바꾸고, 외부 교육 패널 오픈
+  const handleEduClick = () => {
+    if (isSending) return;
+    onChangeDomain("edu");
+    if (onOpenEduPanel) {
+      onOpenEduPanel();
+    }
   };
 
   // 🔹 전용 화면들 (임시 플레이스홀더)
@@ -102,23 +113,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       <p className="cb-domain-view-desc">
         직장 내 괴롭힘, 성희롱 예방, 보안 교육 등 교육 퀴즈를 문제/선택지
         형식으로 진행하는 화면을 붙일 수 있습니다.
-      </p>
-      <button
-        type="button"
-        className="cb-domain-view-back"
-        onClick={() => setActiveView("home")}
-      >
-        ← 처음 화면으로 돌아가기
-      </button>
-    </div>
-  );
-
-  const renderEduView = () => (
-    <div className="cb-domain-view">
-      <h3 className="cb-domain-view-title">교육</h3>
-      <p className="cb-domain-view-desc">
-        필수/선택 교육 목록, 수강 현황, 교육 영상/문서 링크 등을 보여주는
-        전용 대시보드를 구성할 수 있습니다.
       </p>
       <button
         type="button"
@@ -202,7 +196,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     <button
                       type="button"
                       className="cb-feature-card"
-                      onClick={() => handleFeatureClick("edu", "edu")}
+                      onClick={handleEduClick}
                     >
                       <img
                         src={eduIcon}
@@ -259,7 +253,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           {activeView === "policy" && renderPolicyView()}
           {activeView === "faq" && renderFaqView()}
           {activeView === "quiz" && renderQuizView()}
-          {activeView === "edu" && renderEduView()}
 
           <div ref={messagesEndRef} />
         </div>

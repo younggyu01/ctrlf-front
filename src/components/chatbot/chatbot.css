@@ -1295,3 +1295,691 @@
     margin-top: 8px;
   }
 }
+
+/* =========================
+   Quiz Panel
+   ========================= */
+
+.cb-quiz-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px 20px 20px;
+  box-sizing: border-box;
+}
+
+/* 공통 섹션 */
+.cb-quiz-section {
+  margin-top: 12px;
+}
+
+.cb-quiz-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.cb-quiz-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+/* 부서별 점수판 */
+.cb-quiz-dept-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cb-quiz-dept-list {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+  justify-content: center; /* 카드들을 가운데 정렬 */
+}
+
+.cb-quiz-dept-card {
+  flex: 1 1 0;
+  max-width: 260px;        /* 카드가 너무 길어지지 않도록 제한 */
+  min-width: 0;
+  border-radius: 18px;
+  border: 1px solid #e2e2e8;
+  background-color: #ffffff;
+  padding: 14px 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.cb-quiz-dept-name {
+  font-size: 14px;
+  font-weight: 500;
+  border-bottom: 1px solid #d6d6de;
+  padding-bottom: 4px;
+  width: 100%;
+  text-align: center;
+}
+
+.cb-quiz-dept-score {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.cb-quiz-dept-progress-label {
+  font-size: 10px;
+  color: #666a73;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cb-quiz-dept-progress-value {
+  font-weight: 500;
+}
+
+.cb-quiz-progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background-color: #e6e6ec;
+  overflow: hidden;
+}
+
+.cb-quiz-progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background-color: #000000;
+}
+
+/* 좌우 화살표 버튼 */
+.cb-quiz-arrow-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #dedee5;
+  background-color: #f5f5f9;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cb-quiz-arrow-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Quiz 섹션 */
+.cb-quiz-section-quiz {
+  margin-top: 28px;
+}
+
+/* 상단 페이지 인디케이터는 제거됨 (요구사항) */
+
+/* 퀴즈 카드 */
+.cb-quiz-course-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cb-quiz-course-list {
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  justify-content: flex-start;
+}
+
+.cb-quiz-course-card {
+  flex: 1 1 0;
+  max-width: 320px; /* 카드 최대 너비 제한 */
+  min-width: 0;
+  border-radius: 18px;
+  border: 1px solid #e2e2e8;
+  background-color: #ffffff;
+  padding: 14px 12px 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cb-quiz-course-card.is-locked {
+  opacity: 0.55;
+}
+
+.cb-quiz-course-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.cb-quiz-course-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+/* 카드 내부 회차 토글 (1 / 2) */
+.cb-quiz-course-attempt-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.cb-quiz-attempt-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background-color: #f0f0f4;
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #333;
+}
+
+.cb-quiz-attempt-dot.is-active {
+  background-color: #111111;
+  color: #ffffff;
+}
+
+.cb-quiz-course-body {
+  margin-top: 4px;
+}
+
+.cb-quiz-course-score-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.cb-quiz-course-score-label {
+  color: #555963;
+}
+
+.cb-quiz-course-score-value {
+  font-weight: 500;
+}
+
+.cb-quiz-course-progress {
+  margin-bottom: 4px;
+}
+
+.cb-quiz-locked-text {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #a0a2aa;
+}
+
+/* 오답노트 버튼 */
+.cb-quiz-course-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.cb-quiz-note-btn {
+  min-width: 80px;
+  border-radius: 999px;
+  border: none;
+  padding: 6px 12px;
+  font-size: 12px;
+  background-color: #e9e9f0;
+  cursor: pointer;
+}
+
+.cb-quiz-note-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* =========================
+   Quiz – 문제 풀기 화면 (패널 내부)
+   ========================= */
+
+.cb-quiz-solve-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden; /* 내부 스크롤용 */
+}
+
+.cb-quiz-solve-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  /* 닫기(X) 버튼과 겹치지 않도록 우측 여백 */
+  padding-right: 40px;
+}
+
+.cb-quiz-solve-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cb-quiz-solve-back-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cb-quiz-solve-back-btn:hover {
+  background-color: #e5e7eb;
+}
+
+.cb-quiz-solve-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cb-quiz-solve-tabs {
+  display: flex;
+  gap: 6px;
+  margin-left: 6px;
+}
+
+.cb-quiz-solve-tab {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  font-size: 12px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cb-quiz-solve-tab.is-active {
+  background-color: #111827;
+  border-color: #111827;
+  color: #f9fafb;
+}
+
+.cb-quiz-solve-meta {
+  font-size: 12px;
+  color: #6b7280;
+  margin-left: 12px;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+/* 본문 카드 */
+
+.cb-quiz-solve-body {
+  flex: 1;
+  min-height: 0;      /* 🔹 여기 중요: 안 줄어드는 문제 해결 */
+  display: flex;
+}
+
+.cb-quiz-solve-card {
+  flex: 1;
+  min-height: 0;      /* 🔹 카드도 줄어들 수 있게 */
+  display: flex;
+  flex-direction: column;
+  border-radius: 28px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  padding: 20px 22px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+
+.cb-quiz-solve-scroll {
+  flex: 1;
+  min-height: 0;      /* 🔹 실제 스크롤 영역 */
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* 문제/보기 스타일 */
+
+.cb-quiz-solve-question {
+  font-size: 13px;
+  color: #111827;
+  margin-bottom: 18px;
+}
+
+.cb-quiz-solve-question-title {
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.cb-quiz-solve-options {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+/* 보기 하나 하나 클릭 가능하게 + 선택 상태 표시 */
+.cb-quiz-solve-option {
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.cb-quiz-solve-option + .cb-quiz-solve-option {
+  margin-top: 2px;
+}
+
+/* 선택된 보기 강조 */
+.cb-quiz-solve-option.is-selected {
+  background-color: #e5e7eb;
+  font-weight: 600;
+}
+
+/* 제출 영역 */
+.cb-quiz-solve-submit-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.cb-quiz-solve-submit-btn {
+  border-radius: 999px;
+  border: none;
+  padding: 6px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  background-color: #111827;
+  color: #f9fafb;
+  cursor: pointer;
+}
+
+.cb-quiz-solve-submit-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cb-quiz-solve-submit-message {
+  flex: 1;
+  color: #4b5563;
+  font-size: 12px;
+}
+
+/* 스크롤바 살짝 커스텀 (크롬 계열) */
+.cb-quiz-solve-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.cb-quiz-solve-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cb-quiz-solve-scroll::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+}
+
+/* =========================
+   Quiz – 오답노트 화면
+   ========================= */
+
+.cb-quiz-note-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.cb-quiz-note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-right: 40px; /* 닫기 버튼 영역 피하기 */
+}
+
+.cb-quiz-note-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cb-quiz-note-back-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cb-quiz-note-back-btn:hover {
+  background-color: #e5e7eb;
+}
+
+.cb-quiz-note-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cb-quiz-note-tabs {
+  display: flex;
+  gap: 6px;
+  margin-left: 6px;
+}
+
+.cb-quiz-note-tab {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  background-color: #f3f4f6;
+  font-size: 11px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.cb-quiz-note-tab.is-active {
+  background-color: #111827;
+  border-color: #111827;
+  color: #f9fafb;
+}
+
+.cb-quiz-note-meta {
+  font-size: 12px;
+  color: #6b7280;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.cb-quiz-note-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.cb-quiz-note-card {
+  flex: 1;
+  border-radius: 28px;
+  border: 1px solid #d4d4d8;
+  background-color: #ffffff;
+  padding: 16px 18px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  display: flex;
+  flex-direction: column;
+}
+
+.cb-quiz-note-table-header-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  font-size: 12px;
+  font-weight: 500;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.cb-quiz-note-header-cell {
+  color: #4b5563;
+  text-align: center;
+}
+
+.cb-quiz-note-header-cell:nth-child(2) {
+  text-align: left;
+  padding-left: 8px;
+}
+
+.cb-quiz-note-table-scroll {
+  margin-top: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* 스크롤바 */
+.cb-quiz-note-table-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cb-quiz-note-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cb-quiz-note-table-scroll::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+}
+
+.cb-quiz-note-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  align-items: center;
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.cb-quiz-note-row + .cb-quiz-note-row {
+  border-top: 1px solid #f3f4f6;
+}
+
+.cb-quiz-note-question-no {
+  text-align: center;
+  color: #4b5563;
+}
+
+.cb-quiz-note-question-text {
+  padding: 0 8px;
+  color: #111827;
+  line-height: 1.4;
+  font-size: 13px;
+}
+
+.cb-quiz-note-explain-cell {
+  text-align: center;
+}
+
+.cb-quiz-note-explain-btn {
+  min-width: 68px;
+  border-radius: 999px;
+  border: none;
+  padding: 4px 10px;
+  font-size: 11px;
+  background-color: #e9e9f0;
+  cursor: pointer;
+}
+
+.cb-quiz-note-explain-btn:hover {
+  background-color: #dcdcE5;
+}
+
+.cb-quiz-note-empty {
+  padding: 16px 0;
+  font-size: 12px;
+  color: #9ca3af;
+  text-align: center;
+}
+
+/* 해설 모달 */
+
+.cb-quiz-note-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(15, 23, 42, 0.08);
+}
+
+.cb-quiz-note-modal {
+  max-width: 440px;
+  width: 100%;
+  border-radius: 24px;
+  background-color: #ffffff;
+  border: 1px solid #d4d4d8;
+  padding: 18px 20px 16px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+}
+
+.cb-quiz-note-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.cb-quiz-note-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-quiz-note-modal-close-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: #6b7280;
+  padding: 2px;
+}
+
+.cb-quiz-note-modal-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #111827;
+  white-space: pre-line;
+}

@@ -1,4 +1,3 @@
-// src/components/chatbot/ChatWindow.tsx
 import React, { useEffect, useRef, useState } from "react";
 import robotIcon from "../../assets/robot.png";
 import ruleIcon from "../../assets/rule.png";
@@ -13,9 +12,10 @@ interface ChatWindowProps {
   isSending: boolean; // 🔹 전송 중 여부
   onChangeDomain: (domain: ChatDomain) => void; // 🔹 도메인 변경 콜백
   onOpenEduPanel?: () => void; // 🔹 교육 패널 열기 (외부 창)
+  onOpenQuizPanel?: () => void; // 🔹 퀴즈 패널 열기 (외부 창)
 }
 
-type ViewKey = "home" | "policy" | "faq" | "quiz";
+type ViewKey = "home" | "policy" | "faq";
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
   activeSession,
@@ -23,6 +23,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   isSending,
   onChangeDomain,
   onOpenEduPanel,
+  onOpenQuizPanel,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [activeView, setActiveView] = useState<ViewKey>("home");
@@ -56,7 +57,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // 🔹 홈 카드 클릭 시: 도메인 변경 + 전용 화면으로 전환 (policy/faq/quiz)
+  // 🔹 홈 카드 클릭 시: 도메인 변경 + 전용 화면으로 전환 (policy / faq)
   const handleFeatureClick = (targetDomain: ChatDomain, viewKey: ViewKey) => {
     if (isSending) return;
     onChangeDomain(targetDomain);
@@ -72,7 +73,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // 🔹 전용 화면들 (임시 플레이스홀더)
+  // 🔹 퀴즈 카드 클릭 시: 도메인 quiz로 변경 + 외부 퀴즈 패널 오픈
+  //     (챗봇 내부 화면은 바꾸지 않고 그대로 둠)
+  const handleQuizClick = () => {
+    if (isSending) return;
+    onChangeDomain("quiz");
+    if (onOpenQuizPanel) {
+      onOpenQuizPanel();
+    }
+  };
+
+  // 🔹 규정 전용 화면 (플레이스홀더)
   const renderPolicyView = () => (
     <div className="cb-domain-view">
       <h3 className="cb-domain-view-title">규정 안내</h3>
@@ -90,6 +101,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     </div>
   );
 
+  // 🔹 FAQ 전용 화면 (플레이스홀더)
   const renderFaqView = () => (
     <div className="cb-domain-view">
       <h3 className="cb-domain-view-title">FAQ</h3>
@@ -107,26 +119,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     </div>
   );
 
-  const renderQuizView = () => (
-    <div className="cb-domain-view">
-      <h3 className="cb-domain-view-title">퀴즈</h3>
-      <p className="cb-domain-view-desc">
-        직장 내 괴롭힘, 성희롱 예방, 보안 교육 등 교육 퀴즈를 문제/선택지
-        형식으로 진행하는 화면을 붙일 수 있습니다.
-      </p>
-      <button
-        type="button"
-        className="cb-domain-view-back"
-        onClick={() => setActiveView("home")}
-      >
-        ← 처음 화면으로 돌아가기
-      </button>
-    </div>
-  );
-
   return (
     <main className="cb-main">
-      {/* 상단 제목 (도메인 칩 제거됨) */}
+      {/* 상단 제목 */}
       <header className="cb-main-header">
         <h2 className="cb-main-title">chatbot</h2>
       </header>
@@ -134,7 +129,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       <section className="cb-main-content">
         {/* 스크롤 영역 */}
         <div className="cb-chat-scroll">
-          {/* HOME 화면: 기존 웰컴 + 카드 + (있으면) 채팅 메시지 */}
+          {/* HOME 화면: 웰컴 + 기능 카드 + (있으면) 채팅 메시지 */}
           {activeView === "home" && (
             <>
               {!hasMessages && (
@@ -183,7 +178,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     <button
                       type="button"
                       className="cb-feature-card"
-                      onClick={() => handleFeatureClick("quiz", "quiz")}
+                      onClick={handleQuizClick}
                     >
                       <img
                         src={quizIcon}
@@ -252,7 +247,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           {/* 도메인 전용 화면들 */}
           {activeView === "policy" && renderPolicyView()}
           {activeView === "faq" && renderFaqView()}
-          {activeView === "quiz" && renderQuizView()}
 
           <div ref={messagesEndRef} />
         </div>

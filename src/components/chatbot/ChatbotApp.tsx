@@ -24,7 +24,8 @@ interface ChatbotAppProps {
   anchor?: Anchor | null;
   animationState?: "opening" | "closing";
   onAnimationEnd?: () => void;
-  onOpenEduPanel?: () => void; // 🔹 교육 패널 열기 콜백 (외부에서 관리)
+  onOpenEduPanel?: () => void;   // 교육 패널 열기 콜백
+  onOpenQuizPanel?: () => void;  // 퀴즈 패널 열기 콜백 (새 창)
 }
 
 type Size = PanelSize;
@@ -54,10 +55,10 @@ const MIN_WIDTH = 520;
 const MIN_HEIGHT = 480;
 const INITIAL_SIZE: Size = { width: 550, height: 550 };
 
-// 🔹 최대 세션 개수 (FIFO 기준)
+// 최대 세션 개수 (FIFO 기준)
 const MAX_SESSIONS = 30;
 
-// 🔹 초기 세션 한 개 ("새 채팅")
+// 초기 세션 한 개 ("새 채팅")
 const initialSessions: ChatSession[] = [
   {
     id: "session-1",
@@ -75,6 +76,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   animationState,
   onAnimationEnd,
   onOpenEduPanel,
+  onOpenQuizPanel,
 }) => {
   // 패널 크기 + 위치
   const [size, setSize] = useState<Size>(INITIAL_SIZE);
@@ -265,7 +267,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     resizeRef.current.dir = null;
   };
 
-  // 🔹 새 채팅 (최대 30개, FIFO 삭제)
+  // 새 채팅 (최대 30개, FIFO 삭제)
   const handleNewChat = () => {
     setSessions((prev) => {
       const now = Date.now();
@@ -298,12 +300,12 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     });
   };
 
-  // 🔹 세션 선택
+  // 세션 선택
   const handleSelectSession = (sessionId: string) => {
     setActiveSessionId(sessionId);
   };
 
-  // 🔹 세션 이름 변경
+  // 세션 이름 변경
   const handleRenameSession = (sessionId: string, newTitle: string) => {
     const trimmed = newTitle.trim();
     if (!trimmed) return;
@@ -317,7 +319,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     );
   };
 
-  // 🔹 세션 삭제
+  // 세션 삭제
   const handleDeleteSession = (sessionId: string) => {
     setSessions((prev) => {
       const next = prev.filter((s) => s.id !== sessionId);
@@ -328,16 +330,16 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     });
   };
 
-  // 🔹 검색어 변경
+  // 검색어 변경
   const handleSearchTermChange = (value: string) => {
     setSearchTerm(value);
   };
 
-  // 🔹 현재 활성 세션
+  // 현재 활성 세션
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) ?? null;
 
-  // 🔹 현재 활성 세션의 도메인 변경 (카드에서 호출)
+  // 현재 활성 세션의 도메인 변경 (카드에서 호출)
   const handleChangeSessionDomain = (nextDomain: ChatDomain) => {
     if (!activeSessionId) return;
     const now = Date.now();
@@ -351,7 +353,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     );
   };
 
-  // 🔹 사이드바용 요약 데이터 (마지막 메시지 + updatedAt 포함)
+  // 사이드바용 요약 데이터 (마지막 메시지 + updatedAt 포함)
   const sidebarSessions: SidebarSessionSummary[] = sessions.map((session) => {
     const last = session.messages[session.messages.length - 1];
     const lastMessage = last ? buildLastMessagePreview(last.content) : "";
@@ -586,6 +588,8 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               isSending={isSending}
               onChangeDomain={handleChangeSessionDomain}
               onOpenEduPanel={onOpenEduPanel}
+              // 홈에서 퀴즈 카드 클릭 시 새 창 열기
+              onOpenQuizPanel={onOpenQuizPanel}
             />
           </div>
         </div>

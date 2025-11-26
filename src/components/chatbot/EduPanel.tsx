@@ -1,16 +1,11 @@
 // src/components/chatbot/EduPanel.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./chatbot.css";
 import {
   computePanelPosition,
   type Anchor,
   type PanelSize,
 } from "../../utils/chat";
-
-export interface EduPanelProps {
-  anchor?: Anchor | null;
-  onClose: () => void;
-}
 
 type Size = PanelSize;
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -34,6 +29,19 @@ type DragState = {
   startLeft: number;
 };
 
+type VideoProgressMap = Record<string, number>;
+
+export interface EduPanelProps {
+  anchor?: Anchor | null;
+  onClose: () => void;
+  // 🔹 특정 영상 시청 완료 후 퀴즈 대시보드 패널 열기 (연결된 퀴즈 id를 넘길 수도 있음)
+  onOpenQuizPanel?: (quizId?: string) => void;
+  // 🔹 부모에서 관리하는 시청률 상태 (videoId → 0~100)
+  videoProgressMap?: VideoProgressMap;
+  // 🔹 시청률 변경 시 부모에 알려주는 콜백
+  onUpdateVideoProgress?: (videoId: string, progress: number) => void;
+}
+
 const MIN_WIDTH = 520;
 const MIN_HEIGHT = 420;
 const INITIAL_SIZE: Size = { width: 540, height: 420 };
@@ -53,6 +61,8 @@ interface EduVideo {
   title: string;
   progress?: number; // 0 ~ 100, 없으면 0
   videoUrl?: string;
+  // 🔹 이 영상을 100% 시청하면 언락되는 퀴즈 id (없으면 퀴즈 미연결)
+  quizId?: string;
 }
 
 interface EduSection {
@@ -65,7 +75,7 @@ interface EduSection {
 const EDU_SECTIONS: EduSection[] = [
   {
     id: "job",
-    title: "직무교육",
+    title: "직무 교육",
     videos: [
       {
         id: "job-1",
@@ -81,46 +91,50 @@ const EDU_SECTIONS: EduSection[] = [
   },
   {
     id: "sexual-harassment",
-    title: "성희롱예방",
+    title: "성희롱 예방",
     videos: [
-      { id: "sh-1", title: "성희롱 예방 교육 (기본)" },
-      { id: "sh-2", title: "성희롱 예방 교육 (심화)" },
-      { id: "sh-3", title: "사례로 보는 성희롱" },
-      { id: "sh-4", title: "관리자 필수 과정" },
-      { id: "sh-5", title: "신고·처리 절차 안내" },
+      { id: "sh-1", title: "성희롱 예방 교육 (기본)", quizId: "harassment" },
+      { id: "sh-2", title: "성희롱 예방 교육 (심화)", quizId: "harassment" },
+      { id: "sh-3", title: "사례로 보는 성희롱", quizId: "harassment" },
+      { id: "sh-4", title: "관리자 필수 과정", quizId: "harassment" },
+      { id: "sh-5", title: "신고·처리 절차 안내", quizId: "harassment" },
     ],
   },
   {
     id: "privacy",
-    title: "개인정보보호",
+    title: "개인 정보 보호",
     videos: [
-      { id: "pi-1", title: "개인정보보호 기본 교육" },
-      { id: "pi-2", title: "개인정보 유출 사례" },
-      { id: "pi-3", title: "마케팅·홍보 시 유의사항" },
-      { id: "pi-4", title: "업무별 체크리스트" },
-      { id: "pi-5", title: "개인정보보호법 개정 사항" },
+      { id: "pi-1", title: "개인정보보호 기본 교육", quizId: "privacy" },
+      { id: "pi-2", title: "개인정보 유출 사례", quizId: "privacy" },
+      { id: "pi-3", title: "마케팅·홍보 시 유의사항", quizId: "privacy" },
+      { id: "pi-4", title: "업무별 체크리스트", quizId: "privacy" },
+      { id: "pi-5", title: "개인정보보호법 개정 사항", quizId: "privacy" },
     ],
   },
   {
     id: "bullying",
     title: "괴롭힘",
     videos: [
-      { id: "bully-1", title: "직장 내 괴롭힘 예방교육" },
-      { id: "bully-2", title: "실제 사례와 판례" },
-      { id: "bully-3", title: "관리자 대응 매뉴얼" },
-      { id: "bully-4", title: "동료로서의 대응 방법" },
-      { id: "bully-5", title: "피해자 보호 절차" },
+      { id: "bully-1", title: "직장 내 괴롭힘 예방교육", quizId: "bullying" },
+      { id: "bully-2", title: "실제 사례와 판례", quizId: "bullying" },
+      { id: "bully-3", title: "관리자 대응 매뉴얼", quizId: "bullying" },
+      { id: "bully-4", title: "동료로서의 대응 방법", quizId: "bullying" },
+      { id: "bully-5", title: "피해자 보호 절차", quizId: "bullying" },
     ],
   },
   {
     id: "disability-awareness",
-    title: "장애인 인식개선",
+    title: "장애인 인식 개선",
     videos: [
-      { id: "da-1", title: "장애인 인식개선 기본 교육" },
-      { id: "da-2", title: "장애 유형별 이해" },
-      { id: "da-3", title: "배려가 필요한 상황들" },
-      { id: "da-4", title: "말·행동 가이드" },
-      { id: "da-5", title: "사내 사례 모음" },
+      {
+        id: "da-1",
+        title: "장애인 인식개선 기본 교육",
+        quizId: "disability",
+      },
+      { id: "da-2", title: "장애 유형별 이해", quizId: "disability" },
+      { id: "da-3", title: "배려가 필요한 상황들", quizId: "disability" },
+      { id: "da-4", title: "말·행동 가이드", quizId: "disability" },
+      { id: "da-5", title: "사내 사례 모음", quizId: "disability" },
     ],
   },
 ];
@@ -144,7 +158,40 @@ function getPageSize(panelWidth: number): number {
   return 3;
 }
 
-const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
+// 🔹 부모에서 내려온 videoProgressMap을 섹션 구조에 반영해서
+//    "렌더용 sections"를 만드는 함수 (상태 X, 순수 계산)
+function buildSectionsWithProgress(
+  progressMap?: VideoProgressMap
+): EduSection[] {
+  if (!progressMap) {
+    // 깊은 복사
+    return EDU_SECTIONS.map((section) => ({
+      ...section,
+      videos: section.videos.map((v) => ({ ...v })),
+    }));
+  }
+
+  return EDU_SECTIONS.map((section) => ({
+    ...section,
+    videos: section.videos.map((video) => {
+      const external = progressMap[video.id];
+      if (external === undefined) return { ...video };
+      const prev = video.progress ?? 0;
+      return {
+        ...video,
+        progress: Math.max(prev, external),
+      };
+    }),
+  }));
+}
+
+const EduPanel: React.FC<EduPanelProps> = ({
+  anchor,
+  onClose,
+  onOpenQuizPanel,
+  videoProgressMap,
+  onUpdateVideoProgress,
+}) => {
   // 패널 크기 + 위치
   const [size, setSize] = useState<Size>(INITIAL_SIZE);
   const [panelPos, setPanelPos] = useState(() =>
@@ -170,10 +217,7 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
     startLeft: panelPos.left,
   });
 
-  // 섹션(진행률 포함)을 state로 관리
-  const [sections, setSections] = useState<EduSection[]>(EDU_SECTIONS);
-
-  // 섹션별 페이지 인덱스
+  // 섹션별 페이지 인덱스만 state로 관리
   const [sectionPages, setSectionPages] = useState<Record<string, number>>(
     () => {
       const initial: Record<string, number> = {};
@@ -182,6 +226,12 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
       });
       return initial;
     }
+  );
+
+  // ✅ 실제 카드 렌더용 섹션: props(videoProgressMap) + 더미 데이터를 기반으로 매번 계산
+  const sections: EduSection[] = useMemo(
+    () => buildSectionsWithProgress(videoProgressMap),
+    [videoProgressMap]
   );
 
   // 현재 시청 중인 영상
@@ -325,6 +375,14 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
     resizeRef.current.dir = null;
   };
 
+  // 🔹 부모 progress 업데이트만 담당하는 헬퍼
+  const syncProgressToParent = (videoId: string, progress: number) => {
+    const finalProgress = Math.round(progress);
+    if (onUpdateVideoProgress) {
+      onUpdateVideoProgress(videoId, finalProgress);
+    }
+  };
+
   // 섹션별 이전/다음
   const handlePrevClick = (sectionId: string) => {
     setSectionPages((prev) => {
@@ -360,8 +418,14 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
 
   // 카드 클릭 → 시청 모드
   const handleVideoClick = (video: EduVideo) => {
-    const base = video.progress ?? 0;
-    setSelectedVideo(video);
+    const localProgress = video.progress ?? 0;
+    const externalProgress =
+      videoProgressMap && videoProgressMap[video.id] !== undefined
+        ? videoProgressMap[video.id]
+        : 0;
+    const base = Math.max(localProgress, externalProgress);
+
+    setSelectedVideo({ ...video, progress: base });
     setWatchPercent(base);
     maxWatchedTimeRef.current = 0;
     videoDurationRef.current = 0;
@@ -423,49 +487,33 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
     }
   };
 
-  // 퀴즈 페이지 이동 (나중에 라우팅 붙일 위치)
+  // 퀴즈 페이지 이동 (퀴즈 대시보드 패널 열기 + 해당 퀴즈 언락 요청)
   const handleGoToQuiz = () => {
     if (!selectedVideo || !canTakeQuiz) return;
 
-    // 진행률 100% 반영
-    setSections((prevSections) =>
-      prevSections.map((section) => ({
-        ...section,
-        videos: section.videos.map((video) => {
-          if (video.id !== selectedVideo.id) return video;
-          const prevProgress = video.progress ?? 0;
-          const newProgress = Math.max(prevProgress, roundedWatchPercent);
-          return { ...video, progress: newProgress };
-        }),
-      }))
-    );
+    // 진행률 100% 반영 (부모에만 전달)
+    syncProgressToParent(selectedVideo.id, roundedWatchPercent);
 
-    // TODO: 나중에 퀴즈 페이지 라우팅 연결
-    // 예: navigate(`/quiz/${selectedVideo.id}`);
-    console.log("퀴즈 페이지로 이동:", selectedVideo.id);
+    const quizId = selectedVideo.quizId;
+
+    if (onOpenQuizPanel) {
+      onOpenQuizPanel(quizId);
+    } else {
+      console.log(
+        "퀴즈 페이지로 이동 (패널 콜백 없음):",
+        selectedVideo.id,
+        quizId
+      );
+    }
   };
 
-  // 목록으로 돌아갈 때, 현재 시청 진행률을 섹션 state에 반영
+  // 목록으로 돌아갈 때, 현재 시청 진행률을 부모에 반영
   const handleBackToList = () => {
     if (selectedVideo) {
       if (videoRef.current) {
         videoRef.current.pause();
       }
-
-      setSections((prevSections) =>
-        prevSections.map((section) => ({
-          ...section,
-          videos: section.videos.map((video) => {
-            if (video.id !== selectedVideo.id) return video;
-            const prevProgress = video.progress ?? 0;
-            const newProgress = Math.max(
-              prevProgress,
-              Math.round(watchPercent)
-            );
-            return { ...video, progress: newProgress };
-          }),
-        }))
-      );
+      syncProgressToParent(selectedVideo.id, watchPercent);
     }
 
     setSelectedVideo(null);
@@ -473,6 +521,17 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
     maxWatchedTimeRef.current = 0;
     setWatchPercent(0);
     setIsPlaying(false);
+  };
+
+  // 창 닫기 버튼 클릭 시에도 현재 시청 중이면 진행률 반영
+  const handleCloseClick = () => {
+    if (selectedVideo) {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+      syncProgressToParent(selectedVideo.id, watchPercent);
+    }
+    onClose();
   };
 
   const currentVideoSrc = selectedVideo?.videoUrl ?? SAMPLE_VIDEO_URL;
@@ -528,7 +587,7 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
           <button
             type="button"
             className="cb-panel-close-btn cb-edu-close-btn"
-            onClick={onClose}
+            onClick={handleCloseClick}
             aria-label="교육 영상 창 닫기"
           >
             ✕
@@ -563,7 +622,7 @@ const EduPanel: React.FC<EduPanelProps> = ({ anchor, onClose }) => {
                       onTimeUpdate={handleTimeUpdate}
                       onEnded={handleEnded}
                       onClick={handlePlayPause}
-                      controls={false} // 기본 컨트롤 제거 → 타임라인 조작 X
+                      controls={false}
                       onContextMenu={(e) => e.preventDefault()}
                     >
                       브라우저가 비디오 태그를 지원하지 않습니다.

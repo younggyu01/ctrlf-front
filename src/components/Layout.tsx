@@ -10,7 +10,6 @@ import FloatingChatbotRoot from "./chatbot/FloatingChatbotRoot";
 
 interface LayoutProps {
   children: React.ReactNode;
-  /** 페이지별로 추가하고 싶은 클래스 (예: "mypage-page", "approval-page") */
   pageClassName?: string;
 }
 

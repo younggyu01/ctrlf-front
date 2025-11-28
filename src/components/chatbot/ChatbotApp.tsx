@@ -18,15 +18,15 @@ import {
   type Anchor,
   type PanelSize,
 } from "../../utils/chat";
-import { FAQ_ITEMS } from "./faqData"; // 🔹 FAQ 데이터 추가 import
+import { FAQ_ITEMS } from "./faqData";
 
 interface ChatbotAppProps {
-  onClose: () => void; // 닫기 요청 (X 버튼 또는 아이콘 클릭)
+  onClose: () => void;
   anchor?: Anchor | null;
   animationState?: "opening" | "closing";
   onAnimationEnd?: () => void;
-  onOpenEduPanel?: () => void; // 교육 패널 열기 콜백
-  onOpenQuizPanel?: () => void; // 퀴즈 패널 열기 콜백 (새 창)
+  onOpenEduPanel?: () => void;
+  onOpenQuizPanel?: (quizId?: string) => void;
 }
 
 type Size = PanelSize;
@@ -66,7 +66,7 @@ const initialSessions: ChatSession[] = [
     title: "새 채팅",
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    domain: "general", // 기본 도메인
+    domain: "general",
     messages: [],
   },
 ];
@@ -132,6 +132,13 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     transformOrigin = `${originX}% ${originY}%`;
   }
 
+  // 세션은 있는데 activeSessionId 가 null 이면 자동으로 첫 세션을 활성화
+  useEffect(() => {
+    if (!activeSessionId && sessions.length > 0) {
+      setActiveSessionId(sessions[0].id);
+    }
+  }, [activeSessionId, sessions]);
+
   // ====== 리사이즈 + 드래그 공통 처리 ======
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -151,14 +158,8 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         let newTop = resizeState.startTop;
         let newLeft = resizeState.startLeft;
 
-        const maxWidth = Math.max(
-          MIN_WIDTH,
-          window.innerWidth - padding * 2
-        );
-        const maxHeight = Math.max(
-          MIN_HEIGHT,
-          window.innerHeight - padding * 2
-        );
+        const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - padding * 2);
+        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - padding * 2);
 
         // 오른쪽/아래
         if (resizeState.dir.includes("e")) {
@@ -270,18 +271,18 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
   // 새 채팅 (최대 30개, FIFO 삭제)
   const handleNewChat = () => {
+    const now = Date.now();
+
+    const newSession: ChatSession = {
+      id: `session-${now}`,
+      title: "새 채팅",
+      createdAt: now,
+      updatedAt: now,
+      domain: "general",
+      messages: [],
+    };
+
     setSessions((prev) => {
-      const now = Date.now();
-
-      const newSession: ChatSession = {
-        id: `session-${now}`,
-        title: "새 채팅", // 숫자 제거
-        createdAt: now,
-        updatedAt: now,
-        domain: "general", // 새 채팅 기본 도메인
-        messages: [],
-      };
-
       const nextSessions = [...prev];
 
       // 최대 개수(30개)에 도달한 경우 → 가장 오래된 세션 삭제 (FIFO, createdAt 기준)
@@ -296,9 +297,11 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       }
 
       // 새 세션을 목록 맨 앞에 추가
-      setActiveSessionId(newSession.id);
       return [newSession, ...nextSessions];
     });
+
+    // 새 세션 활성화
+    setActiveSessionId(newSession.id);
   };
 
   // 세션 선택
@@ -324,9 +327,12 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   const handleDeleteSession = (sessionId: string) => {
     setSessions((prev) => {
       const next = prev.filter((s) => s.id !== sessionId);
+
+      // 현재 보고 있던 세션을 삭제했다면 첫 번째 세션으로 포커스 이동
       if (activeSessionId === sessionId) {
         setActiveSessionId(next[0]?.id ?? null);
       }
+
       return next;
     });
   };
@@ -354,7 +360,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     );
   };
 
-  // 사이드바용 요약 데이터 (마지막 메시지 + updatedAt 포함)
+  // 사이드바용 요약 데이터
   const sidebarSessions: SidebarSessionSummary[] = sessions.map((session) => {
     const last = session.messages[session.messages.length - 1];
     const lastMessage = last ? buildLastMessagePreview(last.content) : "";
@@ -416,6 +422,55 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     );
   };
 
+  // ====== 규정 카드 빠른 요약: 규정 클릭 시 챗봇 답변처럼 메시지 추가 ======
+  const handlePolicyQuickExplain = (
+    ruleId: string,
+    ruleTitle: string,
+    ruleSummary: string
+  ) => {
+    if (!activeSessionId) return;
+    const now = Date.now();
+
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id !== activeSessionId) return session;
+
+        const hasUserMessage = session.messages.some(
+          (m) => m.role === "user"
+        );
+        const isDefaultTitle = session.title.startsWith("새 채팅");
+
+        const nextTitle =
+          !hasUserMessage && isDefaultTitle
+            ? buildSessionTitleFromMessage(ruleTitle)
+            : session.title;
+
+        const userMessage: ChatMessage = {
+          id: `${activeSessionId}-policy-${ruleId}-user-${now}`,
+          role: "user",
+          content: `『${ruleTitle}』 규정에 대해 알려줘.`,
+          createdAt: now,
+        };
+
+        const assistantMessage: ChatMessage = {
+          id: `${activeSessionId}-policy-${ruleId}-assistant-${now + 1}`,
+          role: "assistant",
+          content:
+            `${ruleSummary}\n\n(자세한 내용은 사내 인트라넷 ‘규정집’에서 전문을 확인해 주세요.)`,
+          createdAt: now + 1,
+        };
+
+        return {
+          ...session,
+          title: nextTitle,
+          domain: "policy",
+          messages: [...session.messages, userMessage, assistantMessage],
+          updatedAt: now + 1,
+        };
+      })
+    );
+  };
+
   // ====== 메시지 전송 전체 플로우 (일반 채팅: AI 호출) ======
   const handleSendMessage = (text: string) => {
     void processSendMessage(text);
@@ -423,15 +478,22 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
   const processSendMessage = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || !activeSessionId) return;
+    if (!trimmed) return;
+
+    const sessionIdForSend =
+      activeSessionId ?? (sessions.length > 0 ? sessions[0].id : null);
+
+    if (!sessionIdForSend) {
+      return;
+    }
 
     const now = Date.now();
 
-    const currentSession = sessions.find((s) => s.id === activeSessionId);
+    const currentSession = sessions.find((s) => s.id === sessionIdForSend);
     if (!currentSession) return;
 
     const userMessage: ChatMessage = {
-      id: `${activeSessionId}-${now}`,
+      id: `${sessionIdForSend}-${now}`,
       role: "user",
       content: trimmed,
       createdAt: now,
@@ -452,7 +514,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     // 1) 우선 user 메시지만 바로 상태에 반영
     setSessions((prev) =>
       prev.map((session) =>
-        session.id === activeSessionId
+        session.id === sessionIdForSend
           ? {
               ...session,
               title: nextTitle,
@@ -465,7 +527,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
     // 2) AI 요청 payload
     const requestPayload: ChatRequest = {
-      sessionId: activeSessionId,
+      sessionId: sessionIdForSend,
       domain: currentSession.domain,
       messages: userAppendedMessages.map((m) => ({
         role: m.role,
@@ -479,7 +541,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
       const replyTime = Date.now();
       const assistantMessage: ChatMessage = {
-        id: `${activeSessionId}-assistant-${replyTime}`,
+        id: `${sessionIdForSend}-assistant-${replyTime}`,
         role: "assistant",
         content: replyText,
         createdAt: replyTime,
@@ -488,7 +550,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       // 3) 응답 도착 후 assistant 메시지 추가
       setSessions((prev) =>
         prev.map((session) =>
-          session.id === activeSessionId
+          session.id === sessionIdForSend
             ? {
                 ...session,
                 messages: [...session.messages, assistantMessage],
@@ -501,7 +563,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       console.error("sendChatToAI error:", error);
       const replyTime = Date.now();
       const errorMessage: ChatMessage = {
-        id: `${activeSessionId}-assistant-error-${replyTime}`,
+        id: `${sessionIdForSend}-assistant-error-${replyTime}`,
         role: "assistant",
         content:
           "죄송합니다. 서버와 통신 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.",
@@ -510,7 +572,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
       setSessions((prev) =>
         prev.map((session) =>
-          session.id === activeSessionId
+          session.id === sessionIdForSend
             ? {
                 ...session,
                 messages: [...session.messages, errorMessage],
@@ -522,6 +584,21 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     } finally {
       setIsSending(false);
     }
+  };
+
+  // === 교육/퀴즈 패널 열기 핸들러 (챗봇 자동 닫기) ===
+  const handleOpenEduPanelFromChat = () => {
+    if (onOpenEduPanel) {
+      onOpenEduPanel();
+    }
+    onClose(); // 교육 패널이 열릴 때 챗봇 패널은 닫기
+  };
+
+  const handleOpenQuizPanelFromChat = () => {
+    if (onOpenQuizPanel) {
+      onOpenQuizPanel(); // quizId는 아직 사용하지 않음
+    }
+    onClose(); // 퀴즈 패널이 열릴 때 챗봇 패널 닫기
   };
 
   // 지니 애니메이션 종료 이벤트
@@ -564,10 +641,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
           style={{ width: size.width, height: size.height }}
         >
           {/* 상단 드래그 바 (투명, 위치 이동용) */}
-          <div
-            className="cb-drag-bar"
-            onMouseDown={handleDragMouseDown}
-          />
+          <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />
 
           {/* 리사이즈 핸들: 모서리 4개 + 변 4개 (투명) */}
           <div
@@ -635,11 +709,12 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               onSendMessage={handleSendMessage}
               isSending={isSending}
               onChangeDomain={handleChangeSessionDomain}
-              onOpenEduPanel={onOpenEduPanel}
-              // 홈에서 퀴즈 카드 클릭 시 새 창 열기
-              onOpenQuizPanel={onOpenQuizPanel}
-              // 🔹 FAQ 빠른 질문(버튼) 클릭 시: Q/A 쌍을 바로 세션에 추가
+              // 교육/퀴즈 카드 클릭 시: 새 패널 열고 챗봇 닫기
+              onOpenEduPanel={handleOpenEduPanelFromChat}
+              onOpenQuizPanel={handleOpenQuizPanelFromChat}
               onFaqQuickSend={handleFaqQuickSend}
+              onPolicyQuickExplain={handlePolicyQuickExplain}
+              panelWidth={size.width}
             />
           </div>
         </div>

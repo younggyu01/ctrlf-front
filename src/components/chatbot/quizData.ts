@@ -10,11 +10,11 @@ export type QuizCourse = {
   activeIndex: number | null; // 현재 선택된 회차 index (0 = 1회차, 1 = 2회차, null = 아직 선택 안 됨)
 };
 
-// 🔹 퀴즈 기본 데이터
-//   - 처음에는 모든 코스가 잠겨 있고(unlocked: false)
-//   - 점수도 전부 null (아직 시험 안 본 상태)
-//   - EduPanel에서 영상 100% 시청 시 FloatingChatbotRoot가
-//     unlockedCourseIds 에 id를 넣어주면 언락됨
+// 퀴즈 기본 데이터
+// 처음에는 모든 코스가 잠겨 있고(unlocked: false)
+// 점수도 전부 null (아직 시험 안 본 상태)
+// EduPanel에서 영상 100% 시청 시 FloatingChatbotRoot가
+// unlockedCourseIds 에 id를 넣어주면 언락됨
 export const initialCourses: QuizCourse[] = [
   {
     id: "harassment",

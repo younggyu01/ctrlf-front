@@ -10,6 +10,132 @@ import type { Anchor } from "../../utils/chat";
 type VideoProgressMap = Record<string, number>;
 
 /**
+ * 시험 중 챗봇 막힐 때 보여줄 토스트용 타이머 (모듈 전역)
+ */
+let examToastHideTimer: number | null = null;
+
+/**
+ * 시험 중 챗봇을 열려고 할 때 화면 하단에 예쁜 토스트를 띄워주는 함수
+ * - React state와는 완전히 분리 (DOM 직접 조작)
+ * - 다시 눌러도 3초 동안 유지되고 부드럽게 사라짐
+ */
+const showExamBlockedToast = (): void => {
+  if (typeof document === "undefined") return;
+
+  const TOAST_ID = "ctrlf-exam-toast";
+
+  // 이미 떠있는 토스트가 있으면 재사용
+  let toastEl = document.getElementById(TOAST_ID) as HTMLDivElement | null;
+
+  if (!toastEl) {
+    toastEl = document.createElement("div");
+    toastEl.id = TOAST_ID;
+
+    // 기본 스타일
+    toastEl.style.position = "fixed";
+    toastEl.style.left = "50%";
+    toastEl.style.bottom = "28px";
+    toastEl.style.transform = "translateX(-50%) translateY(12px)";
+    toastEl.style.zIndex = "9999";
+    toastEl.style.padding = "10px 16px";
+    toastEl.style.borderRadius = "999px";
+    toastEl.style.backgroundColor = "rgba(15, 23, 42, 0.96)";
+    toastEl.style.color = "#f9fafb";
+    toastEl.style.display = "flex";
+    toastEl.style.alignItems = "center";
+    toastEl.style.gap = "8px";
+    toastEl.style.boxShadow = "0 12px 30px rgba(15, 23, 42, 0.5)";
+    toastEl.style.fontSize = "13px";
+    toastEl.style.lineHeight = "1.4";
+    toastEl.style.maxWidth = "90vw";
+    toastEl.style.pointerEvents = "auto";
+    toastEl.style.cursor = "default";
+    toastEl.style.opacity = "0";
+    toastEl.style.transition =
+      "opacity 0.25s ease-out, transform 0.25s ease-out";
+
+    // 내용 (아이콘 + 문구 + 닫기 버튼)
+    toastEl.innerHTML = `
+      <span style="font-size:16px;">⏳</span>
+      <span>
+        현재 퀴즈 응시 중에는 챗봇을 열 수 없습니다.
+        <span style="opacity:0.9;">시험을 제출하거나 나가면 다시 이용할 수 있어요.</span>
+      </span>
+      <button
+        type="button"
+        style="
+          margin-left:6px;
+          border:none;
+          background:transparent;
+          color:#e5e7eb;
+          cursor:pointer;
+          font-size:14px;
+          padding:2px;
+        "
+      >
+        ✕
+      </button>
+    `;
+
+    // X 버튼 클릭 시 닫기
+    toastEl.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      if (target.tagName.toLowerCase() === "button") {
+        const elToClose = document.getElementById(TOAST_ID) as HTMLDivElement | null;
+        if (!elToClose) return;
+
+        elToClose.style.opacity = "0";
+        elToClose.style.transform = "translateX(-50%) translateY(12px)";
+
+        window.setTimeout(() => {
+          const el = document.getElementById(TOAST_ID);
+          if (el) {
+            el.remove();
+          }
+        }, 260);
+
+        if (examToastHideTimer !== null) {
+          window.clearTimeout(examToastHideTimer);
+          examToastHideTimer = null;
+        }
+      }
+    });
+
+    document.body.appendChild(toastEl);
+  }
+
+  // 보이도록 애니메이션
+  toastEl.style.opacity = "1";
+  toastEl.style.transform = "translateX(-50%) translateY(0)";
+
+  // 3.2초 뒤 자동으로 사라지게
+  if (examToastHideTimer !== null) {
+    window.clearTimeout(examToastHideTimer);
+  }
+  examToastHideTimer = window.setTimeout(() => {
+    const el = document.getElementById(TOAST_ID) as HTMLDivElement | null;
+    if (!el) {
+      examToastHideTimer = null;
+      return;
+    }
+
+    el.style.opacity = "0";
+    el.style.transform = "translateX(-50%) translateY(12px)";
+
+    window.setTimeout(() => {
+      const toRemove = document.getElementById(TOAST_ID);
+      if (toRemove) {
+        toRemove.remove();
+      }
+    }, 260);
+
+    examToastHideTimer = null;
+  }, 3200);
+};
+
+/**
  * 플로팅 아이콘 + 챗봇 패널 + 교육/퀴즈 패널의 "최상위 컨테이너"
  */
 const FloatingChatbotRoot: React.FC = () => {
@@ -29,12 +155,15 @@ const FloatingChatbotRoot: React.FC = () => {
   // 퀴즈 패널 열림/닫힘
   const [isQuizPanelOpen, setIsQuizPanelOpen] = useState(false);
 
-  // 🔹 이미 언락된 퀴즈 id 목록 (기본: initialCourses 중 unlocked=true)
+  // 현재 "시험 모드(퀴즈 풀기 화면)"인지 여부
+  const [isQuizExamMode, setIsQuizExamMode] = useState(false);
+
+  // 이미 언락된 퀴즈 id 목록 (기본: initialCourses 중 unlocked=true)
   const [unlockedCourseIds, setUnlockedCourseIds] = useState<string[]>(() =>
     initialCourses.filter((c) => c.unlocked).map((c) => c.id)
   );
 
-  // 🔹 교육 영상 시청률 상태 (videoId → 0~100)
+  // 교육 영상 시청률 상태 (videoId → 0~100)
   const [videoProgressMap, setVideoProgressMap] = useState<VideoProgressMap>(
     {}
   );
@@ -56,6 +185,13 @@ const FloatingChatbotRoot: React.FC = () => {
    * 플로팅 아이콘 토글
    */
   const handleDockToggleChatbot = (nextAnchor: Anchor) => {
+    // 시험(퀴즈 풀기 화면) 중에는 챗봇 패널 열기/닫기 막고
+    // 커스텀 토스트만 보여주기
+    if (isQuizExamMode) {
+      showExamBlockedToast();
+      return;
+    }
+
     setAnchor(nextAnchor);
 
     if (!isChatbotOpen) {
@@ -102,8 +238,8 @@ const FloatingChatbotRoot: React.FC = () => {
   };
 
   /**
-   * ChatWindow → ChatbotApp/EduPanel → 여기까지
-   * 퀴즈 대시보드 패널 열기 요청
+   * ChatWindow / EduPanel → 여기까지
+   * 퀴즈 대시보드/퀴즈 패널 열기 요청
    *  - quizId가 넘어오면 해당 퀴즈를 언락 처리
    */
   const handleOpenQuizPanel = (quizId?: string) => {
@@ -112,14 +248,27 @@ const FloatingChatbotRoot: React.FC = () => {
         prev.includes(quizId) ? prev : [...prev, quizId]
       );
     }
+
+    // 교육 패널은 닫고
+    setIsEduPanelOpen(false);
+
+    // 퀴즈 패널 열기
     setIsQuizPanelOpen(true);
   };
 
   const handleCloseQuizPanel = () => {
     setIsQuizPanelOpen(false);
+    // 시험 모드 초기화
+    setIsQuizExamMode(false);
   };
 
-  // 🔹 unlockedCourseIds가 바뀔 때마다 다른 key를 줘서 QuizPanel을 리마운트
+  // uizPanel에서 모드가 바뀔 때 호출되는 콜백
+  // solve 모드일 때만 true, 나머지 모드는 false
+  const handleQuizExamModeChange = (isExamMode: boolean) => {
+    setIsQuizExamMode(isExamMode);
+  };
+
+  // unlockedCourseIds가 바뀔 때마다 다른 key를 줘서 QuizPanel을 리마운트
   const quizKey =
     unlockedCourseIds.length > 0
       ? `quiz-${unlockedCourseIds.join("|")}`
@@ -133,8 +282,9 @@ const FloatingChatbotRoot: React.FC = () => {
         onToggleChatbot={handleDockToggleChatbot}
       />
 
-      {/* 챗봇 패널 */}
-      {isChatbotOpen && (
+      {/* 챗봇 패널
+          시험(퀴즈 풀기 화면)일 때는 아예 렌더링하지 않도록 막기 */}
+      {isChatbotOpen && !isQuizExamMode && (
         <ChatbotApp
           onClose={handleChatbotClose}
           anchor={anchor}
@@ -153,7 +303,7 @@ const FloatingChatbotRoot: React.FC = () => {
           onClose={handleCloseEduPanel}
           // 교육 100% 시청 후 "퀴즈 풀기" 버튼에서도 동일한 퀴즈 패널 열기 (+ 언락 처리 가능)
           onOpenQuizPanel={handleOpenQuizPanel}
-          // 🔹 시청 상태 유지용 props
+          // 시청 상태 유지용 props
           videoProgressMap={videoProgressMap}
           onUpdateVideoProgress={handleUpdateVideoProgress}
         />
@@ -162,10 +312,12 @@ const FloatingChatbotRoot: React.FC = () => {
       {/* 퀴즈 대시보드 + 문제풀이 화면을 모두 포함하는 패널 */}
       {isQuizPanelOpen && (
         <QuizPanel
-          key={quizKey} // 🔹 언락 상태 바뀔 때마다 초기 state를 새로 만들기 위함
+          key={quizKey} // 언락 상태 바뀔 때마다 초기 state를 새로 만들기 위함
           anchor={anchor}
           onClose={handleCloseQuizPanel}
           unlockedCourseIds={unlockedCourseIds}
+          // solve 모드일 때만 true로 넘어옴
+          onExamModeChange={handleQuizExamModeChange}
         />
       )}
     </>

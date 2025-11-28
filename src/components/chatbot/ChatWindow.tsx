@@ -1,3 +1,4 @@
+// src/components/chatbot/ChatWindow.tsx
 import React, { useEffect, useRef, useState } from "react";
 import robotIcon from "../../assets/robot.png";
 import ruleIcon from "../../assets/rule.png";
@@ -5,19 +6,114 @@ import faqIcon from "../../assets/faq.png";
 import quizIcon from "../../assets/quiz.png";
 import eduIcon from "../../assets/edu.png";
 import type { ChatDomain, ChatSession } from "../../types/chat";
-import { FAQ_ITEMS } from "./faqData"; // 🔹 FAQ 데이터 import
+import { FAQ_ITEMS } from "./faqData";
 
 interface ChatWindowProps {
   activeSession: ChatSession | null;
   onSendMessage: (text: string) => void;
-  isSending: boolean; // 🔹 전송 중 여부
-  onChangeDomain: (domain: ChatDomain) => void; // 🔹 도메인 변경 콜백
-  onOpenEduPanel?: () => void; // 🔹 교육 패널 열기 (외부 창)
-  onOpenQuizPanel?: () => void; // 🔹 퀴즈 패널 열기 (외부 창)
-  onFaqQuickSend?: (faqId: number) => void; // 🔹 FAQ 빠른 질문 클릭 핸들러
+  isSending: boolean;
+  onChangeDomain: (domain: ChatDomain) => void;
+  onOpenEduPanel?: () => void;
+  onOpenQuizPanel?: () => void;
+  onFaqQuickSend?: (faqId: number) => void;
+  onPolicyQuickExplain?: (
+    ruleId: string,
+    title: string,
+    summary: string
+  ) => void;
+  panelWidth?: number;
 }
 
 type ViewKey = "home" | "policy" | "faq";
+
+type PolicyCategory = {
+  id: string;
+  name: string;
+  description: string;
+};
+
+type PolicyRule = {
+  id: string;
+  categoryId: string;
+  title: string;
+  summary: string;
+  badge?: "중요" | "필수" | "신규";
+};
+
+const POLICY_CATEGORIES: PolicyCategory[] = [
+  {
+    id: "hr",
+    name: "인사 · 근태",
+    description: "근무시간, 휴가, 재택근무 등 인사/근태 관련 규정",
+  },
+  {
+    id: "ethics",
+    name: "직장 내 괴롭힘 · 성희롱",
+    description: "괴롭힘·성희롱 예방 및 신고·조치 절차",
+  },
+  {
+    id: "security",
+    name: "정보보안",
+    description: "비밀번호, 계정 공유, 자료 반출 등 보안 관련 규정",
+  },
+  {
+    id: "compliance",
+    name: "준법 · 공정거래",
+    description: "법령 준수, 공정거래, 이해상충 방지에 대한 규정",
+  },
+];
+
+const POPULAR_RULES: PolicyRule[] = [
+  {
+    id: "rule-flex",
+    categoryId: "hr",
+    title: "유연근무제 운영 기준",
+    summary:
+      "시차출퇴근, 재택근무 등 유연근무 신청 및 승인 절차를 정리한 규정입니다.",
+    badge: "신규",
+  },
+  {
+    id: "rule-vacation",
+    categoryId: "hr",
+    title: "연차/반차 사용 원칙",
+    summary:
+      "연차/반차 신청 기한, 사용 순서, 사용 권장 기간 등 기본 원칙을 안내합니다.",
+  },
+  {
+    id: "rule-harassment",
+    categoryId: "ethics",
+    title: "직장 내 괴롭힘 예방 규정",
+    summary:
+      "직장 내 괴롭힘의 정의, 금지 행위, 신고 및 조사 절차를 규정합니다.",
+    badge: "필수",
+  },
+];
+
+const IMPORTANT_RULES: PolicyRule[] = [
+  {
+    id: "rule-security",
+    categoryId: "security",
+    title: "정보보안 기본 수칙",
+    summary:
+      "사내 계정/비밀번호 관리, PC 잠금, 자료 반출·반입 시 준수 사항입니다.",
+    badge: "중요",
+  },
+  {
+    id: "rule-it-asset",
+    categoryId: "security",
+    title: "IT 자산 관리 규정",
+    summary:
+      "노트북, 모바일, 저장장치 등 IT 자산 분실/파손 시 보고 및 처리 절차입니다.",
+  },
+  {
+    id: "rule-sexual",
+    categoryId: "ethics",
+    title: "성희롱 예방 및 신고 절차",
+    summary:
+      "성희롱의 예시, 신고 채널, 보호 조치 및 2차 피해 방지 원칙을 정의합니다.",
+    badge: "필수",
+  },
+];
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
   activeSession,
@@ -27,15 +123,29 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onOpenEduPanel,
   onOpenQuizPanel,
   onFaqQuickSend,
+  onPolicyQuickExplain,
+  panelWidth,
 }) => {
   const [inputValue, setInputValue] = useState("");
-  const [activeView, setActiveView] = useState<ViewKey>("home");
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const messages = activeSession?.messages ?? [];
   const hasMessages = messages.length > 0;
 
-  // 메시지 추가되면 아래로 스크롤
+  const sessionDomain = activeSession?.domain;
+
+  // 세션의 domain 값으로 뷰를 바로 계산
+  const activeView: ViewKey =
+    sessionDomain === "policy"
+      ? "policy"
+      : sessionDomain === "faq"
+      ? "faq"
+      : "home";
+
+  const isPolicyView = activeView === "policy";
+
+  // 스크롤 맨 아래로
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({
@@ -45,6 +155,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [messages.length]);
 
+  // 메시지 전송 (뷰 전환 X, domain에 따라 뷰 유지)
   const handleSend = () => {
     const trimmed = inputValue.trim();
     if (!trimmed || isSending) return;
@@ -60,14 +171,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // 🔹 홈 카드 클릭 시: 도메인 변경 + 전용 화면으로 전환 (policy / faq)
-  const handleFeatureClick = (targetDomain: ChatDomain, viewKey: ViewKey) => {
+  const handleFeatureClick = (targetDomain: ChatDomain) => {
     if (isSending) return;
     onChangeDomain(targetDomain);
-    setActiveView(viewKey);
+    // domain만 바꾸면, 위에서 activeView가 알아서 policy/faq로 바뀜
   };
 
-  // 🔹 교육 카드 클릭 시: 도메인만 edu로 바꾸고, 외부 교육 패널 오픈
   const handleEduClick = () => {
     if (isSending) return;
     onChangeDomain("edu");
@@ -76,8 +185,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // 🔹 퀴즈 카드 클릭 시: 도메인 quiz로 변경 + 외부 퀴즈 패널 오픈
-  //     (챗봇 내부 화면은 바꾸지 않고 그대로 둠)
   const handleQuizClick = () => {
     if (isSending) return;
     onChangeDomain("quiz");
@@ -86,36 +193,128 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // 🔹 FAQ 빠른 질문 버튼 클릭 시
-  //  - 부모(ChatbotApp)에 faqId 전달
-  //  - 뷰를 home으로 돌려서 실제 채팅 화면을 보여줌
+  // FAQ 추천 버튼 클릭 시: 같은 세션에 Q/A 추가 + FAQ 화면 유지
   const handleFaqSuggestionClick = (faqId: number) => {
     if (isSending) return;
     if (!onFaqQuickSend) return;
 
     onFaqQuickSend(faqId);
-    setActiveView("home");
   };
 
-  // 🔹 규정 전용 화면 (플레이스홀더)
+  // 규정 카드 클릭 시: policy 화면 유지 + 아래 채팅만 추가
+  const handlePolicyRuleClick = (rule: PolicyRule) => {
+    if (isSending) return;
+
+    if (onPolicyQuickExplain) {
+      onPolicyQuickExplain(rule.id, rule.title, rule.summary);
+    }
+  };
+
+  // 패널 폭에 따라 규정 카드 폭 단계 조절
+  let policyWidthClass = "cb-policy-view";
+  if (panelWidth && panelWidth >= 1200) {
+    policyWidthClass += " cb-policy-view-xl";
+  } else if (panelWidth && panelWidth >= 900) {
+    policyWidthClass += " cb-policy-view-lg";
+  }
+
   const renderPolicyView = () => (
-    <div className="cb-domain-view">
-      <h3 className="cb-domain-view-title">규정 안내</h3>
-      <p className="cb-domain-view-desc">
-        여기에는 사내 인사/복지/보안 등 각종 규정 요약 카드, 카테고리 필터,
-        검색 박스 등을 넣을 수 있습니다.
-      </p>
-      <button
-        type="button"
-        className="cb-domain-view-back"
-        onClick={() => setActiveView("home")}
-      >
-        ← 처음 화면으로 돌아가기
-      </button>
+    <div className={policyWidthClass}>
+      <div className="cb-policy-header">
+        <div className="cb-policy-header-icon">
+          <img src={ruleIcon} alt="규정 아이콘" />
+        </div>
+        <div className="cb-policy-header-text">
+          <p className="cb-policy-header-line">사내 규정 안내</p>
+          <p className="cb-policy-header-line cb-policy-header-line-strong">
+            자주 확인하는 규정을 한 번에 모았습니다.
+          </p>
+        </div>
+      </div>
+
+      <div className="cb-policy-layout">
+        {/* 좌측: 카테고리 + 규정 리스트 */}
+        <div className="cb-policy-left">
+          <section className="cb-policy-section">
+            <h4 className="cb-policy-section-title">규정 카테고리</h4>
+            <p className="cb-policy-section-desc">
+              자주 사용하는 인사, 보안, 직장 내 괴롭힘 관련 규정을 카테고리별로
+              모아두었습니다.
+            </p>
+            <div className="cb-policy-category-list">
+              {POLICY_CATEGORIES.map((cat) => (
+                <div key={cat.id} className="cb-policy-category-card">
+                  <div className="cb-policy-category-name">{cat.name}</div>
+                  <div className="cb-policy-category-desc">
+                    {cat.description}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="cb-policy-section">
+            <h4 className="cb-policy-section-title">최근 많이 본 규정</h4>
+            <ul className="cb-policy-rule-list">
+              {POPULAR_RULES.map((rule) => (
+                <li key={rule.id}>
+                  <button
+                    type="button"
+                    className="cb-policy-rule-item"
+                    onClick={() => handlePolicyRuleClick(rule)}
+                  >
+                    <div className="cb-policy-rule-text">
+                      <span className="cb-policy-rule-title">
+                        {rule.title}
+                      </span>
+                      <span className="cb-policy-rule-summary">
+                        {rule.summary}
+                      </span>
+                    </div>
+                    {rule.badge && (
+                      <span className="cb-policy-rule-badge">
+                        {rule.badge}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="cb-policy-section">
+            <h4 className="cb-policy-section-title">중요 공지된 규정</h4>
+            <ul className="cb-policy-rule-list">
+              {IMPORTANT_RULES.map((rule) => (
+                <li key={rule.id}>
+                  <button
+                    type="button"
+                    className="cb-policy-rule-item"
+                    onClick={() => handlePolicyRuleClick(rule)}
+                  >
+                    <div className="cb-policy-rule-text">
+                      <span className="cb-policy-rule-title">
+                        {rule.title}
+                      </span>
+                      <span className="cb-policy-rule-summary">
+                        {rule.summary}
+                      </span>
+                    </div>
+                    {rule.badge && (
+                      <span className="cb-policy-rule-badge cb-policy-rule-badge-accent">
+                        {rule.badge}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+      </div>
     </div>
   );
 
-  // 🔹 FAQ 전용 화면 – 2번째 디자인 이미지처럼 구현
   const renderFaqView = () => (
     <div className="cb-faq-view">
       <div className="cb-faq-header">
@@ -123,9 +322,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           <img src={robotIcon} alt="챗봇 아이콘" />
         </div>
         <div className="cb-faq-header-text">
-          <p className="cb-faq-header-line">
-            사용자가 가장 많이 묻는 질문 기반
-          </p>
+          <p className="cb-faq-header-line">사용자가 가장 많이 묻는 질문 기반</p>
           <p className="cb-faq-header-line cb-faq-header-line-strong">
             FAQ입니다.
           </p>
@@ -150,17 +347,53 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     </div>
   );
 
+  // 공통 메시지 렌더링
+  const renderMessages = () => {
+    if (!hasMessages) return null;
+
+    return (
+      <div className="cb-chat-messages">
+        {messages.map((msg) => {
+          const isUser = msg.role === "user";
+
+          return (
+            <div
+              key={msg.id}
+              className={`cb-chat-bubble-row ${
+                isUser
+                  ? "cb-chat-bubble-row-user"
+                  : "cb-chat-bubble-row-bot"
+              }`}
+            >
+              {!isUser && (
+                <div className="cb-chat-avatar">
+                  <img src={robotIcon} alt="챗봇" />
+                </div>
+              )}
+
+              <div
+                className={`cb-chat-bubble ${
+                  isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
+                }`}
+              >
+                <div className="cb-chat-bubble-text">{msg.content}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <main className="cb-main">
-      {/* 상단 제목 */}
       <header className="cb-main-header">
         <h2 className="cb-main-title">chatbot</h2>
       </header>
 
       <section className="cb-main-content">
-        {/* 스크롤 영역 */}
         <div className="cb-chat-scroll">
-          {/* HOME 화면: 웰컴 + 기능 카드 + (있으면) 채팅 메시지 */}
+          {/* 홈 뷰: 환영 카드 + 메시지 */}
           {activeView === "home" && (
             <>
               {!hasMessages && (
@@ -181,7 +414,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     <button
                       type="button"
                       className="cb-feature-card"
-                      onClick={() => handleFeatureClick("policy", "policy")}
+                      onClick={() => handleFeatureClick("policy")}
                     >
                       <img
                         src={ruleIcon}
@@ -194,7 +427,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     <button
                       type="button"
                       className="cb-feature-card"
-                      onClick={() => handleFeatureClick("faq", "faq")}
+                      onClick={() => handleFeatureClick("faq")}
                     >
                       <img
                         src={faqIcon}
@@ -233,57 +466,37 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                 </div>
               )}
 
-              {hasMessages && (
-                <div className="cb-chat-messages">
-                  {messages.map((msg) => {
-                    const isUser = msg.role === "user";
-
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`cb-chat-bubble-row ${
-                          isUser
-                            ? "cb-chat-bubble-row-user"
-                            : "cb-chat-bubble-row-bot"
-                        }`}
-                      >
-                        {/* 봇 메시지일 때만 왼쪽에 아바타 표시 */}
-                        {!isUser && (
-                          <div className="cb-chat-avatar">
-                            <img src={robotIcon} alt="챗봇" />
-                          </div>
-                        )}
-
-                        <div
-                          className={`cb-chat-bubble ${
-                            isUser
-                              ? "cb-chat-bubble-user"
-                              : "cb-chat-bubble-bot"
-                          }`}
-                        >
-                          <div className="cb-chat-bubble-text">
-                            {msg.content}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {renderMessages()}
             </>
           )}
 
-          {/* 도메인 전용 화면들 */}
-          {activeView === "policy" && renderPolicyView()}
-          {activeView === "faq" && renderFaqView()}
+          {/* 규정 뷰: 위에는 규정 카드, 아래에는 채팅 말풍선 */}
+          {activeView === "policy" && (
+            <>
+              {renderPolicyView()}
+              {renderMessages()}
+            </>
+          )}
+
+          {/* FAQ 뷰: 위에는 FAQ 카드, 아래에는 채팅 말풍선 */}
+          {activeView === "faq" && (
+            <>
+              {renderFaqView()}
+              {renderMessages()}
+            </>
+          )}
 
           <div ref={messagesEndRef} />
         </div>
 
-        {/* 하단 입력 영역: 어떤 화면이든 공통으로 둠 */}
+        {/* 하단 입력 영역 (어느 뷰에서든 공통) */}
         <div className="cb-input-section">
           <p className="cb-input-hint">
-            {isSending ? "답변을 생성하고 있어요…" : "무엇이든 물어보세요!"}
+            {isSending
+              ? "답변을 생성하고 있어요…"
+              : isPolicyView
+              ? "규정과 관련해서 궁금한 내용을 물어보세요."
+              : "무엇이든 물어보세요!"}
           </p>
           <div className="cb-input-pill">
             <button

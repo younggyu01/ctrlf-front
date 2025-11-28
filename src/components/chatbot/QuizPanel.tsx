@@ -63,6 +63,8 @@ interface QuizPanelProps {
   onClose: () => void;
   onOpenNote?: (courseId: string) => void;
   unlockedCourseIds?: string[];
+  // 현재 시험 모드(퀴즈 풀기 화면)인지 상위에 알려주는 콜백
+  onExamModeChange?: (isExamMode: boolean) => void;
 }
 
 type PanelMode = "dashboard" | "solve" | "note";
@@ -98,7 +100,7 @@ const initialDepartments: DepartmentScore[] = [
   { id: "legal", name: "법무팀", avgScore: 85, progress: 50 },
 ];
 
-// 🔹 unlockedCourseIds 반영해서 기본 course 생성
+// unlockedCourseIds 반영해서 기본 course 생성
 const buildInitialCourses = (unlockedCourseIds?: string[]): QuizCourse[] => {
   if (!unlockedCourseIds || unlockedCourseIds.length === 0) {
     return initialCourses;
@@ -110,7 +112,7 @@ const buildInitialCourses = (unlockedCourseIds?: string[]): QuizCourse[] => {
   );
 };
 
-// 🔹 localStorage 에서 기존 점수 복원 + 언락 반영
+// localStorage 에서 기존 점수 복원 + 언락 반영
 const loadCoursesFromStorage = (
   unlockedCourseIds?: string[]
 ): QuizCourse[] => {
@@ -131,7 +133,7 @@ const loadCoursesFromStorage = (
   }
 };
 
-// 🔹 오답노트 복원
+// 오답노트 복원
 const loadWrongNotesFromStorage = (): WrongAnswerEntry[] => {
   try {
     const raw = window.localStorage.getItem(WRONG_NOTES_KEY);
@@ -142,7 +144,7 @@ const loadWrongNotesFromStorage = (): WrongAnswerEntry[] => {
   }
 };
 
-// ✅ 카드 개수 계산
+// 카드 개수 계산
 const getDeptPageSize = (panelWidth: number): number => {
   if (panelWidth < 680) return 3;
   if (panelWidth < 960) return 4;
@@ -161,7 +163,7 @@ const getQuizPageSize = (panelWidth: number): number => {
 const range = (count: number): number[] =>
   Array.from({ length: count }, (_, idx) => idx);
 
-// 🔹 오답 해설 문장 생성 (정답 문장만, "내 답 / 정답"은 따로 UI에서 표시)
+// 오답 해설 문장 생성 (정답 문장만, "내 답 / 정답"은 따로 UI에서 표시)
 const buildExplanation = (courseId: string, question: QuizQuestion): string => {
   const answer = question.options[question.correctIndex];
 
@@ -179,8 +181,10 @@ const buildExplanation = (courseId: string, question: QuizQuestion): string => {
   }
 };
 
-// 🔹 (모달용) 현재 선택된 오답에 대한 해설/텍스트 전부 계산
-const getModalAnswerTexts = (entry: WrongAnswerEntry | null): ModalAnswerTexts => {
+// (모달용) 현재 선택된 오답에 대한 해설/텍스트 전부 계산
+const getModalAnswerTexts = (
+  entry: WrongAnswerEntry | null
+): ModalAnswerTexts => {
   if (!entry) {
     return {
       explanation: "",
@@ -227,6 +231,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   onClose,
   onOpenNote,
   unlockedCourseIds,
+  onExamModeChange,
 }) => {
   // === 패널 크기 + 위치 ===
   const [size, setSize] = useState<Size>(INITIAL_SIZE);
@@ -257,12 +262,12 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
   const [departments] = useState<DepartmentScore[]>(initialDepartments);
 
-  // 🔹 점수를 localStorage 에 저장/복원
+  // 점수를 localStorage 에 저장/복원
   const [courses, setCourses] = useState<QuizCourse[]>(() =>
     loadCoursesFromStorage(unlockedCourseIds)
   );
 
-  // 🔹 오답노트 데이터 (과목/회차별 틀린 문제)
+  // 오답노트 데이터 (과목/회차별 틀린 문제)
   const [wrongNotes, setWrongNotes] = useState<WrongAnswerEntry[]>(() =>
     loadWrongNotesFromStorage()
   );
@@ -284,6 +289,22 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     null
   );
 
+  // 모드 변경될 때마다 상위에 "시험 모드 여부" 전달
+  useEffect(() => {
+    if (onExamModeChange) {
+      onExamModeChange(mode === "solve");
+    }
+  }, [mode, onExamModeChange]);
+
+  // 언마운트 시에는 항상 false 로 리셋
+  useEffect(() => {
+    return () => {
+      if (onExamModeChange) {
+        onExamModeChange(false);
+      }
+    };
+  }, [onExamModeChange]);
+
   const showResultMessage = (
     type: ResultType,
     title: string,
@@ -299,7 +320,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     return () => window.clearTimeout(timer);
   }, [resultMessage]);
 
-  // 🔹 courses 변경 시 localStorage 저장
+  // courses 변경 시 localStorage 저장
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(courses));
@@ -308,7 +329,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     }
   }, [courses]);
 
-  // 🔹 wrongNotes 변경 시 localStorage 저장
+  // wrongNotes 변경 시 localStorage 저장
   useEffect(() => {
     try {
       window.localStorage.setItem(WRONG_NOTES_KEY, JSON.stringify(wrongNotes));
@@ -317,7 +338,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     }
   }, [wrongNotes]);
 
-  // 🔹 unlockedCourseIds 가 변경되면 언락 반영
+  // unlockedCourseIds 가 변경되면 언락 반영
   useEffect(() => {
     if (!unlockedCourseIds || unlockedCourseIds.length === 0) return;
     setCourses((prev) =>
@@ -354,7 +375,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     baseCardHeight + extraWidth / 8
   );
 
-  // 🔹 패널 높이 자동 조정
+  // 패널 높이 자동 조정
   useEffect(() => {
     if (!contentRef.current) return;
 
@@ -547,7 +568,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     }
   };
 
-  // 🔹 퀴즈 시작 (다음 응시 가능한 회차 계산)
+  // 퀴즈 시작 (다음 응시 가능한 회차 계산)
   const handleStartQuiz = (course: QuizCourse) => {
     if (!course.unlocked) return;
 
@@ -638,7 +659,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
     const attemptIndex = solveCourse.activeIndex ?? 0;
 
-    // 🔹 오답노트 데이터 구성 (틀린 문제만)
+    // 오답노트 데이터 구성 (틀린 문제만)
     const wrongEntries: WrongAnswerEntry[] = questions
       .map((q, idx) => {
         const selected = selectedAnswers[idx];
@@ -752,7 +773,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     selectedAnswers.length === currentQuestions.length &&
     selectedAnswers.every((idx) => idx >= 0);
 
-  // 🔹 현재 선택된 과목/회차의 오답 리스트
+  // 현재 선택된 과목/회차의 오답 리스트
   const currentWrongNotes: WrongAnswerEntry[] =
     noteCourse != null
       ? wrongNotes.filter(
@@ -1325,7 +1346,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         <div className="cb-quiz-note-modal-answer-block">
                           <div className="cb-quiz-note-answer-row is-wrong">
                             <span className="cb-quiz-note-answer-label">
-                              ❌ 내가 고른 답변: 
+                              ❌ 내가 고른 답변:
                             </span>
                             <span className="cb-quiz-note-answer-text">
                               {modalAnswerTexts.selectedText}
@@ -1333,7 +1354,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                           </div>
                           <div className="cb-quiz-note-answer-row is-correct">
                             <span className="cb-quiz-note-answer-label">
-                              ✅ 정답: 
+                              ✅ 정답:
                             </span>
                             <span className="cb-quiz-note-answer-text">
                               {modalAnswerTexts.correctText}

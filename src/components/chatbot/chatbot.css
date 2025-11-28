@@ -603,6 +603,7 @@
 .cb-chat-scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
   padding-bottom: 12px;
   min-height: 0;
@@ -638,8 +639,8 @@
 .cb-chat-bubble-row {
   display: flex;
   width: 100%;
-  align-items: flex-end; /* 아바타 + 말풍선 아래쪽 기준 정렬 */
-  gap: 6px;             /* 아바타와 말풍선 사이 간격 */
+  align-items: flex-end;
+  gap: 6px; 
 }
 
 /* 사용자: 오른쪽 정렬 */
@@ -694,7 +695,7 @@
 
 .cb-faq-view {
   max-width: 520px;
-  margin: 80px auto 0;
+  margin: 80px auto 24px;
 }
 
 .cb-faq-header {
@@ -944,7 +945,7 @@
 .cb-edu-wrapper {
   position: fixed;
   inset: 0;
-  z-index: 9999; /* 챗봇이랑 같은 레벨 이상으로 */
+  z-index: 9999; 
   pointer-events: none;
 }
 
@@ -1020,7 +1021,7 @@
 /* 섹션 한 줄 */
 .cb-edu-section-row {
   display: flex;
-  align-items: center; /* 버튼 + 카드 수직 가운데 정렬 */
+  align-items: center; 
   justify-content: center;
   gap: 24px;
   margin: 0 auto;
@@ -1114,10 +1115,10 @@
   object-fit: cover;
   border-radius: 20px;
   display: block;
-  pointer-events: none;        /* 클릭은 부모 썸네일 div가 받도록 */
+  pointer-events: none;   
 }
 
-/* 가운데 플레이 버튼(검은 원) – 썸네일 중앙에 고정 */
+/* 가운데 플레이 버튼(검은 원) */
 .cb-edu-video-play-circle {
   position: absolute;
   left: 50%;
@@ -1232,19 +1233,19 @@
 }
 
 .cb-edu-watch-back-btn {
-  width: 24px;        /* 기본 32px였다면 28로 줄이기 */
+  width: 24px;
   height: 24px;
   padding: 0;
-  font-size: 12px;    /* 화살표 아이콘도 조금 작게 */
+  font-size: 12px;
 }
 
 /* 교육 영상 패널 전용 닫기 버튼 크기 조정 */
 .cb-edu-close-btn {
-  width: 24px;        /* 필요하면 24px까지 더 줄여도 됨 */
+  width: 24px;    
   height: 24px;
   font-size: 14px;
-  top: 12px;          /* 패널 위쪽에서 조금 더 붙이고 싶으면 값 줄이기 */
-  right: 16px;        /* 오른쪽 여백도 살짝 조정 가능 */
+  top: 12px;  
+  right: 16px; 
 }
 
 .cb-edu-watch-title {
@@ -1258,7 +1259,7 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column; /* 위: 비디오, 아래: 퀴즈 버튼 */
+  flex-direction: column;
 }
 
 /* 비디오 영역 전체 박스 */
@@ -1320,7 +1321,7 @@
 .cb-edu-watch-play-icon {
   font-size: 16px;
   line-height: 1;
-  transform: translateX(1px); /* 살짝 가운데로 */
+  transform: translateX(1px);
 }
 
 .cb-edu-watch-progress-text {
@@ -1356,10 +1357,6 @@
 
 .cb-edu-watch-quiz-btn.is-active:hover {
   background: #020617;
-}
-
-.cb-edu-watch-quiz-btn:disabled {
-  /* disabled일 때는 기본 cursor 유지 */
 }
 
 /* 모바일에서 시청 모드 패딩만 살짝 조정 */
@@ -1417,12 +1414,12 @@
   flex: 1;
   display: flex;
   gap: 12px;
-  justify-content: center; /* 카드들을 가운데 정렬 */
+  justify-content: center;
 }
 
 .cb-quiz-dept-card {
   flex: 1 1 0;
-  max-width: 260px;        /* 카드가 너무 길어지지 않도록 제한 */
+  max-width: 260px; 
   min-width: 0;
   border-radius: 18px;
   border: 1px solid #e2e2e8;
@@ -1499,8 +1496,6 @@
   margin-top: 28px;
 }
 
-/* 상단 페이지 인디케이터는 제거됨 (요구사항) */
-
 /* 퀴즈 카드 */
 .cb-quiz-course-row {
   display: flex;
@@ -1517,7 +1512,7 @@
 
 .cb-quiz-course-card {
   flex: 1 1 0;
-  max-width: 320px; /* 카드 최대 너비 제한 */
+  max-width: 320px; 
   min-width: 0;
   border-radius: 18px;
   border: 1px solid #e2e2e8;
@@ -1632,7 +1627,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden; /* 내부 스크롤용 */
+  overflow: hidden; 
 }
 
 .cb-quiz-solve-header {
@@ -1640,7 +1635,6 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
-  /* 닫기(X) 버튼과 겹치지 않도록 우측 여백 */
   padding-right: 40px;
 }
 
@@ -1714,13 +1708,13 @@
 
 .cb-quiz-solve-body {
   flex: 1;
-  min-height: 0;      /* 🔹 여기 중요: 안 줄어드는 문제 해결 */
+  min-height: 0; 
   display: flex;
 }
 
 .cb-quiz-solve-card {
   flex: 1;
-  min-height: 0;      /* 🔹 카드도 줄어들 수 있게 */
+  min-height: 0; 
   display: flex;
   flex-direction: column;
   border-radius: 28px;
@@ -1733,7 +1727,7 @@
 
 .cb-quiz-solve-scroll {
   flex: 1;
-  min-height: 0;      /* 🔹 실제 스크롤 영역 */
+  min-height: 0; 
   overflow-y: auto;
   padding-right: 8px;
 }
@@ -1806,7 +1800,7 @@
   font-size: 12px;
 }
 
-/* 스크롤바 살짝 커스텀 (크롬 계열) */
+/* 스크롤바 */
 .cb-quiz-solve-scroll::-webkit-scrollbar {
   width: 8px;
 }
@@ -1836,7 +1830,7 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
-  padding-right: 40px; /* 닫기 버튼 영역 피하기 */
+  padding-right: 40px;
 }
 
 .cb-quiz-note-header-left {
@@ -2061,4 +2055,271 @@
   line-height: 1.5;
   color: #111827;
   white-space: pre-line;
+}
+
+/* =========================
+   규정 안내(policy) 전용 뷰
+   ========================= */
+
+.cb-policy-view {
+  box-sizing: border-box;
+  width: 310px; 
+  margin: 16px auto 24px;  
+  padding: 0 0 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 패널이 어느 정도 넓어졌을 때 (panelWidth >= 900) */
+.cb-policy-view-lg {
+  width: 440px;
+}
+
+/* 패널이 아주 넓어졌을 때 (panelWidth >= 1200) */
+.cb-policy-view-xl {
+  width: 640px;
+}
+
+/* 헤더 */
+.cb-policy-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cb-policy-header-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.cb-policy-header-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cb-policy-header-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #111827;
+}
+
+.cb-policy-header-line {
+  margin: 0;
+}
+
+.cb-policy-header-line-strong {
+  font-weight: 600;
+}
+
+/* 전체 레이아웃: 세로 1컬럼 */
+.cb-policy-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.cb-policy-left,
+.cb-policy-right {
+  width: 100%;
+  min-width: 0;
+}
+
+/* 공통 섹션 */
+.cb-policy-section {
+  box-sizing: border-box;
+  padding: 12px 0 10px;
+  border-radius: 0;
+  border: none;
+  background-color: transparent;
+}
+
+.cb-policy-section-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-policy-section-desc {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 카테고리 카드: 1열 */
+.cb-policy-category-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.cb-policy-category-card {
+  box-sizing: border-box;
+  padding: 8px 9px 7px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background-color: #ffffff;
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.04);
+}
+
+.cb-policy-category-name {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 3px;
+  color: #111827;
+}
+
+.cb-policy-category-desc {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+/* 규정 리스트 */
+.cb-policy-rule-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cb-policy-rule-item {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background-color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+
+.cb-policy-rule-item:hover {
+  border-color: #d4d4d8;
+  background-color: #f9fafb;
+}
+
+.cb-policy-rule-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cb-policy-rule-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-policy-rule-summary {
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 뱃지 */
+.cb-policy-rule-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background-color: #e5e7eb;
+  color: #4b5563;
+  font-weight: 500;
+}
+
+.cb-policy-rule-badge-accent {
+  background-color: #111827;
+  color: #f9fafb;
+}
+
+/* 상세 카드 */
+.cb-policy-detail-card {
+  box-sizing: border-box;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background-color: #ffffff;
+  padding: 12px 13px 10px;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.cb-policy-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.cb-policy-detail-label {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.cb-policy-detail-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background-color: #111827;
+  color: #f9fafb;
+  font-weight: 500;
+}
+
+.cb-policy-detail-title {
+  margin: 0 0 5px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-policy-detail-summary {
+  margin: 0 0 7px;
+  font-size: 12px;
+  color: #111827;
+  line-height: 1.6;
+}
+
+.cb-policy-detail-note {
+  margin: 0;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+/* 빈 상태 카드 */
+.cb-policy-detail-card-empty {
+  background-color: #ffffff;
+}
+
+.cb-policy-detail-empty-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #111827;
+}
+
+.cb-policy-detail-empty-text {
+  margin: 0;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.6;
 }

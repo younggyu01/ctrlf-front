@@ -34,11 +34,11 @@ type VideoProgressMap = Record<string, number>;
 export interface EduPanelProps {
   anchor?: Anchor | null;
   onClose: () => void;
-  // 🔹 특정 영상 시청 완료 후 퀴즈 대시보드 패널 열기 (연결된 퀴즈 id를 넘길 수도 있음)
+  // 특정 영상 시청 완료 후 퀴즈 대시보드 패널 열기 (연결된 퀴즈 id를 넘길 수도 있음)
   onOpenQuizPanel?: (quizId?: string) => void;
-  // 🔹 부모에서 관리하는 시청률 상태 (videoId → 0~100)
+  // 부모에서 관리하는 시청률 상태 (videoId → 0~100)
   videoProgressMap?: VideoProgressMap;
-  // 🔹 시청률 변경 시 부모에 알려주는 콜백
+  // 시청률 변경 시 부모에 알려주는 콜백
   onUpdateVideoProgress?: (videoId: string, progress: number) => void;
 }
 
@@ -61,7 +61,6 @@ interface EduVideo {
   title: string;
   progress?: number; // 0 ~ 100, 없으면 0
   videoUrl?: string;
-  // 🔹 이 영상을 100% 시청하면 언락되는 퀴즈 id (없으면 퀴즈 미연결)
   quizId?: string;
 }
 
@@ -158,8 +157,8 @@ function getPageSize(panelWidth: number): number {
   return 3;
 }
 
-// 🔹 부모에서 내려온 videoProgressMap을 섹션 구조에 반영해서
-//    "렌더용 sections"를 만드는 함수 (상태 X, 순수 계산)
+// 부모에서 내려온 videoProgressMap을 섹션 구조에 반영해서
+// "렌더용 sections"를 만드는 함수 (상태 X, 순수 계산)
 function buildSectionsWithProgress(
   progressMap?: VideoProgressMap
 ): EduSection[] {
@@ -228,7 +227,7 @@ const EduPanel: React.FC<EduPanelProps> = ({
     }
   );
 
-  // ✅ 실제 카드 렌더용 섹션: props(videoProgressMap) + 더미 데이터를 기반으로 매번 계산
+  // 실제 카드 렌더용 섹션: props(videoProgressMap) + 더미 데이터를 기반으로 매번 계산
   const sections: EduSection[] = useMemo(
     () => buildSectionsWithProgress(videoProgressMap),
     [videoProgressMap]
@@ -375,7 +374,7 @@ const EduPanel: React.FC<EduPanelProps> = ({
     resizeRef.current.dir = null;
   };
 
-  // 🔹 부모 progress 업데이트만 담당하는 헬퍼
+  // 부모 progress 업데이트만 담당하는 헬퍼
   const syncProgressToParent = (videoId: string, progress: number) => {
     const finalProgress = Math.round(progress);
     if (onUpdateVideoProgress) {

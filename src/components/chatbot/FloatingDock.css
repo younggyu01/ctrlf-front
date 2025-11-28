@@ -4,7 +4,7 @@
   z-index: 1500;
   width: 80px;
   height: 80px;
-  pointer-events: none; /* 아이콘 버튼만 클릭 가능하게 */
+  pointer-events: none; 
 }
 
 /* 실제 클릭 가능한 버튼 (얼굴 전체) */
@@ -20,7 +20,7 @@
   /* 얼굴색: 연한 하늘색/민트톤 */
   background: radial-gradient(circle at 30% 20%, #ffffff 0, #32bbdd 100%);
 
-  /* 2번째 이미지처럼 아래쪽으로 떨어지는 그림자 느낌 */
+  /* 아래쪽으로 떨어지는 그림자 느낌 */
   box-shadow:
     0 10px 18px rgba(0, 0, 0, 0.18),
     0 18px 40px rgba(0, 0, 0, 0.18);
@@ -70,7 +70,7 @@
   background-color: #ffffff;
   box-shadow:
     inset 0 0 0 1px rgba(148, 163, 184, 0.7),
-    inset 0 4px 6px rgba(0, 0, 0, 0.12); /* 살짝 안쪽 음영 */
+    inset 0 4px 6px rgba(0, 0, 0, 0.12); 
   display: flex;
   align-items: center;
   justify-content: center;
@@ -91,14 +91,9 @@
   left: 50%;
   bottom: 10px;
   transform: translateX(-50%);
-
-  /* 2번째 이미지처럼 약간 더 긴 입술 */
   width: 36px;
   height: 6px;
-
   border-radius: 999px;
-
-  /* 연한 핑크색 입술 */
   background-color: #f4b6c6;
   box-shadow: 0 1px 2px rgba(248, 113, 170, 0.35);
   transition: height 0.12s ease;
@@ -113,7 +108,7 @@
   justify-content: flex-end;
   padding: 16px 24px 24px;
   z-index: 1400;
-  pointer-events: none; /* 내부 패널만 클릭 가능하게 */
+  pointer-events: none;
 }
 
 .ctrlf-chatbot-overlay-inner {

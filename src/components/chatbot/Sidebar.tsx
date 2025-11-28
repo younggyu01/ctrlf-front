@@ -19,7 +19,7 @@ interface SidebarProps {
   onDeleteSession: (sessionId: string) => void;
 }
 
-// 🔹 updatedAt 기준 상대 시간 포맷
+// updatedAt 기준 상대 시간 포맷
 function formatRelativeTime(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();

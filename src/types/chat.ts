@@ -12,12 +12,22 @@ export type ChatDomain =
   | "edu"
   | "security";
 
+// 피드백 값 타입 (좋아요 / 별로예요 / 없음)
+export type FeedbackValue = "up" | "down" | null;
+
 // 개별 메시지 엔티티
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   createdAt: number;
+  /**
+   * 사용자가 남긴 피드백
+   * - "up"  : 좋은 응답
+   * - "down": 별로인 응답
+   * - null / undefined: 피드백 없음
+   */
+  feedback?: FeedbackValue;
 }
 
 // 세션 엔티티

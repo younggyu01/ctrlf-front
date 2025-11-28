@@ -1,5 +1,9 @@
 // src/components/chatbot/chatApi.ts
-import type { ChatDomain, ChatRequest } from "../../types/chat";
+import type {
+  ChatDomain,
+  ChatRequest,
+  FeedbackValue,
+} from "../../types/chat";
 
 /**
  * 실제로는 여기에서:
@@ -39,4 +43,28 @@ export async function sendChatToAI(req: ChatRequest): Promise<string> {
     `방금 하신 질문은\n“${lastUser.content}”\n이었어요.\n\n` +
     `나중에 백엔드/AI가 붙으면 이 부분에서 진짜 답변이 돌아오게 됩니다. 🙂`
   );
+}
+
+/**
+ * 피드백 저장용 요청 타입
+ * - 아직은 Mock 이고, 나중에 실제 API 붙일 때 이 포맷으로 보내면 됨.
+ */
+export interface ChatFeedbackRequest {
+  sessionId: string;
+  messageId: string;
+  feedback: FeedbackValue;
+}
+
+/**
+ * 피드백 전송 Mock 함수
+ * - 지금은 콘솔 로그 + 약간의 지연만 넣어 둠
+ * - 실제 구현 시: POST /api/chat/feedback 등으로 연동
+ */
+export async function sendFeedbackToAI(
+  req: ChatFeedbackRequest
+): Promise<void> {
+  console.log("[Mock] sendFeedbackToAI 요청:", req);
+
+  // 너무 길 필요는 없고, 살짝 지연만
+  await new Promise((resolve) => setTimeout(resolve, 150));
 }

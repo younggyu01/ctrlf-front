@@ -714,6 +714,30 @@
   color: #6b7280;
 }
 
+/* 피드백 + 액션 아이콘 전체 그룹 */
+.cb-chat-actions-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 피드백(좋은 응답 / 별로인 응답) 버튼 그룹 */
+.cb-chat-feedback-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+
+/* 피드백 버튼 선택 상태 */
+.cb-chat-feedback-btn.is-selected {
+  background-color: #111827;
+}
+
+.cb-chat-feedback-btn.is-selected img {
+  filter: invert(1);
+}
+
 /* 아이콘형 액션 버튼 */
 .cb-chat-bubble-icon-btn {
   width: 22px;
@@ -747,24 +771,6 @@
   width: 18px;
   height: 18px;
   display: block;
-}
-
-.cb-chat-bubble-action-btn {
-  border: none;
-  background: transparent;
-  padding: 0;
-  font-size: 11px;
-  color: #4b5563;
-  cursor: pointer;
-}
-
-.cb-chat-bubble-action-btn:hover:not(:disabled) {
-  text-decoration: underline;
-}
-
-.cb-chat-bubble-action-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* 타이핑 인디케이터 점 3개 */
@@ -2384,77 +2390,4 @@
 .cb-policy-rule-badge-accent {
   background-color: #111827;
   color: #f9fafb;
-}
-
-/* 상세 카드 */
-.cb-policy-detail-card {
-  box-sizing: border-box;
-  border-radius: 16px;
-  border: 1px solid #e5e7eb;
-  background-color: #ffffff;
-  padding: 12px 13px 10px;
-  box-shadow: none;
-  font-size: 12px;
-}
-
-.cb-policy-detail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 3px;
-}
-
-.cb-policy-detail-label {
-  font-size: 11px;
-  color: #6b7280;
-}
-
-.cb-policy-detail-badge {
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background-color: #111827;
-  color: #f9fafb;
-  font-weight: 500;
-}
-
-.cb-policy-detail-title {
-  margin: 0 0 5px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #111827;
-}
-
-.cb-policy-detail-summary {
-  margin: 0 0 7px;
-  font-size: 12px;
-  color: #111827;
-  line-height: 1.6;
-}
-
-.cb-policy-detail-note {
-  margin: 0;
-  font-size: 11px;
-  color: #6b7280;
-  line-height: 1.5;
-}
-
-/* 빈 상태 카드 */
-.cb-policy-detail-card-empty {
-  background-color: #ffffff;
-}
-
-.cb-policy-detail-empty-title {
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #111827;
-}
-
-.cb-policy-detail-empty-text {
-  margin: 0;
-  font-size: 11px;
-  color: #6b7280;
-  line-height: 1.6;
 }

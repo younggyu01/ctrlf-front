@@ -3,13 +3,14 @@ import React, { useEffect, useRef, useState } from "react";
 import "./chatbot.css";
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
-import { sendChatToAI } from "./chatApi";
+import { sendChatToAI, sendFeedbackToAI } from "./chatApi";
 import {
   type ChatDomain,
   type ChatMessage,
   type ChatSession,
   type SidebarSessionSummary,
   type ChatRequest,
+  type FeedbackValue,
 } from "../../types/chat";
 import {
   computePanelPosition,
@@ -603,6 +604,36 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     void processSendMessage(question);
   };
 
+  // ====== 피드백 업데이트 (좋아요 / 별로예요) ======
+  const handleFeedbackChange = (messageId: string, value: FeedbackValue) => {
+    if (!activeSessionId) return;
+    const now = Date.now();
+
+    // 1) 프론트 상태에 반영
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id !== activeSessionId) return session;
+
+        const updatedMessages = session.messages.map((m) =>
+          m.id === messageId ? { ...m, feedback: value } : m
+        );
+
+        return {
+          ...session,
+          messages: updatedMessages,
+          updatedAt: now,
+        };
+      })
+    );
+
+    // 2) (선택) 백엔드로도 피드백 전달 - 지금은 Mock
+    void sendFeedbackToAI({
+      sessionId: activeSessionId,
+      messageId,
+      feedback: value,
+    });
+  };
+
   // === 교육/퀴즈 패널 열기 핸들러 (챗봇 자동 닫기) ===
   const handleOpenEduPanelFromChat = () => {
     if (onOpenEduPanel) {
@@ -733,6 +764,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               onPolicyQuickExplain={handlePolicyQuickExplain}
               panelWidth={size.width}
               onRetryFromMessage={handleRetryFromMessage}
+              onFeedbackChange={handleFeedbackChange}
             />
           </div>
         </div>

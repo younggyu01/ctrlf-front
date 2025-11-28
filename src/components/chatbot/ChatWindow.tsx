@@ -6,12 +6,20 @@ import faqIcon from "../../assets/faq.png";
 import quizIcon from "../../assets/quiz.png";
 import eduIcon from "../../assets/edu.png";
 
-// 액션 아이콘 3개 (파일명은 네가 저장한 이름대로 맞춰서 변경해도 됨)
-import copyIcon from "../../assets/chat-copy.png";    // 복사 아이콘(3번째)
-import retryIcon from "../../assets/chat-retry.png";  // 다시 시도 아이콘(2번째)
-import variantIcon from "../../assets/chat-variant.png"; // 다른 답변 아이콘(1번째)
+// 액션 아이콘 3개
+import copyIcon from "../../assets/chat-copy.png"; // 복사 아이콘
+import retryIcon from "../../assets/chat-retry.png"; // 다시 시도 아이콘
+import variantIcon from "../../assets/chat-variant.png"; // 다른 답변 아이콘
 
-import type { ChatDomain, ChatSession } from "../../types/chat";
+// 새로 추가: 피드백(좋아요/별로예요) 아이콘
+import feedbackGoodIcon from "../../assets/chat-good.png"; // 좋은 응답 아이콘
+import feedbackBadIcon from "../../assets/chat-bad.png"; // 별로인 응답 아이콘
+
+import type {
+  ChatDomain,
+  ChatSession,
+  FeedbackValue,
+} from "../../types/chat";
 import { FAQ_ITEMS } from "./faqData";
 
 interface ChatWindowProps {
@@ -33,6 +41,8 @@ interface ChatWindowProps {
     sourceQuestion: string,
     mode: "retry" | "variant"
   ) => void;
+  // 피드백 업데이트 콜백 (세션 상태 업데이트는 상위에서)
+  onFeedbackChange?: (messageId: string, value: FeedbackValue) => void;
 }
 
 type ViewKey = "home" | "policy" | "faq";
@@ -137,10 +147,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onPolicyQuickExplain,
   panelWidth,
   onRetryFromMessage,
+  onFeedbackChange,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const messages = activeSession?.messages ?? [];
@@ -249,8 +259,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         document.execCommand("copy");
         document.body.removeChild(textarea);
       }
-      // 나중에 토스트 붙이면 여기서 호출 가능
-      // showToast("답변이 복사되었습니다.");
     } catch (err) {
       console.error("copy failed", err);
     }
@@ -421,6 +429,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             }
           }
 
+          // 이 메시지에 대한 피드백 값 (없으면 null)
+          const feedback: FeedbackValue = msg.feedback ?? null;
+
           return (
             <div
               key={msg.id}
@@ -450,7 +461,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   <div className="cb-chat-bubble-text">{msg.content}</div>
                 </div>
 
-                {/* assistant 답변 밑에: 복사 / 다시 시도 / 다른 답변 아이콘 */}
+                {/* assistant 답변 밑에: 피드백 + 복사/다시 시도/다른 답변 아이콘 */}
                 {isAssistant && (
                   <div className="cb-chat-bubble-actions">
                     {isErrorAssistant && (
@@ -459,60 +470,109 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       </span>
                     )}
 
-                    {/* 복사 아이콘 (항상 노출) */}
-                    <button
-                      type="button"
-                      className="cb-chat-bubble-action-btn"
-                      onClick={() => handleCopyMessage(msg.content)}
-                      disabled={isSending}
-                      title="답변 복사"
-                      aria-label="답변 복사"
-                    >
-                      <img
-                        src={copyIcon}
-                        alt="답변 복사"
-                        className="cb-chat-bubble-action-icon"
-                      />
-                    </button>
-
-                    {/* 다시 시도 / 다른 답변은 sourceQuestion + onRetryFromMessage 있을 때만 */}
-                    {sourceQuestion && onRetryFromMessage && (
-                      <>
+                    <div className="cb-chat-actions-icon-group">
+                      {/* 좋은 응답 / 별로인 응답 */}
+                      <div className="cb-chat-feedback-group">
                         <button
                           type="button"
-                          className="cb-chat-bubble-action-btn"
-                          onClick={() =>
-                            onRetryFromMessage(sourceQuestion, "retry")
-                          }
-                          disabled={isSending}
-                          title="다시 시도"
-                          aria-label="다시 시도"
+                          className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                            feedback === "up" ? "is-selected" : ""
+                          }`}
+                          onClick={() => {
+                            if (!onFeedbackChange) return;
+                            const next: FeedbackValue =
+                              feedback === "up" ? null : "up";
+                            onFeedbackChange(msg.id, next);
+                          }}
+                          title="좋은 응답"
+                          aria-label="도움이 되었어요"
+                          aria-pressed={feedback === "up"}
                         >
                           <img
-                            src={retryIcon}
-                            alt="다시 시도"
+                            src={feedbackGoodIcon}
+                            alt="좋은 응답"
                             className="cb-chat-bubble-action-icon"
                           />
                         </button>
 
                         <button
                           type="button"
-                          className="cb-chat-bubble-action-btn"
-                          onClick={() =>
-                            onRetryFromMessage(sourceQuestion, "variant")
-                          }
-                          disabled={isSending}
-                          title="다른 답변"
-                          aria-label="다른 답변"
+                          className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                            feedback === "down" ? "is-selected" : ""
+                          }`}
+                          onClick={() => {
+                            if (!onFeedbackChange) return;
+                            const next: FeedbackValue =
+                              feedback === "down" ? null : "down";
+                            onFeedbackChange(msg.id, next);
+                          }}
+                          title="별로인 응답"
+                          aria-label="별로인 응답이에요"
+                          aria-pressed={feedback === "down"}
                         >
                           <img
-                            src={variantIcon}
-                            alt="다른 답변"
+                            src={feedbackBadIcon}
+                            alt="별로인 응답"
                             className="cb-chat-bubble-action-icon"
                           />
                         </button>
-                      </>
-                    )}
+                      </div>
+
+                      {/* 복사 */}
+                      <button
+                        type="button"
+                        className="cb-chat-bubble-icon-btn"
+                        onClick={() => handleCopyMessage(msg.content)}
+                        disabled={isSending}
+                        title="답변 복사"
+                        aria-label="답변 복사"
+                      >
+                        <img
+                          src={copyIcon}
+                          alt="답변 복사"
+                          className="cb-chat-bubble-action-icon"
+                        />
+                      </button>
+
+                      {/* 다시 시도 / 다른 답변 */}
+                      {sourceQuestion && onRetryFromMessage && (
+                        <>
+                          <button
+                            type="button"
+                            className="cb-chat-bubble-icon-btn"
+                            onClick={() =>
+                              onRetryFromMessage(sourceQuestion, "retry")
+                            }
+                            disabled={isSending}
+                            title="다시 시도"
+                            aria-label="다시 시도"
+                          >
+                            <img
+                              src={retryIcon}
+                              alt="다시 시도"
+                              className="cb-chat-bubble-action-icon"
+                            />
+                          </button>
+
+                          <button
+                            type="button"
+                            className="cb-chat-bubble-icon-btn"
+                            onClick={() =>
+                              onRetryFromMessage(sourceQuestion, "variant")
+                            }
+                            disabled={isSending}
+                            title="다른 답변"
+                            aria-label="다른 답변"
+                          >
+                            <img
+                              src={variantIcon}
+                              alt="다른 답변"
+                              className="cb-chat-bubble-action-icon"
+                            />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -667,7 +727,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             <textarea
               ref={inputRef}
               className="cb-input"
-              placeholder="" // placeholder 문구 완전 제거
+              placeholder=""
               aria-label="질문 입력"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}

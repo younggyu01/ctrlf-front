@@ -5,6 +5,12 @@ import ruleIcon from "../../assets/rule.png";
 import faqIcon from "../../assets/faq.png";
 import quizIcon from "../../assets/quiz.png";
 import eduIcon from "../../assets/edu.png";
+
+// 액션 아이콘 3개 (파일명은 네가 저장한 이름대로 맞춰서 변경해도 됨)
+import copyIcon from "../../assets/chat-copy.png";    // 복사 아이콘(3번째)
+import retryIcon from "../../assets/chat-retry.png";  // 다시 시도 아이콘(2번째)
+import variantIcon from "../../assets/chat-variant.png"; // 다른 답변 아이콘(1번째)
+
 import type { ChatDomain, ChatSession } from "../../types/chat";
 import { FAQ_ITEMS } from "./faqData";
 
@@ -22,6 +28,11 @@ interface ChatWindowProps {
     summary: string
   ) => void;
   panelWidth?: number;
+  // 답변 기준 다시 시도 / 다른 답변 버튼
+  onRetryFromMessage?: (
+    sourceQuestion: string,
+    mode: "retry" | "variant"
+  ) => void;
 }
 
 type ViewKey = "home" | "policy" | "faq";
@@ -125,8 +136,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onFaqQuickSend,
   onPolicyQuickExplain,
   panelWidth,
+  onRetryFromMessage,
 }) => {
   const [inputValue, setInputValue] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -143,8 +156,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       ? "faq"
       : "home";
 
-  const isPolicyView = activeView === "policy";
-
   // 스크롤 맨 아래로
   useEffect(() => {
     if (messagesEndRef.current) {
@@ -155,6 +166,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [messages.length]);
 
+  // textarea 자동 높이 조절
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "24px"; // 기본 높이 초기화
+    const next = Math.min(el.scrollHeight, 120); // 최대 높이 제한
+    el.style.height = `${next}px`;
+  }, [inputValue]);
+
   // 메시지 전송 (뷰 전환 X, domain에 따라 뷰 유지)
   const handleSend = () => {
     const trimmed = inputValue.trim();
@@ -164,8 +184,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     setInputValue("");
   };
 
-  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+  const handleInputKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
@@ -207,6 +229,30 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
     if (onPolicyQuickExplain) {
       onPolicyQuickExplain(rule.id, rule.title, rule.summary);
+    }
+  };
+
+  // 답변 내용 복사
+  const handleCopyMessage = async (content: string) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(content);
+      } else {
+        // 구형 브라우저용 fallback
+        const textarea = document.createElement("textarea");
+        textarea.value = content;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      // 나중에 토스트 붙이면 여기서 호출 가능
+      // showToast("답변이 복사되었습니다.");
+    } catch (err) {
+      console.error("copy failed", err);
     }
   };
 
@@ -349,20 +395,37 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
   // 공통 메시지 렌더링
   const renderMessages = () => {
-    if (!hasMessages) return null;
+    if (!hasMessages && !isSending) return null;
 
     return (
       <div className="cb-chat-messages">
-        {messages.map((msg) => {
+        {messages.map((msg, index) => {
           const isUser = msg.role === "user";
+          const isAssistant = !isUser;
+
+          // 에러 메시지 여부 (현재 에러 문구 기반)
+          const isErrorAssistant =
+            isAssistant &&
+            msg.content.startsWith(
+              "죄송합니다. 서버와 통신 중 문제가 발생했어요"
+            );
+
+          // 이 assistant 답변의 기준이 되는 user 질문 찾기 (바로 앞쪽 user 메시지)
+          let sourceQuestion: string | null = null;
+          if (isAssistant) {
+            for (let i = index - 1; i >= 0; i -= 1) {
+              if (messages[i].role === "user") {
+                sourceQuestion = messages[i].content;
+                break;
+              }
+            }
+          }
 
           return (
             <div
               key={msg.id}
               className={`cb-chat-bubble-row ${
-                isUser
-                  ? "cb-chat-bubble-row-user"
-                  : "cb-chat-bubble-row-bot"
+                isUser ? "cb-chat-bubble-row-user" : "cb-chat-bubble-row-bot"
               }`}
             >
               {!isUser && (
@@ -372,15 +435,108 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               )}
 
               <div
-                className={`cb-chat-bubble ${
-                  isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
-                }`}
+                className={
+                  "cb-chat-bubble-container " +
+                  (isUser
+                    ? "cb-chat-bubble-container-user"
+                    : "cb-chat-bubble-container-bot")
+                }
               >
-                <div className="cb-chat-bubble-text">{msg.content}</div>
+                <div
+                  className={`cb-chat-bubble ${
+                    isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
+                  } ${isErrorAssistant ? "cb-chat-bubble-error" : ""}`}
+                >
+                  <div className="cb-chat-bubble-text">{msg.content}</div>
+                </div>
+
+                {/* assistant 답변 밑에: 복사 / 다시 시도 / 다른 답변 아이콘 */}
+                {isAssistant && (
+                  <div className="cb-chat-bubble-actions">
+                    {isErrorAssistant && (
+                      <span className="cb-chat-bubble-error-text">
+                        네트워크 오류로 실패했어요.
+                      </span>
+                    )}
+
+                    {/* 복사 아이콘 (항상 노출) */}
+                    <button
+                      type="button"
+                      className="cb-chat-bubble-action-btn"
+                      onClick={() => handleCopyMessage(msg.content)}
+                      disabled={isSending}
+                      title="답변 복사"
+                      aria-label="답변 복사"
+                    >
+                      <img
+                        src={copyIcon}
+                        alt="답변 복사"
+                        className="cb-chat-bubble-action-icon"
+                      />
+                    </button>
+
+                    {/* 다시 시도 / 다른 답변은 sourceQuestion + onRetryFromMessage 있을 때만 */}
+                    {sourceQuestion && onRetryFromMessage && (
+                      <>
+                        <button
+                          type="button"
+                          className="cb-chat-bubble-action-btn"
+                          onClick={() =>
+                            onRetryFromMessage(sourceQuestion, "retry")
+                          }
+                          disabled={isSending}
+                          title="다시 시도"
+                          aria-label="다시 시도"
+                        >
+                          <img
+                            src={retryIcon}
+                            alt="다시 시도"
+                            className="cb-chat-bubble-action-icon"
+                          />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="cb-chat-bubble-action-btn"
+                          onClick={() =>
+                            onRetryFromMessage(sourceQuestion, "variant")
+                          }
+                          disabled={isSending}
+                          title="다른 답변"
+                          aria-label="다른 답변"
+                        >
+                          <img
+                            src={variantIcon}
+                            alt="다른 답변"
+                            className="cb-chat-bubble-action-icon"
+                          />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
+
+        {/* 로딩 중일 때: 타이핑 인디케이터 말풍선 */}
+        {isSending && (
+          <div className="cb-chat-bubble-row cb-chat-bubble-row-bot cb-chat-bubble-row-loading">
+            <div className="cb-chat-avatar">
+              <img src={robotIcon} alt="챗봇" />
+            </div>
+            <div className="cb-chat-bubble-container cb-chat-bubble-container-bot">
+              <div className="cb-chat-bubble cb-chat-bubble-bot cb-chat-bubble-loading">
+                <div className="cb-typing-dots">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -491,14 +647,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
         {/* 하단 입력 영역 (어느 뷰에서든 공통) */}
         <div className="cb-input-section">
-          <p className="cb-input-hint">
-            {isSending
-              ? "답변을 생성하고 있어요…"
-              : isPolicyView
-              ? "규정과 관련해서 궁금한 내용을 물어보세요."
-              : "무엇이든 물어보세요!"}
-          </p>
-          <div className="cb-input-pill">
+          {/* 로딩 중일 때만 안내 문구 표시 */}
+          {isSending && (
+            <p className="cb-input-hint">답변을 생성하고 있어요…</p>
+          )}
+
+          <div
+            className={
+              "cb-input-pill" + (isSending ? " cb-input-pill-disabled" : "")
+            }
+          >
             <button
               type="button"
               className="cb-input-plus"
@@ -506,21 +664,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             >
               +
             </button>
-            <input
-              type="text"
+            <textarea
+              ref={inputRef}
               className="cb-input"
-              placeholder=""
+              placeholder="" // placeholder 문구 완전 제거
               aria-label="질문 입력"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleInputKeyDown}
               disabled={isSending}
+              rows={1}
             />
             <button
               type="button"
               className="cb-input-send"
               onClick={handleSend}
-              disabled={isSending}
+              disabled={isSending || !inputValue.trim()}
             >
               <span className="cb-send-icon">▶</span>
             </button>

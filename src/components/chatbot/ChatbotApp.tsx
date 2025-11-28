@@ -52,6 +52,8 @@ type DragState = {
   startLeft: number;
 };
 
+type RetryMode = "retry" | "variant";
+
 const MIN_WIDTH = 520;
 const MIN_HEIGHT = 480;
 const INITIAL_SIZE: Size = { width: 550, height: 550 };
@@ -586,6 +588,21 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     }
   };
 
+  // 특정 답변 기준으로 "다시 시도 / 다른 답변" 요청
+  const handleRetryFromMessage = (sourceQuestion: string, mode: RetryMode) => {
+    const base = sourceQuestion.trim();
+    if (!base || isSending) return;
+
+    let question = base;
+
+    if (mode === "variant") {
+      // 다른 답변 모드: 같은 질문이지만, 다른 방식으로 설명 요청
+      question = `${base}\n\n같은 내용이지만 다른 방식으로도 한 번 더 설명해줘.`;
+    }
+
+    void processSendMessage(question);
+  };
+
   // === 교육/퀴즈 패널 열기 핸들러 (챗봇 자동 닫기) ===
   const handleOpenEduPanelFromChat = () => {
     if (onOpenEduPanel) {
@@ -715,6 +732,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               onFaqQuickSend={handleFaqQuickSend}
               onPolicyQuickExplain={handlePolicyQuickExplain}
               panelWidth={size.width}
+              onRetryFromMessage={handleRetryFromMessage}
             />
           </div>
         </div>

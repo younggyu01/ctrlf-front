@@ -657,14 +657,11 @@
 .cb-chat-bubble {
   position: relative;
   display: inline-block;
-  max-width: var(--cb-user-chat-width, 70%);
   padding: 6px 16px;
   border-radius: 18px;
   box-sizing: border-box;
   font-size: 14px;
   line-height: 1.5;
-  word-break: break-word;
-  overflow-wrap: anywhere;
 }
 
 .cb-chat-bubble-text {
@@ -687,6 +684,123 @@
   border: 1px solid #e5e7eb;
   border-radius: 18px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+/* 로딩용 말풍선 */
+.cb-chat-bubble-loading {
+  padding: 8px 12px;
+}
+
+/* 에러 응답 말풍선 */
+.cb-chat-bubble-error {
+  background-color: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.cb-chat-bubble-error-text {
+  margin-right: 4px;
+  color: #b91c1c;
+}
+
+/* 답변 하단 액션 영역 (복사 / 다시 시도 / 다른 답변 - 아이콘) */
+.cb-chat-bubble-actions {
+  margin-top: 4px;
+  display: flex;
+  justify-content: flex-start;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 아이콘형 액션 버튼 */
+.cb-chat-bubble-icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background-color: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.15s ease, transform 0.08s ease;
+}
+
+.cb-chat-bubble-icon-btn:hover:not(:disabled) {
+  background-color: #e5e7eb;
+}
+
+.cb-chat-bubble-icon-btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.cb-chat-bubble-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 아이콘 이미지 크기 */
+.cb-chat-bubble-action-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.cb-chat-bubble-action-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 11px;
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.cb-chat-bubble-action-btn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.cb-chat-bubble-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 타이핑 인디케이터 점 3개 */
+.cb-typing-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.cb-typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background-color: #9ca3af;
+  animation: cb-typing-bounce 1.2s infinite ease-in-out;
+}
+
+.cb-typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.cb-typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes cb-typing-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
 }
 
 /* =========================
@@ -886,12 +1000,33 @@
   cursor: pointer;
 }
 
+/* 입력 인풋 */
 .cb-input {
   flex: 1;
   border: none;
   background: transparent;
   font-size: 14px;
   outline: none;
+  resize: none;
+  line-height: 1.5;
+  padding: 2px 0;
+  max-height: 50px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+/* WebKit(Chrome, Edge, Safari)에서 스크롤바 숨기기 */
+.cb-input::-webkit-scrollbar {
+  display: none;
+}
+
+.cb-input:disabled {
+  cursor: not-allowed;
+}
+
+.cb-input-pill.cb-input-pill-disabled {
+  background-color: #f3f4f6;
+  opacity: 0.85;
 }
 
 .cb-input-send {

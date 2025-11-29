@@ -1,4 +1,5 @@
 // src/components/chatbot/ChatWindow.tsx
+
 import React, { useEffect, useRef, useState } from "react";
 import robotIcon from "../../assets/robot.png";
 import ruleIcon from "../../assets/rule.png";
@@ -19,6 +20,7 @@ import type {
   ChatDomain,
   ChatSession,
   FeedbackValue,
+  ReportPayload,
 } from "../../types/chat";
 import { FAQ_ITEMS } from "./faqData";
 
@@ -43,6 +45,8 @@ interface ChatWindowProps {
   ) => void;
   // 피드백 업데이트 콜백 (세션 상태 업데이트는 상위에서)
   onFeedbackChange?: (messageId: string, value: FeedbackValue) => void;
+  // 신고 모달에서 제출 시
+  onReportSubmit?: (payload: ReportPayload) => void;
 }
 
 type ViewKey = "home" | "policy" | "faq";
@@ -60,6 +64,19 @@ type PolicyRule = {
   summary: string;
   badge?: "중요" | "필수" | "신규";
 };
+
+// UI에서 사용하는 메시지 타입
+type UiChatMessageRole = "user" | "assistant";
+
+interface UiChatMessage {
+  id: string;
+  role: UiChatMessageRole;
+  content: string;
+  // 신고 안내 말풍선 같은 특수 메시지 구분용
+  kind?: "normal" | "reportSuggestion";
+  // 피드백 (좋아요/별로예요)
+  feedback?: FeedbackValue;
+}
 
 const POLICY_CATEGORIES: PolicyCategory[] = [
   {
@@ -148,12 +165,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   panelWidth,
   onRetryFromMessage,
   onFeedbackChange,
+  onReportSubmit,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const messages = activeSession?.messages ?? [];
+  // 신고 모달 상태
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportContent, setReportContent] = useState("");
+  const reportTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // 원본 세션 메시지 → UI 타입으로 캐스팅
+  const rawMessages = activeSession?.messages ?? [];
+  const messages = rawMessages as UiChatMessage[];
   const hasMessages = messages.length > 0;
 
   const sessionDomain = activeSession?.domain;
@@ -185,6 +210,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     el.style.height = `${next}px`;
   }, [inputValue]);
 
+  // 신고 모달 열릴 때 textarea 포커스
+  useEffect(() => {
+    if (isReportModalOpen && reportTextareaRef.current) {
+      reportTextareaRef.current.focus();
+    }
+  }, [isReportModalOpen]);
+
   // 메시지 전송 (뷰 전환 X, domain에 따라 뷰 유지)
   const handleSend = () => {
     const trimmed = inputValue.trim();
@@ -206,7 +238,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleFeatureClick = (targetDomain: ChatDomain) => {
     if (isSending) return;
     onChangeDomain(targetDomain);
-    // domain만 바꾸면, 위에서 activeView가 알아서 policy/faq로 바뀜
   };
 
   const handleEduClick = () => {
@@ -262,6 +293,41 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     } catch (err) {
       console.error("copy failed", err);
     }
+  };
+
+  // 신고 모달 열기
+  const handleOpenReportModal = () => {
+    if (isSending) return;
+    setReportContent("");
+    setIsReportModalOpen(true);
+  };
+
+  const handleCloseReportModal = () => {
+    setIsReportModalOpen(false);
+  };
+
+  // 신고 제출
+  const handleSubmitReportClick = () => {
+    const trimmed = reportContent.trim();
+    if (!trimmed) {
+      window.alert("신고 내용을 입력해 주세요.");
+      return;
+    }
+
+    if (!onReportSubmit || !activeSession) {
+      setIsReportModalOpen(false);
+      return;
+    }
+
+    const payload: ReportPayload = {
+      sessionId: activeSession.id,
+      content: trimmed,
+      createdAt: Date.now(),
+    };
+
+    onReportSubmit(payload);
+    setIsReportModalOpen(false);
+    setReportContent("");
   };
 
   // 패널 폭에 따라 규정 카드 폭 단계 조절
@@ -429,6 +495,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             }
           }
 
+          // kind (신고 안내 말풍선 등)
+          const msgKind = msg.kind ?? "normal";
+          const isReportSuggestion = msgKind === "reportSuggestion";
+
           // 이 메시지에 대한 피드백 값 (없으면 null)
           const feedback: FeedbackValue = msg.feedback ?? null;
 
@@ -453,127 +523,159 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     : "cb-chat-bubble-container-bot")
                 }
               >
-                <div
-                  className={`cb-chat-bubble ${
-                    isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
-                  } ${isErrorAssistant ? "cb-chat-bubble-error" : ""}`}
-                >
-                  <div className="cb-chat-bubble-text">{msg.content}</div>
-                </div>
-
-                {/* assistant 답변 밑에: 피드백 + 복사/다시 시도/다른 답변 아이콘 */}
-                {isAssistant && (
-                  <div className="cb-chat-bubble-actions">
-                    {isErrorAssistant && (
-                      <span className="cb-chat-bubble-error-text">
-                        네트워크 오류로 실패했어요.
-                      </span>
-                    )}
-
-                    <div className="cb-chat-actions-icon-group">
-                      {/* 좋은 응답 / 별로인 응답 */}
-                      <div className="cb-chat-feedback-group">
-                        <button
-                          type="button"
-                          className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                            feedback === "up" ? "is-selected" : ""
-                          }`}
-                          onClick={() => {
-                            if (!onFeedbackChange) return;
-                            const next: FeedbackValue =
-                              feedback === "up" ? null : "up";
-                            onFeedbackChange(msg.id, next);
-                          }}
-                          title="좋은 응답"
-                          aria-label="도움이 되었어요"
-                          aria-pressed={feedback === "up"}
-                        >
-                          <img
-                            src={feedbackGoodIcon}
-                            alt="좋은 응답"
-                            className="cb-chat-bubble-action-icon"
-                          />
-                        </button>
-
-                        <button
-                          type="button"
-                          className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                            feedback === "down" ? "is-selected" : ""
-                          }`}
-                          onClick={() => {
-                            if (!onFeedbackChange) return;
-                            const next: FeedbackValue =
-                              feedback === "down" ? null : "down";
-                            onFeedbackChange(msg.id, next);
-                          }}
-                          title="별로인 응답"
-                          aria-label="별로인 응답이에요"
-                          aria-pressed={feedback === "down"}
-                        >
-                          <img
-                            src={feedbackBadIcon}
-                            alt="별로인 응답"
-                            className="cb-chat-bubble-action-icon"
-                          />
-                        </button>
-                      </div>
-
-                      {/* 복사 */}
-                      <button
-                        type="button"
-                        className="cb-chat-bubble-icon-btn"
-                        onClick={() => handleCopyMessage(msg.content)}
-                        disabled={isSending}
-                        title="답변 복사"
-                        aria-label="답변 복사"
-                      >
-                        <img
-                          src={copyIcon}
-                          alt="답변 복사"
-                          className="cb-chat-bubble-action-icon"
-                        />
-                      </button>
-
-                      {/* 다시 시도 / 다른 답변 */}
-                      {sourceQuestion && onRetryFromMessage && (
-                        <>
-                          <button
-                            type="button"
-                            className="cb-chat-bubble-icon-btn"
-                            onClick={() =>
-                              onRetryFromMessage(sourceQuestion, "retry")
-                            }
-                            disabled={isSending}
-                            title="다시 시도"
-                            aria-label="다시 시도"
-                          >
-                            <img
-                              src={retryIcon}
-                              alt="다시 시도"
-                              className="cb-chat-bubble-action-icon"
-                            />
-                          </button>
-
-                          <button
-                            type="button"
-                            className="cb-chat-bubble-icon-btn"
-                            onClick={() =>
-                              onRetryFromMessage(sourceQuestion, "variant")
-                            }
-                            disabled={isSending}
-                            title="다른 답변"
-                            aria-label="다른 답변"
-                          >
-                            <img
-                              src={variantIcon}
-                              alt="다른 답변"
-                              className="cb-chat-bubble-action-icon"
-                            />
-                          </button>
-                        </>
-                      )}
-                    </div>
+                {/* 신고 안내 전용 말풍선: 한 줄에 텍스트 + 버튼 */}
+                {isAssistant && isReportSuggestion ? (
+                  <div className="cb-chat-bubble cb-chat-bubble-bot cb-chat-bubble-report">
+                    <span
+                      className="cb-chat-bubble-report-icon"
+                      aria-hidden="true"
+                    >
+                      🔍
+                    </span>
+                    <span className="cb-chat-bubble-report-text">
+                      {msg.content}
+                    </span>
+                    <button
+                      type="button"
+                      className="cb-report-suggest-inline-btn"
+                      onClick={handleOpenReportModal}
+                      disabled={isSending}
+                    >
+                      신고
+                    </button>
                   </div>
+                ) : (
+                  <>
+                    {/* 기본 말풍선 */}
+                    <div
+                      className={`cb-chat-bubble ${
+                        isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
+                      } ${isErrorAssistant ? "cb-chat-bubble-error" : ""}`}
+                    >
+                      <div className="cb-chat-bubble-text">{msg.content}</div>
+                    </div>
+
+                    {/* 일반 assistant 답변 밑에: 피드백 + 복사/다시 시도/다른 답변 아이콘 */}
+                    {isAssistant && (
+                      <div className="cb-chat-bubble-actions">
+                        {isErrorAssistant && (
+                          <span className="cb-chat-bubble-error-text">
+                            네트워크 오류로 실패했어요.
+                          </span>
+                        )}
+
+                        <div className="cb-chat-actions-icon-group">
+                          {/* 좋은 응답 / 별로인 응답 */}
+                          <div className="cb-chat-feedback-group">
+                            <button
+                              type="button"
+                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                                feedback === "up" ? "is-selected" : ""
+                              }`}
+                              onClick={() => {
+                                if (!onFeedbackChange) return;
+                                const next: FeedbackValue =
+                                  feedback === "up" ? null : "up";
+                                onFeedbackChange(msg.id, next);
+                              }}
+                              title="좋은 응답"
+                              aria-label="도움이 되었어요"
+                              aria-pressed={feedback === "up"}
+                            >
+                              <img
+                                src={feedbackGoodIcon}
+                                alt="좋은 응답"
+                                className="cb-chat-bubble-action-icon"
+                              />
+                            </button>
+
+                            <button
+                              type="button"
+                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                                feedback === "down" ? "is-selected" : ""
+                              }`}
+                              onClick={() => {
+                                if (!onFeedbackChange) return;
+                                const next: FeedbackValue =
+                                  feedback === "down" ? null : "down";
+                                onFeedbackChange(msg.id, next);
+                              }}
+                              title="별로인 응답"
+                              aria-label="별로인 응답이에요"
+                              aria-pressed={feedback === "down"}
+                            >
+                              <img
+                                src={feedbackBadIcon}
+                                alt="별로인 응답"
+                                className="cb-chat-bubble-action-icon"
+                              />
+                            </button>
+                          </div>
+
+                          {/* 복사 */}
+                          <button
+                            type="button"
+                            className="cb-chat-bubble-icon-btn"
+                            onClick={() => handleCopyMessage(msg.content)}
+                            disabled={isSending}
+                            title="답변 복사"
+                            aria-label="답변 복사"
+                          >
+                            <img
+                              src={copyIcon}
+                              alt="답변 복사"
+                              className="cb-chat-bubble-action-icon"
+                            />
+                          </button>
+
+                          {/* 다시 시도 / 다른 답변 */}
+                          {sourceQuestion && onRetryFromMessage && (
+                            <>
+                              <button
+                                type="button"
+                                className="cb-chat-bubble-icon-btn"
+                                onClick={() =>
+                                  onRetryFromMessage(
+                                    sourceQuestion,
+                                    "retry"
+                                  )
+                                }
+                                disabled={isSending}
+                                title="다시 시도"
+                                aria-label="다시 시도"
+                              >
+                                <img
+                                  src={retryIcon}
+                                  alt="다시 시도"
+                                  className="cb-chat-bubble-action-icon"
+                                />
+                              </button>
+
+                              <button
+                                type="button"
+                                className="cb-chat-bubble-icon-btn"
+                                onClick={() =>
+                                  onRetryFromMessage(
+                                    sourceQuestion,
+                                    "variant"
+                                  )
+                                }
+                                disabled={isSending}
+                                title="다른 답변"
+                                aria-label="다른 답변"
+                              >
+                                <img
+                                  src={variantIcon}
+                                  alt="다른 답변"
+                                  className="cb-chat-bubble-action-icon"
+                                />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -602,151 +704,237 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   };
 
   return (
-    <main className="cb-main">
-      <header className="cb-main-header">
-        <h2 className="cb-main-title">chatbot</h2>
-      </header>
+    <>
+      <main className="cb-main">
+        <header className="cb-main-header">
+          <h2 className="cb-main-title">chatbot</h2>
+        </header>
 
-      <section className="cb-main-content">
-        <div className="cb-chat-scroll">
-          {/* 홈 뷰: 환영 카드 + 메시지 */}
-          {activeView === "home" && (
-            <>
-              {!hasMessages && (
-                <div className="cb-feature-container">
-                  <div className="cb-welcome-row">
-                    <img
-                      src={robotIcon}
-                      alt="챗봇 아이콘"
-                      className="cb-welcome-icon"
-                    />
-                    <div className="cb-welcome-text">
-                      <p>안녕하세요.</p>
-                      <p>Ctrl F의 챗봇(BlinQ)이 서비스를 시작합니다.</p>
+        <section className="cb-main-content">
+          <div className="cb-chat-scroll">
+            {/* 홈 뷰: 환영 카드 + 메시지 */}
+            {activeView === "home" && (
+              <>
+                {!hasMessages && (
+                  <div className="cb-feature-container">
+                    <div className="cb-welcome-row">
+                      <img
+                        src={robotIcon}
+                        alt="챗봇 아이콘"
+                        className="cb-welcome-icon"
+                      />
+                      <div className="cb-welcome-text">
+                        <p>안녕하세요.</p>
+                        <p>Ctrl F의 챗봇(BlinQ)이 서비스를 시작합니다.</p>
+                      </div>
+                    </div>
+
+                    <div className="cb-feature-row">
+                      <button
+                        type="button"
+                        className="cb-feature-card"
+                        onClick={() => handleFeatureClick("policy")}
+                      >
+                        <img
+                          src={ruleIcon}
+                          alt="규정 안내"
+                          className="cb-feature-icon"
+                        />
+                        <span className="cb-feature-label">규정 안내</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="cb-feature-card"
+                        onClick={() => handleFeatureClick("faq")}
+                      >
+                        <img
+                          src={faqIcon}
+                          alt="FAQ"
+                          className="cb-feature-icon"
+                        />
+                        <span className="cb-feature-label">FAQ</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="cb-feature-card"
+                        onClick={handleQuizClick}
+                      >
+                        <img
+                          src={quizIcon}
+                          alt="퀴즈"
+                          className="cb-feature-icon"
+                        />
+                        <span className="cb-feature-label">퀴즈</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="cb-feature-card"
+                        onClick={handleEduClick}
+                      >
+                        <img
+                          src={eduIcon}
+                          alt="교육"
+                          className="cb-feature-icon"
+                        />
+                        <span className="cb-feature-label">교육</span>
+                      </button>
                     </div>
                   </div>
+                )}
 
-                  <div className="cb-feature-row">
-                    <button
-                      type="button"
-                      className="cb-feature-card"
-                      onClick={() => handleFeatureClick("policy")}
-                    >
-                      <img
-                        src={ruleIcon}
-                        alt="규정 안내"
-                        className="cb-feature-icon"
-                      />
-                      <span className="cb-feature-label">규정 안내</span>
-                    </button>
+                {renderMessages()}
+              </>
+            )}
 
-                    <button
-                      type="button"
-                      className="cb-feature-card"
-                      onClick={() => handleFeatureClick("faq")}
-                    >
-                      <img
-                        src={faqIcon}
-                        alt="FAQ"
-                        className="cb-feature-icon"
-                      />
-                      <span className="cb-feature-label">FAQ</span>
-                    </button>
+            {/* 규정 뷰: 위에는 규정 카드, 아래에는 채팅 말풍선 */}
+            {activeView === "policy" && (
+              <>
+                {renderPolicyView()}
+                {renderMessages()}
+              </>
+            )}
 
-                    <button
-                      type="button"
-                      className="cb-feature-card"
-                      onClick={handleQuizClick}
-                    >
-                      <img
-                        src={quizIcon}
-                        alt="퀴즈"
-                        className="cb-feature-icon"
-                      />
-                      <span className="cb-feature-label">퀴즈</span>
-                    </button>
+            {/* FAQ 뷰: 위에는 FAQ 카드, 아래에는 채팅 말풍선 */}
+            {activeView === "faq" && (
+              <>
+                {renderFaqView()}
+                {renderMessages()}
+              </>
+            )}
 
-                    <button
-                      type="button"
-                      className="cb-feature-card"
-                      onClick={handleEduClick}
-                    >
-                      <img
-                        src={eduIcon}
-                        alt="교육"
-                        className="cb-feature-icon"
-                      />
-                      <span className="cb-feature-label">교육</span>
-                    </button>
-                  </div>
-                </div>
-              )}
+            <div ref={messagesEndRef} />
+          </div>
 
-              {renderMessages()}
-            </>
-          )}
+          {/* 하단 입력 영역 (어느 뷰에서든 공통) */}
+          <div className="cb-input-section">
+            {isSending && (
+              <p className="cb-input-hint">답변을 생성하고 있어요…</p>
+            )}
 
-          {/* 규정 뷰: 위에는 규정 카드, 아래에는 채팅 말풍선 */}
-          {activeView === "policy" && (
-            <>
-              {renderPolicyView()}
-              {renderMessages()}
-            </>
-          )}
+            <div
+              className={
+                "cb-input-pill" + (isSending ? " cb-input-pill-disabled" : "")
+              }
+            >
+              <button
+                type="button"
+                className="cb-input-plus"
+                disabled={isSending}
+              >
+                +
+              </button>
+              <textarea
+                ref={inputRef}
+                className="cb-input"
+                placeholder=""
+                aria-label="질문 입력"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={handleInputKeyDown}
+                disabled={isSending}
+                rows={1}
+              />
+              <button
+                type="button"
+                className="cb-input-send"
+                onClick={handleSend}
+                disabled={isSending || !inputValue.trim()}
+              >
+                <span className="cb-send-icon">▶</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
 
-          {/* FAQ 뷰: 위에는 FAQ 카드, 아래에는 채팅 말풍선 */}
-          {activeView === "faq" && (
-            <>
-              {renderFaqView()}
-              {renderMessages()}
-            </>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* 하단 입력 영역 (어느 뷰에서든 공통) */}
-        <div className="cb-input-section">
-          {/* 로딩 중일 때만 안내 문구 표시 */}
-          {isSending && (
-            <p className="cb-input-hint">답변을 생성하고 있어요…</p>
-          )}
-
+      {/* 신고 모달 */}
+      {isReportModalOpen && (
+        <div className="cb-report-backdrop">
           <div
-            className={
-              "cb-input-pill" + (isSending ? " cb-input-pill-disabled" : "")
-            }
+            className="cb-report-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cb-report-title"
           >
-            <button
-              type="button"
-              className="cb-input-plus"
-              disabled={isSending}
-            >
-              +
-            </button>
-            <textarea
-              ref={inputRef}
-              className="cb-input"
-              placeholder=""
-              aria-label="질문 입력"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleInputKeyDown}
-              disabled={isSending}
-              rows={1}
-            />
-            <button
-              type="button"
-              className="cb-input-send"
-              onClick={handleSend}
-              disabled={isSending || !inputValue.trim()}
-            >
-              <span className="cb-send-icon">▶</span>
-            </button>
+            <header className="cb-report-header">
+              <h3 id="cb-report-title" className="cb-report-title">
+                신고하기
+              </h3>
+              <button
+                type="button"
+                className="cb-report-close-btn"
+                onClick={handleCloseReportModal}
+                aria-label="신고 창 닫기"
+              >
+                ✕
+              </button>
+            </header>
+
+            <div className="cb-report-body">
+              <section className="cb-report-section">
+                <div className="cb-report-label-row">
+                  <span className="cb-report-pin">📌</span>
+                  <span className="cb-report-label">신고유형</span>
+                </div>
+                <div className="cb-report-types">
+                  직장 내 괴롭힘 / 성희롱 / 욕설, 혐오발언 /
+                  <br />
+                  보안 위반 / 보안 사고 / etc
+                </div>
+              </section>
+
+              <section className="cb-report-section">
+                <div className="cb-report-label-row">
+                  <span className="cb-report-pin">📌</span>
+                  <span className="cb-report-label">상세 내용 입력</span>
+                </div>
+
+                <div className="cb-report-textarea-wrapper">
+                  <textarea
+                    ref={reportTextareaRef}
+                    className="cb-report-textarea"
+                    placeholder="신고내용을 입력해주세요.(상황, 시간, 장소, 문제 내용 등)"
+                    value={reportContent}
+                    onChange={(e) => setReportContent(e.target.value)}
+                  />
+                </div>
+              </section>
+
+              <section className="cb-report-section cb-report-section-guide">
+                <div className="cb-report-guide-title-row">
+                  <span className="cb-report-guide-icon">⚠️</span>
+                  <span className="cb-report-guide-title">안내</span>
+                </div>
+                <ul className="cb-report-guide-list">
+                  <li>허위 신고 시 불이익이 발생할 수 있습니다.</li>
+                  <li>제출 후 검토가 진행됩니다.</li>
+                </ul>
+              </section>
+            </div>
+
+            <footer className="cb-report-footer">
+              <button
+                type="button"
+                className="cb-report-btn cb-report-btn-cancel"
+                onClick={handleCloseReportModal}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="cb-report-btn cb-report-btn-submit"
+                onClick={handleSubmitReportClick}
+              >
+                제출하기
+              </button>
+            </footer>
           </div>
         </div>
-      </section>
-    </main>
+      )}
+    </>
   );
 };
 

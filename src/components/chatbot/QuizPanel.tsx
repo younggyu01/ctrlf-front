@@ -79,10 +79,9 @@ type ResultMessage = {
 };
 
 // 모달 안에서 쓸 텍스트 묶음 타입
+// 👉 요구사항에 따라 해설(개념 설명)만 노출
 type ModalAnswerTexts = {
   explanation: string;
-  selectedText: string;
-  correctText: string;
 };
 
 // =========================
@@ -163,7 +162,7 @@ const getQuizPageSize = (panelWidth: number): number => {
 const range = (count: number): number[] =>
   Array.from({ length: count }, (_, idx) => idx);
 
-// 오답 해설 문장 생성 (정답 문장만, "내 답 / 정답"은 따로 UI에서 표시)
+// 오답 해설 문장 생성 (정답 문장만, "내 답 / 정답"은 UI에서 직접 노출하지 않음)
 const buildExplanation = (courseId: string, question: QuizQuestion): string => {
   const answer = question.options[question.correctIndex];
 
@@ -181,15 +180,12 @@ const buildExplanation = (courseId: string, question: QuizQuestion): string => {
   }
 };
 
-// (모달용) 현재 선택된 오답에 대한 해설/텍스트 전부 계산
-const getModalAnswerTexts = (
-  entry: WrongAnswerEntry | null
-): ModalAnswerTexts => {
+// (모달용) 현재 선택된 오답에 대한 해설만 계산
+// 👉 선택한 보기/정답 텍스트는 UI에 노출하지 않음
+const getModalAnswerTexts = (entry: WrongAnswerEntry | null): ModalAnswerTexts => {
   if (!entry) {
     return {
       explanation: "",
-      selectedText: "",
-      correctText: "",
     };
   }
 
@@ -199,31 +195,14 @@ const getModalAnswerTexts = (
   if (!q) {
     return {
       explanation: entry.explanation ?? "",
-      selectedText: "선택한 답변 정보가 없습니다.",
-      correctText: "정답 정보가 없습니다.",
     };
   }
-
-  const selectedIdx =
-    typeof entry.selectedIndex === "number" ? entry.selectedIndex : -1;
-  const correctIdx =
-    typeof entry.correctIndex === "number" ? entry.correctIndex : -1;
-
-  const selectedText =
-    selectedIdx >= 0 && selectedIdx < q.options.length
-      ? q.options[selectedIdx]
-      : "선택한 답변 정보가 없습니다.";
-
-  const correctText =
-    correctIdx >= 0 && correctIdx < q.options.length
-      ? q.options[correctIdx]
-      : "정답 정보가 없습니다.";
 
   // 항상 최신 로직으로 해설을 다시 계산해서,
   // 예전에 저장된 이상한 문장도 자동으로 교체되도록 함
   const explanation = buildExplanation(entry.courseId, q);
 
-  return { explanation, selectedText, correctText };
+  return { explanation };
 };
 
 const QuizPanel: React.FC<QuizPanelProps> = ({
@@ -417,7 +396,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         let newLeft = resizeState.startLeft;
 
         const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - padding * 2);
-        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - padding * 2);
+        const maxHeight = Math.max(
+          MIN_HEIGHT,
+          window.innerHeight - padding * 2
+        );
 
         if (resizeState.dir.includes("e")) {
           newWidth = resizeState.startWidth + dx;
@@ -1332,33 +1314,13 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         </button>
                       </div>
                       <div className="cb-quiz-note-modal-body">
-                        {/* 정답 해설: 개념 설명 */}
+                        {/* 정답 해설: 개념 설명만 제공 (정답/선택 보기 텍스트는 별도 노출 X) */}
                         <div className="cb-quiz-note-modal-explanation">
                           <div className="cb-quiz-note-modal-explanation-title">
                             📌 정답 해설
                           </div>
                           <div className="cb-quiz-note-modal-explanation-text">
                             {modalAnswerTexts.explanation}
-                          </div>
-                        </div>
-
-                        {/* 내가 고른 답 / 정답을 명확하게 분리 */}
-                        <div className="cb-quiz-note-modal-answer-block">
-                          <div className="cb-quiz-note-answer-row is-wrong">
-                            <span className="cb-quiz-note-answer-label">
-                              ❌ 내가 고른 답변:
-                            </span>
-                            <span className="cb-quiz-note-answer-text">
-                              {modalAnswerTexts.selectedText}
-                            </span>
-                          </div>
-                          <div className="cb-quiz-note-answer-row is-correct">
-                            <span className="cb-quiz-note-answer-label">
-                              ✅ 정답:
-                            </span>
-                            <span className="cb-quiz-note-answer-text">
-                              {modalAnswerTexts.correctText}
-                            </span>
                           </div>
                         </div>
                       </div>

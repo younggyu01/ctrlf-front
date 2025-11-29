@@ -15,12 +15,31 @@ export type ChatDomain =
 // 피드백 값 타입 (좋아요 / 별로예요 / 없음)
 export type FeedbackValue = "up" | "down" | null;
 
+/**
+ * 메시지 용도 구분
+ * - normal           : 일반 Q/A
+ * - system           : 시스템 안내(필요하면 확장용)
+ * - reportSuggestion : "신고 절차를 알려드릴게요!" 같이 신고 유도 말풍선
+ * - reportReceipt    : "신고가 접수되었습니다" 같은 접수 안내 말풍선
+ */
+export type ChatMessageKind =
+  | "normal"
+  | "system"
+  | "reportSuggestion"
+  | "reportReceipt";
+
 // 개별 메시지 엔티티
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   createdAt: number;
+
+  /**
+   * 메시지 용도 (없으면 normal 취급)
+   */
+  kind?: ChatMessageKind;
+
   /**
    * 사용자가 남긴 피드백
    * - "up"  : 좋은 응답
@@ -63,8 +82,17 @@ export interface ChatRequest {
   messages: ChatMessagePayload[];
 }
 
+// 신고 모달에서 넘어가는 신고 데이터
+export interface ReportPayload {
+  /** 어떤 세션에서 신고했는지 (없으면 프론트에서 activeSession 사용) */
+  sessionId?: string;
+  /** 신고 상세 내용 */
+  content: string;
+  /** 신고 생성 시각 (epoch ms) */
+  createdAt: number;
+}
+
 // 도메인 메타 정보 (라벨/설명 등)
-// 현재는 바로 사용하지 않지만, 앞으로 도메인별 화면/태그/색상 등에 공통으로 쓸 수 있음.
 export interface DomainMeta {
   label: string;
   description: string;

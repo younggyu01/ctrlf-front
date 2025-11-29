@@ -1,4 +1,3 @@
-// src/components/chatbot/ChatbotApp.tsx
 import React, { useEffect, useRef, useState } from "react";
 import "./chatbot.css";
 import Sidebar from "./Sidebar";
@@ -11,6 +10,7 @@ import {
   type SidebarSessionSummary,
   type ChatRequest,
   type FeedbackValue,
+  type ReportPayload,
 } from "../../types/chat";
 import {
   computePanelPosition,
@@ -73,6 +73,29 @@ const initialSessions: ChatSession[] = [
     messages: [],
   },
 ];
+
+// "신고하고싶어", "괴롭힘을 신고하고 싶어요" 같은 문장을 잡아주는 간단한 헬퍼
+function shouldSuggestReport(raw: string): boolean {
+  const compact = raw.replace(/\s+/g, ""); // 공백 제거
+
+  const keywords = [
+    "신고하고싶어",
+    "신고하고싶어요",
+    "신고하고싶은데",
+    "괴롭힘신고",
+    "괴롭힘을신고",
+    "성희롱신고",
+    "성희롱을신고",
+  ];
+
+  if (keywords.some((k) => compact.includes(k))) return true;
+
+  // "괴롭힘 ... 신고", "성희롱 ... 신고" 패턴도 허용
+  if (compact.includes("괴롭힘") && compact.includes("신고")) return true;
+  if (compact.includes("성희롱") && compact.includes("신고")) return true;
+
+  return false;
+}
 
 const ChatbotApp: React.FC<ChatbotAppProps> = ({
   onClose,
@@ -528,7 +551,33 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       )
     );
 
-    // 2) AI 요청 payload
+    // 2) 신고 의도인 경우: AI 호출 대신 신고 안내 말풍선 + 신고 버튼 제공
+    if (shouldSuggestReport(trimmed)) {
+      const suggestionTime = now + 1;
+      const suggestionMessage: ChatMessage = {
+        id: `${sessionIdForSend}-report-suggestion-${suggestionTime}`,
+        role: "assistant",
+        content: "신고 절차를 알려드릴게요!",
+        createdAt: suggestionTime,
+        kind: "reportSuggestion",
+      };
+
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionIdForSend
+            ? {
+                ...session,
+                messages: [...userAppendedMessages, suggestionMessage],
+                updatedAt: suggestionTime,
+              }
+            : session
+        )
+      );
+
+      return;
+    }
+
+    // 3) 일반 메시지: AI 요청 payload
     const requestPayload: ChatRequest = {
       sessionId: sessionIdForSend,
       domain: currentSession.domain,
@@ -550,7 +599,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         createdAt: replyTime,
       };
 
-      // 3) 응답 도착 후 assistant 메시지 추가
+      // 응답 도착 후 assistant 메시지 추가
       setSessions((prev) =>
         prev.map((session) =>
           session.id === sessionIdForSend
@@ -632,6 +681,38 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       messageId,
       feedback: value,
     });
+  };
+
+  // ====== 신고 모달에서 제출된 신고 처리 ======
+  const handleSubmitReport = (payload: ReportPayload) => {
+    const sessionId = payload.sessionId || activeSessionId;
+    if (!sessionId) return;
+
+    const now = Date.now();
+
+    const receiptMessage: ChatMessage = {
+      id: `${sessionId}-report-receipt-${now}`,
+      role: "assistant",
+      content:
+        "신고가 접수되었습니다. 담당자가 내용을 확인한 후 필요한 경우 별도로 연락드리겠습니다.",
+      createdAt: now,
+      kind: "reportReceipt",
+    };
+
+    setSessions((prev) =>
+      prev.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              messages: [...session.messages, receiptMessage],
+              updatedAt: now,
+            }
+          : session
+      )
+    );
+
+    // TODO: 실제 신고 저장 API 연동 시 payload 전송
+    console.log("[신고 접수] payload:", payload);
   };
 
   // === 교육/퀴즈 패널 열기 핸들러 (챗봇 자동 닫기) ===
@@ -765,6 +846,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               panelWidth={size.width}
               onRetryFromMessage={handleRetryFromMessage}
               onFeedbackChange={handleFeedbackChange}
+              onReportSubmit={handleSubmitReport}
             />
           </div>
         </div>

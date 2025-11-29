@@ -773,6 +773,62 @@
   display: block;
 }
 
+/* 말풍선 컨테이너 (말풍선 + 액션들 세로 정렬) */
+.cb-chat-bubble-container {
+  max-width: 72%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.cb-chat-bubble-container-user {
+  align-items: flex-end;
+  margin-left: auto;
+}
+
+.cb-chat-bubble-container-bot {
+  align-items: flex-start;
+}
+
+/* 신고 안내 말풍선 (텍스트 + 버튼 한 줄) */
+.cb-chat-bubble-report {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;               /* 8px → 6px 로 줄임 */
+  padding: 6px 10px;      /* 6px 12px → 4px 10px 으로 줄여서 말풍선 높이 축소 */
+  border-radius: 999px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cb-chat-bubble-report-text {
+  font-size: 13px;
+  color: #111827;
+  white-space: nowrap;    /* 텍스트도 줄바꿈 안되게 */
+}
+
+.cb-report-suggest-inline-btn {
+  padding: 3px 10px;      /* 버튼도 살짝 작게 */
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  background-color: #ffffff;
+  font-size: 12px;
+  line-height: 1;         /* 높이 줄이기 */
+  white-space: nowrap;    /* "신고" 두 글자가 한 줄로만 나오게 */
+  cursor: pointer;
+}
+
+.cb-report-suggest-inline-btn:hover:not(:disabled) {
+  background-color: #f9fafb;
+}
+
+.cb-report-suggest-inline-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* 타이핑 인디케이터 점 3개 */
 .cb-typing-dots {
   display: flex;
@@ -2390,4 +2446,223 @@
 .cb-policy-rule-badge-accent {
   background-color: #111827;
   color: #f9fafb;
+}
+
+/* =========================
+   신고 모달 (직장 내 괴롭힘/성희롱 신고)
+   ========================= */
+
+.cb-report-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(15, 23, 42, 0.15);
+}
+
+.cb-report-modal {
+  width: 520px;
+  max-width: calc(100% - 40px);
+  border-radius: 24px;
+  background-color: #ffffff;
+  border: 1px solid #d4d4d8;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.2);
+  padding: 20px 24px 18px;
+  box-sizing: border-box;
+}
+
+/* 헤더 */
+
+.cb-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.cb-report-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-report-close-btn {
+  border: none;
+  background: transparent;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #4b5563;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cb-report-close-btn:hover {
+  background-color: #f3f4f6;
+}
+
+/* 본문 공통 섹션 */
+
+.cb-report-body {
+  margin-top: 4px;
+  padding-left: 32px; 
+  padding-right: 32px;
+}
+
+.cb-report-section {
+  margin-top: 16px;
+}
+
+.cb-report-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.cb-report-pin {
+  font-size: 13px;
+}
+
+.cb-report-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+/* 신고유형 텍스트 */
+
+.cb-report-types {
+  font-size: 12px;
+  color: #111827;
+  line-height: 1.5;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 4px 0 8px;
+  padding-left: 20px; 
+}
+
+/* 상세 내용 입력 영역 – 1줄 말풍선 느낌 */
+
+.cb-report-textarea-wrapper {
+  margin-top: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.cb-report-textarea-wrapper::before {
+  content: none;
+}
+
+.cb-report-textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-size: 12px;
+  color: #111827;
+  line-height: 1.5;
+  max-height: 19px;
+  overflow-y: auto; 
+  scrollbar-width: none;
+}
+
+.cb-report-textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.cb-report-textarea::placeholder {
+  color: #9ca3af;
+}
+
+/* 안내 섹션 */
+
+.cb-report-section-guide {
+  padding-top: 4px;
+}
+
+.cb-report-guide-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.cb-report-guide-icon {
+  font-size: 14px;
+}
+
+.cb-report-guide-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-report-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  padding-left: 44px;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+/* 푸터 버튼 영역 – 취소는 왼쪽, 제출은 오른쪽 */
+
+.cb-report-footer {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cb-report-btn {
+  min-width: 110px;
+  padding: 7px 18px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  font-size: 13px;
+  font-weight: 500;
+  background-color: #f9fafb;
+  cursor: pointer;
+}
+
+.cb-report-btn:hover {
+  background-color: #f3f4f6;
+}
+
+.cb-report-btn-cancel {
+  color: #111827;
+}
+
+.cb-report-btn-submit {
+  background-color: #111827;
+  border-color: #111827;
+  color: #f9fafb;
+}
+
+.cb-report-btn-submit:hover {
+  background-color: #020617;
+}
+
+/* 모바일에서 살짝 줄이기 */
+@media (max-width: 640px) {
+  .cb-report-modal {
+    width: 100%;
+    max-width: calc(100% - 24px);
+    padding: 18px 18px 16px;
+  }
 }

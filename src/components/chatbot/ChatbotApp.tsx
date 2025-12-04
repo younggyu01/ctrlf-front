@@ -181,45 +181,53 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         const dx = event.clientX - resizeState.startX;
         const dy = event.clientY - resizeState.startY;
 
-        let newWidth = resizeState.startWidth;
-        let newHeight = resizeState.startHeight;
-        let newTop = resizeState.startTop;
-        let newLeft = resizeState.startLeft;
-
         const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - padding * 2);
         const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - padding * 2);
 
+        const {
+          startWidth,
+          startHeight,
+          startTop,
+          startLeft,
+          dir,
+        } = resizeState;
+
+        let width = startWidth;
+        let height = startHeight;
+        let top = startTop;
+        let left = startLeft;
+
         // 오른쪽/아래
-        if (resizeState.dir.includes("e")) {
-          newWidth = resizeState.startWidth + dx;
+        if (dir.includes("e")) {
+          width = startWidth + dx;
         }
-        if (resizeState.dir.includes("s")) {
-          newHeight = resizeState.startHeight + dy;
+        if (dir.includes("s")) {
+          height = startHeight + dy;
         }
 
         // 왼쪽/위쪽
-        if (resizeState.dir.includes("w")) {
-          newWidth = resizeState.startWidth - dx;
-          newLeft = resizeState.startLeft + dx;
+        if (dir.includes("w")) {
+          width = startWidth - dx;
+          left = startLeft + dx;
         }
-        if (resizeState.dir.includes("n")) {
-          newHeight = resizeState.startHeight - dy;
-          newTop = resizeState.startTop + dy;
+        if (dir.includes("n")) {
+          height = startHeight - dy;
+          top = startTop + dy;
         }
 
         // 크기 클램프
-        newWidth = Math.max(MIN_WIDTH, Math.min(maxWidth, newWidth));
-        newHeight = Math.max(MIN_HEIGHT, Math.min(maxHeight, newHeight));
+        width = Math.max(MIN_WIDTH, Math.min(maxWidth, width));
+        height = Math.max(MIN_HEIGHT, Math.min(maxHeight, height));
 
         // 위치 클램프
-        const maxLeft = window.innerWidth - margin - newWidth;
-        const maxTop = window.innerHeight - margin - newHeight;
+        const maxLeft = window.innerWidth - margin - width;
+        const maxTop = window.innerHeight - margin - height;
 
-        newLeft = Math.max(margin, Math.min(maxLeft, newLeft));
-        newTop = Math.max(margin, Math.min(maxTop, newTop));
+        left = Math.max(margin, Math.min(maxLeft, left));
+        top = Math.max(margin, Math.min(maxTop, top));
 
-        setSize({ width: newWidth, height: newHeight });
-        setPanelPos({ top: newTop, left: newLeft });
+        setSize({ width, height });
+        setPanelPos({ top, left });
         return;
       }
 
@@ -228,16 +236,16 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         const dx = event.clientX - dragState.startX;
         const dy = event.clientY - dragState.startY;
 
-        let newTop = dragState.startTop + dy;
-        let newLeft = dragState.startLeft + dx;
+        let top = dragState.startTop + dy;
+        let left = dragState.startLeft + dx;
 
         const maxLeft = window.innerWidth - margin - size.width;
         const maxTop = window.innerHeight - margin - size.height;
 
-        newLeft = Math.max(margin, Math.min(maxLeft, newLeft));
-        newTop = Math.max(margin, Math.min(maxTop, newTop));
+        left = Math.max(margin, Math.min(maxLeft, left));
+        top = Math.max(margin, Math.min(maxTop, top));
 
-        setPanelPos({ top: newTop, left: newLeft });
+        setPanelPos({ top, left });
       }
     };
 
@@ -259,6 +267,44 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [size.width, size.height]);
+
+  // ✅ 창 리사이즈 시 챗봇 패널 크기/위치를 화면 안으로 보정
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleWindowResize = () => {
+      const margin = 16;
+      const padding = 32;
+
+      const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - padding * 2);
+      const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - padding * 2);
+
+      setSize((prevSize) => {
+        const width = Math.min(prevSize.width, maxWidth);
+        const height = Math.min(prevSize.height, maxHeight);
+
+        setPanelPos((prevPos) => {
+          const maxLeft = window.innerWidth - margin - width;
+          const maxTop = window.innerHeight - margin - height;
+
+          let left = prevPos.left;
+          let top = prevPos.top;
+
+          left = Math.max(margin, Math.min(maxLeft, left));
+          top = Math.max(margin, Math.min(maxTop, top));
+
+          return { top, left };
+        });
+
+        return { width, height };
+      });
+    };
+
+    window.addEventListener("resize", handleWindowResize);
+    return () => {
+      window.removeEventListener("resize", handleWindowResize);
+    };
+  }, []);
 
   // 리사이즈 시작
   const handleResizeMouseDown =

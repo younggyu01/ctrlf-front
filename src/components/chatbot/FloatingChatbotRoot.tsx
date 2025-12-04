@@ -1,5 +1,5 @@
 // src/components/chatbot/FloatingChatbotRoot.tsx
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import FloatingDock from "./FloatingDock";
 import ChatbotApp from "./ChatbotApp";
 import EduPanel from "./EduPanel";
@@ -13,6 +13,92 @@ type VideoProgressMap = Record<string, number>;
  * 시험 중 챗봇 막힐 때 보여줄 토스트용 타이머 (모듈 전역)
  */
 let examToastHideTimer: number | null = null;
+
+/**
+ * 창 리사이즈 시, 앵커 좌표를 화면 안으로 보정할 때 사용할 여백
+ */
+const ANCHOR_MARGIN = 24;
+
+/**
+ * Anchor 를 현재 viewport 안으로 강제(clamp)하는 헬퍼
+ * - Anchor 구조가 { x, y, width, height } 이든 { left, top } 이든 둘 다 최대한 대응
+ * - 화면 밖으로 나간 경우, 마진을 두고 안쪽으로 끌어옴
+ */
+type AnchorWithOptionalRect = Anchor & {
+  x?: number;
+  y?: number;
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+};
+
+const clampAnchorToViewport = (anchor: Anchor): Anchor => {
+  if (typeof window === "undefined") return anchor;
+
+  const rectAnchor = anchor as AnchorWithOptionalRect;
+
+  // 우선 x / y 또는 left / top 좌표를 가져온다.
+  let x: number | null = null;
+  let y: number | null = null;
+
+  if (typeof rectAnchor.x === "number" && typeof rectAnchor.y === "number") {
+    x = rectAnchor.x;
+    y = rectAnchor.y;
+  } else if (
+    typeof rectAnchor.left === "number" &&
+    typeof rectAnchor.top === "number"
+  ) {
+    x = rectAnchor.left;
+    y = rectAnchor.top;
+  }
+
+  // 좌표 정보가 없으면 건드리지 않고 그대로 반환
+  if (x === null || y === null) {
+    return anchor;
+  }
+
+  const width =
+    typeof rectAnchor.width === "number" && rectAnchor.width > 0
+      ? rectAnchor.width
+      : 0;
+  const height =
+    typeof rectAnchor.height === "number" && rectAnchor.height > 0
+      ? rectAnchor.height
+      : 0;
+
+  const maxX = Math.max(
+    window.innerWidth - ANCHOR_MARGIN - width,
+    ANCHOR_MARGIN
+  );
+  const maxY = Math.max(
+    window.innerHeight - ANCHOR_MARGIN - height,
+    ANCHOR_MARGIN
+  );
+
+  const clampedX = Math.min(Math.max(x, ANCHOR_MARGIN), maxX);
+  const clampedY = Math.min(Math.max(y, ANCHOR_MARGIN), maxY);
+
+  // 원래 anchor 를 복사해서, 실제로 존재하는 좌표 필드에만 보정값을 덮어씀
+  const nextAnchor: AnchorWithOptionalRect = {
+    ...rectAnchor,
+  };
+
+  if (typeof rectAnchor.x === "number" && typeof rectAnchor.y === "number") {
+    nextAnchor.x = clampedX;
+    nextAnchor.y = clampedY;
+  }
+
+  if (
+    typeof rectAnchor.left === "number" &&
+    typeof rectAnchor.top === "number"
+  ) {
+    nextAnchor.left = clampedX;
+    nextAnchor.top = clampedY;
+  }
+
+  return nextAnchor as Anchor;
+};
 
 /**
  * 시험 중 챗봇을 열려고 할 때 화면 하단에 예쁜 토스트를 띄워주는 함수
@@ -83,7 +169,9 @@ const showExamBlockedToast = (): void => {
       if (!target) return;
 
       if (target.tagName.toLowerCase() === "button") {
-        const elToClose = document.getElementById(TOAST_ID) as HTMLDivElement | null;
+        const elToClose = document.getElementById(TOAST_ID) as
+          | HTMLDivElement
+          | null;
         if (!elToClose) return;
 
         elToClose.style.opacity = "0";
@@ -139,6 +227,9 @@ const showExamBlockedToast = (): void => {
  * 플로팅 아이콘 + 챗봇 패널 + 교육/퀴즈 패널의 "최상위 컨테이너"
  */
 const FloatingChatbotRoot: React.FC = () => {
+  // 플로팅 아이콘 강제 리마운트를 위한 key
+  const [dockInstanceKey, setDockInstanceKey] = useState(0);
+
   // 챗봇 패널 열림/닫힘
   const [isChatbotOpen, setIsChatbotOpen] = useState(false);
 
@@ -168,6 +259,28 @@ const FloatingChatbotRoot: React.FC = () => {
     {}
   );
 
+  /**
+   * 창 리사이즈 시:
+   *  - 플로팅 아이콘을 리마운트해서 기본 위치로 되돌림(= 화면 안으로 강제)
+   *  - 저장되어 있던 anchor 좌표를 현재 viewport 안으로 보정
+   *  - ❗열려 있던 패널(챗봇/교육/퀴즈)은 그대로 유지
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleResize = () => {
+      // 플로팅 도크 강제 리마운트 → position: fixed 기준으로 항상 화면 안에 보이도록
+      setDockInstanceKey((prev) => prev + 1);
+
+      // 기존 anchor 도 화면 안으로 클램프
+      setAnchor((prev) => (prev ? clampAnchorToViewport(prev) : prev));
+      // 패널 open/close 상태는 건드리지 않음
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   // 시청률 업데이트 (항상 더 큰 값만 반영해서 진행률이 줄어들지 않게)
   const handleUpdateVideoProgress = (videoId: string, progress: number) => {
     setVideoProgressMap((prev) => {
@@ -192,8 +305,11 @@ const FloatingChatbotRoot: React.FC = () => {
       return;
     }
 
-    setAnchor(nextAnchor);
+    // 현재 viewport 기준으로 anchor 를 한 번 보정해서 저장
+    const safeAnchor = clampAnchorToViewport(nextAnchor);
+    setAnchor(safeAnchor);
 
+    // 단순 토글: 열려 있으면 닫기, 닫혀 있으면 열기
     if (!isChatbotOpen) {
       setIsChatbotOpen(true);
       setChatbotAnimationState("opening");
@@ -262,7 +378,7 @@ const FloatingChatbotRoot: React.FC = () => {
     setIsQuizExamMode(false);
   };
 
-  // uizPanel에서 모드가 바뀔 때 호출되는 콜백
+  // QuizPanel에서 모드가 바뀔 때 호출되는 콜백
   // solve 모드일 때만 true, 나머지 모드는 false
   const handleQuizExamModeChange = (isExamMode: boolean) => {
     setIsQuizExamMode(isExamMode);
@@ -276,8 +392,10 @@ const FloatingChatbotRoot: React.FC = () => {
 
   return (
     <>
-      {/* 플로팅 아이콘 (챗봇 열기/닫기 토글) */}
+      {/* 플로팅 아이콘 (챗봇 열기/닫기 토글)
+          - key 를 줘서 창 크기 변경 시 강제로 리마운트 → 항상 화면 안에 보이도록 */}
       <FloatingDock
+        key={dockInstanceKey}
         isChatbotOpen={isChatbotOpen}
         onToggleChatbot={handleDockToggleChatbot}
       />

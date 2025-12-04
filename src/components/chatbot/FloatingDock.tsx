@@ -1,3 +1,4 @@
+// src/components/chatbot/FloatingDock.tsx
 import React, { useEffect, useRef, useState } from "react";
 import "./FloatingDock.css";
 import type { Anchor } from "../../utils/chat";
@@ -19,6 +20,8 @@ interface FloatingDockProps {
   isChatbotOpen: boolean;
   /** 아이콘 클릭 시, 현재 아이콘 기준 Anchor를 넘겨서 토글 요청 */
   onToggleChatbot: (anchor: Anchor) => void;
+  /** 아이콘 위치(입 위치 기준 Anchor)가 바뀔 때마다 상위에 알려줌 */
+  onAnchorChange?: (anchor: Anchor | null) => void;
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -36,9 +39,19 @@ function getInitialPosition(): Position {
   };
 }
 
+/** 현재 position 을 주어진 viewport 안으로 클램프 */
+function clampPositionToViewport(pos: Position): Position {
+  if (typeof window === "undefined") return pos;
+  const { innerWidth, innerHeight } = window;
+  const x = clamp(pos.x, 40, innerWidth - 40 - 80);
+  const y = clamp(pos.y, 40, innerHeight - 40 - 80);
+  return { x, y };
+}
+
 const FloatingDock: React.FC<FloatingDockProps> = ({
   isChatbotOpen,
   onToggleChatbot,
+  onAnchorChange,
 }) => {
   const iconRef = useRef<HTMLButtonElement | null>(null);
 
@@ -82,6 +95,16 @@ const FloatingDock: React.FC<FloatingDockProps> = ({
     return () => window.removeEventListener("mousemove", handleMouseMove);
   }, []);
 
+  // 윈도우 리사이즈 시, 현재 position 을 viewport 안으로 클램프
+  useEffect(() => {
+    const handleResize = () => {
+      setPosition((prev) => clampPositionToViewport(prev));
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   /** 아이콘의 "입" 위치 계산 (패널 기준점) */
   const calcAnchorFromIcon = (): Anchor | null => {
     if (!iconRef.current) return null;
@@ -93,6 +116,14 @@ const FloatingDock: React.FC<FloatingDockProps> = ({
 
     return { x: mouthX, y: mouthY };
   };
+
+  /** 아이콘 위치(position)가 바뀔 때마다 Anchor를 상위에 알려줌 */
+  useEffect(() => {
+    if (!onAnchorChange) return;
+    const anchor = calcAnchorFromIcon();
+    onAnchorChange(anchor);
+    // position 이 바뀔 때마다 다시 계산
+  }, [position, onAnchorChange]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -120,19 +151,12 @@ const FloatingDock: React.FC<FloatingDockProps> = ({
       dragRef.current.moved = true;
     }
 
-    const { innerWidth, innerHeight } = window;
-    const nextX = clamp(
-      dragRef.current.originX + dx,
-      40,
-      innerWidth - 40 - 80
-    );
-    const nextY = clamp(
-      dragRef.current.originY + dy,
-      40,
-      innerHeight - 40 - 80
-    );
+    const nextPos: Position = {
+      x: dragRef.current.originX + dx,
+      y: dragRef.current.originY + dy,
+    };
 
-    setPosition({ x: nextX, y: nextY });
+    setPosition(clampPositionToViewport(nextPos));
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {

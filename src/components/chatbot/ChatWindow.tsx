@@ -104,6 +104,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   // 세션/도메인 정보
   const currentDomain: ChatDomain = activeSession?.domain ?? "general";
   const isFaqDomain = currentDomain === "faq";
+  const isGeneralDomain = currentDomain === "general";
 
   // 원본 세션 메시지 → UI 타입으로 캐스팅
   const rawMessages = activeSession?.messages ?? [];
@@ -175,6 +176,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     if (onOpenQuizPanel) {
       onOpenQuizPanel();
     }
+  };
+
+  // 🔹 헤더의 FAQ 칩 클릭 시: 일반 도메인에서 FAQ 도메인으로 전환
+  const handleFaqChipClick = () => {
+    if (isSending) return;
+    onChangeDomain("faq");
   };
 
   // FAQ 추천 버튼 클릭 시: 같은 세션에 Q/A 추가
@@ -450,6 +457,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
   // 헤더 타이틀: 일반 = chatbot, FAQ 도메인 = FAQ
   const headerTitle = isFaqDomain ? "FAQ" : "chatbot";
+  // 메인(환영 화면)에서는 칩 숨기고, 채팅 메시지가 있는 "채팅방"에서만 칩 표시
+  const showHeaderChips = hasMessages;
 
   return (
     <>
@@ -458,7 +467,43 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         style={{ width: "100%", maxWidth: "100%" }}
       >
         <header className="cb-main-header">
-          <h2 className="cb-main-title">{headerTitle}</h2>
+          <div className="cb-main-header-row">
+            <h2 className="cb-main-title">{headerTitle}</h2>
+
+            {/* 메인 타이틀 우측 칩 – 채팅방(메시지가 있을 때)에서만 표시 */}
+            {showHeaderChips && (
+              <div className="cb-main-header-chips">
+                {/* 🔹 일반 도메인에서만 보이는 FAQ 칩 */}
+                {isGeneralDomain && (
+                  <button
+                    type="button"
+                    className="cb-main-chip-btn cb-main-chip-faq"
+                    onClick={handleFaqChipClick}
+                    disabled={isSending}
+                  >
+                    FAQ
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="cb-main-chip-btn cb-main-chip-edu"
+                  onClick={handleEduClick}
+                  disabled={isSending}
+                >
+                  교육
+                </button>
+                <button
+                  type="button"
+                  className="cb-main-chip-btn cb-main-chip-quiz"
+                  onClick={handleQuizClick}
+                  disabled={isSending}
+                >
+                  퀴즈
+                </button>
+              </div>
+            )}
+          </div>
         </header>
 
         <section className="cb-main-content">

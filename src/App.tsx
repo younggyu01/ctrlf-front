@@ -8,6 +8,7 @@ import EventPage from "./pages/EventPage";
 import NoticePage from "./pages/NoticePage";
 import OrgChartPage from "./pages/OrgChartPage";
 import EducationPage from "./pages/EducationPage";
+import EduApiTest from "./pages/EduApiTest";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -82,6 +83,16 @@ export default function App() {
         element={
           <Layout pageClassName="orgchart-page">
             <OrgChartPage />
+          </Layout>
+        }
+      />
+
+      {/* 교육 API 테스트 */}
+      <Route
+        path="/edu-api-test"
+        element={
+          <Layout pageClassName="edu-api-test-page">
+            <EduApiTest />
           </Layout>
         }
       />

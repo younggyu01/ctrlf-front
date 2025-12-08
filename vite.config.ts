@@ -7,5 +7,12 @@ export default defineConfig({
   server: {
     port: 5173,
     open: true,
+    proxy: {
+      "/api-edu": {
+        target: "http://localhost:9002",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-edu/, ""),
+      },
+    },
   },
 });

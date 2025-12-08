@@ -10,16 +10,15 @@ import "./index.css";
 keycloak
   .init({
     onLoad: "login-required", // 앱 진입 시 무조건 로그인 요구
-    checkLoginIframe: false,  // Vite/localhost 환경에서 권장
+    pkceMethod: "S256",
+    checkLoginIframe: false, // Vite/localhost 환경에서 권장
   })
   .then((authenticated) => {
     console.log("Keycloak initialized. Authenticated:", authenticated);
     console.log("Access Token:", keycloak.token);
 
     // 초기화 완료 후 렌더링 시작
-    ReactDOM.createRoot(
-      document.getElementById("root") as HTMLElement
-    ).render(
+    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
         <BrowserRouter>
           <App />

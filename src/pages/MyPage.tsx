@@ -1,48 +1,31 @@
 // src/pages/MyPage.tsx
-import React, { useEffect, useState } from "react";
-import type { KeycloakProfile } from "keycloak-js";
+import React from "react";
+import type { KeycloakTokenParsed } from "keycloak-js";
 import keycloak from "../keycloak";
 import "./MyPage.css";
 import profileIcon from "../assets/profile-icon.png";
 
-// attributes 타입을 우리가 명시적으로 정의
-type ExtendedProfile = KeycloakProfile & {
-  attributes?: {
-    [key: string]: string | string[];
-  };
-};
+// 토큰에 있는 커스텀 클레임 타입 확장
+interface CtrlfTokenParsed extends KeycloakTokenParsed {
+  fullName?: string;
+  department?: string;
+  position?: string;
+}
 
 const MyPage: React.FC = () => {
-  const [profile, setProfile] = useState<ExtendedProfile | null>(null);
+  const token = (keycloak.tokenParsed || {}) as CtrlfTokenParsed;
 
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const loaded = (await keycloak.loadUserProfile()) as ExtendedProfile;
-        setProfile(loaded);
-      } catch (err) {
-        console.error("Failed to load user profile", err);
-      }
-    };
-
-    fetchProfile();
-  }, []);
-
-  // attributes 안전하게 꺼내는 헬퍼
-  const getAttr = (key: string): string | undefined => {
-    const raw = profile?.attributes?.[key];
-    if (!raw) return undefined;
-    if (Array.isArray(raw)) return raw[0];
-    return raw;
-  };
-
-  // 이름: fullName attribute 우선, 없으면 username 사용
+  // 이름: fullName → name → preferred_username → username
   const displayName =
-    getAttr("fullName") || profile?.username || "사용자 이름";
+    token.fullName ||
+    token.name ||
+    token.preferred_username ||
+    token.username ||
+    "사용자 이름";
 
-  const department = getAttr("department") ?? "부서 미설정";
-  const position = getAttr("position") ?? "직급 미설정";
-  const email = profile?.email ?? "이메일 미설정";
+  const department = token.department ?? "부서 미설정";
+  const position = token.position ?? "직급 미설정";
+  const email = token.email ?? "이메일 미설정";
 
   return (
     <main className="dashboard-main mypage-main">

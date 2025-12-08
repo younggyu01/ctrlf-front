@@ -1,8 +1,8 @@
 // src/pages/ApprovalPage.tsx
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import "./ApprovalPage.css";
 import keycloak from "../keycloak";
-import type { KeycloakProfile } from "keycloak-js";
+import type { KeycloakTokenParsed } from "keycloak-js";
 
 type ApprovalStatus = "대기중" | "승인";
 
@@ -16,8 +16,8 @@ type ApprovalItem = {
 };
 
 type Approver = {
-  id: number;         // 프론트 렌더링용 로컬 ID
-  userId: string;     // 실제 Keycloak 사용자 ID
+  id: number; // 프론트 렌더링용 로컬 ID
+  userId: string; // 실제 Keycloak 사용자 ID (나중에 백엔드 연동 시 사용)
   order: number;
   name: string;
   role: string;
@@ -32,18 +32,33 @@ type UserOption = {
   position: string;
 };
 
-type ExtendedProfile = KeycloakProfile & {
-  attributes?: {
-    [key: string]: string | string[];
-  };
+// 토큰에서 사용할 커스텀 클레임 타입
+interface CtrlfTokenParsed extends KeycloakTokenParsed {
+  fullName?: string;
+  department?: string;
+  position?: string;
+}
+
+type CurrentUser = {
+  name: string;
+  department: string;
+  position: string;
 };
 
 const ApprovalPage: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<{
-    name: string;
-    department: string;
-    position: string;
-  } | null>(null);
+  // 토큰에서 현재 사용자 정보 읽기
+  const token = (keycloak.tokenParsed || {}) as CtrlfTokenParsed;
+
+  const currentUser: CurrentUser = {
+    name:
+      token.fullName ||
+      token.name ||
+      token.preferred_username ||
+      token.username ||
+      "사용자",
+    department: token.department ?? "부서 미지정",
+    position: token.position ?? "직급 미지정",
+  };
 
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -53,59 +68,32 @@ const ApprovalPage: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
 
   const [approvers, setApprovers] = useState<Approver[]>([]);
-  const [approvalList, setApprovalList] = useState<ApprovalItem[]>([]);
+
+  const [approvalList, setApprovalList] = useState<ApprovalItem[]>(() => {
+    const baseDept = currentUser.department || "인사팀";
+    return [
+      {
+        id: 1,
+        title: "2025년 상반기 예산 집행 계획서",
+        author: currentUser.name,
+        department: baseDept,
+        date: "2025.11.13",
+        status: "대기중",
+      },
+      {
+        id: 2,
+        title: "2025년 상반기 예산 집행 계획서",
+        author: currentUser.name,
+        department: baseDept,
+        date: "2025.11.13",
+        status: "승인",
+      },
+    ];
+  });
+
   const [filter, setFilter] = useState<"전체" | "대기중" | "승인">("전체");
 
-  // ===== 1) 내 프로필 불러오기 =====
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const loaded = (await keycloak.loadUserProfile()) as ExtendedProfile;
-
-        const getAttr = (key: string): string | undefined => {
-          const raw = loaded.attributes?.[key];
-          if (!raw) return undefined;
-          if (Array.isArray(raw)) return raw[0];
-          return raw;
-        };
-
-        const name = getAttr("fullName") || loaded.username || "사용자";
-        const department = getAttr("department") ?? "부서 미지정";
-        const position = getAttr("position") ?? "직급 미지정";
-
-        setCurrentUser({ name, department, position });
-
-        setApprovalList((prev) =>
-          prev.length > 0
-            ? prev
-            : [
-                {
-                  id: 1,
-                  title: "2025년 상반기 예산 집행 계획서",
-                  author: name,
-                  department: department || "인사팀",
-                  date: "2025.11.13",
-                  status: "대기중",
-                },
-                {
-                  id: 2,
-                  title: "2025년 상반기 예산 집행 계획서",
-                  author: name,
-                  department: department || "인사팀",
-                  date: "2025.11.13",
-                  status: "승인",
-                },
-              ]
-        );
-      } catch (err) {
-        console.error("Failed to load user profile in ApprovalPage", err);
-      }
-    };
-
-    fetchProfile();
-  }, []);
-
-  // ===== 2) 사용자 검색 (실제 구현은 나중에 백엔드 API로 교체) =====
+  // ===== 1) 사용자 검색 (실제 구현은 나중에 백엔드 API로 교체) =====
   const searchUsers = async (keyword: string) => {
     const trimmed = keyword.trim();
     if (!trimmed) {
@@ -201,15 +189,10 @@ const ApprovalPage: React.FC = () => {
     setApprovers(next);
   };
 
-  // ===== 3) 결재 올리기 =====
+  // ===== 2) 결재 올리기 =====
   const handleSubmitApproval = () => {
     if (!title.trim()) {
       alert("결재 제목을 입력해주세요.");
-      return;
-    }
-
-    if (!currentUser) {
-      alert("사용자 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
       return;
     }
 
@@ -227,7 +210,7 @@ const ApprovalPage: React.FC = () => {
       status: "대기중",
     };
 
-    setApprovalList([newItem, ...approvalList]);
+    setApprovalList((prev) => [newItem, ...prev]);
     setTitle("");
     setContent("");
   };

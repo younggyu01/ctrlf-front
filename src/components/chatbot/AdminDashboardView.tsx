@@ -485,9 +485,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     alert("계정/롤 설정이 저장되었습니다. (Mock)");
   };
 
-  /**
-   * ========== 탭별 Mock 데이터 ==========
-   */
+  // ======== Mock 데이터 ========
 
   // 1) 챗봇 탭 KPI + 상세
   const chatbotKpis: KpiCard[] = [
@@ -696,25 +694,39 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
   const isRoleChecked = (role: RoleKey) => selectedRoles.includes(role);
 
+  const selectedDeptLabel =
+    DEPARTMENT_OPTIONS.find((d) => d.id === selectedDept)?.name ??
+    "전체 부서";
+
   /**
-   * ========== 탭별 렌더러 ==========
+   * ========== 탭별 렌더러 ========== 
    */
 
+  // 상단 필터 바 – 기간은 칩 형태, 부서는 셀렉트 유지
   const renderFilterBar = () => (
     <div className="cb-admin-filter-bar">
       <div className="cb-admin-filter-group">
         <span className="cb-admin-filter-label">기간</span>
-        <div className="cb-admin-filter-control">
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as PeriodFilter)}
-          >
-            {PERIOD_OPTIONS.map((opt) => (
-              <option key={opt.id} value={opt.id}>
+        <div
+          className="cb-admin-filter-control cb-admin-filter-control--pills"
+          role="tablist"
+          aria-label="통계 조회 기간"
+        >
+          {PERIOD_OPTIONS.map((opt) => {
+            const isActive = opt.id === period;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                className={`cb-admin-filter-pill ${
+                  isActive ? "is-active" : ""
+                }`}
+                onClick={() => setPeriod(opt.id)}
+              >
                 {opt.label}
-              </option>
-            ))}
-          </select>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -734,13 +746,18 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       </div>
 
-      <button
-        type="button"
-        className="cb-admin-filter-refresh-btn"
-        onClick={handleRefreshClick}
-      >
-        데이터 새로고침
-      </button>
+      <div className="cb-admin-filter-actions">
+        <button
+          type="button"
+          className="cb-admin-filter-refresh-btn"
+          onClick={handleRefreshClick}
+        >
+          <span className="cb-admin-filter-refresh-icon" aria-hidden="true">
+            ↻
+          </span>
+          <span>데이터 새로고침</span>
+        </button>
+      </div>
     </div>
   );
 
@@ -748,7 +765,10 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     <div className="cb-admin-kpi-row" aria-label="핵심 지표 요약">
       {items.map((kpi) => (
         <div key={kpi.id} className="cb-admin-kpi-card">
-          <div className="cb-admin-kpi-label">{kpi.label}</div>
+          <div className="cb-admin-kpi-header">
+            <span className="cb-admin-kpi-dot" aria-hidden="true" />
+            <span className="cb-admin-kpi-label">{kpi.label}</span>
+          </div>
           <div className="cb-admin-kpi-value">{kpi.value}</div>
           {kpi.caption && (
             <div className="cb-admin-kpi-caption">{kpi.caption}</div>
@@ -771,7 +791,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <div className="cb-admin-section-header">
               <h3 className="cb-admin-section-title">질문 수 추이</h3>
               <span className="cb-admin-section-sub">
-                일/주 단위로 간단히 확인
+                요일별 질문량을 한 눈에 확인합니다.
               </span>
             </div>
             <div className="cb-admin-bar-chart">
@@ -799,7 +819,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <div className="cb-admin-section-header">
               <h3 className="cb-admin-section-title">도메인별 질문 비율</h3>
               <span className="cb-admin-section-sub">
-                규정 / FAQ / 교육 / 퀴즈 / 기타
+                규정 / FAQ / 교육 / 퀴즈 / 기타 비중
               </span>
             </div>
             <div className="cb-admin-domain-list">
@@ -1229,7 +1249,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   };
 
   /**
-   * ========== 최상위 렌더링 ==========
+   * ========== 최상위 렌더링 ========== 
    */
   const panelStyle: React.CSSProperties = {
     position: "fixed",
@@ -1247,11 +1267,10 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     <div
       className="cb-admin-panel-container"
       style={panelStyle}
-      // 패널 어딜 클릭해도 이 패널이 '최상단'으로 오는 느낌을 맞추기 위함
       onMouseDownCapture={() => onRequestFocus?.()}
     >
       <div className="cb-admin-root" style={{ position: "relative" }}>
-        {/* Edu/Quiz 와 같은 드래그 바 + 리사이즈 핸들 */}
+        {/* 드래그 바 + 리사이즈 핸들 */}
         <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />
 
         <div
@@ -1290,16 +1309,27 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
         <header className="cb-admin-header">
           <div className="cb-admin-header-main">
-            <span className="cb-admin-badge">SYSTEM ADMIN</span>
-            <h2 className="cb-admin-title">관리자 대시보드</h2>
+            <div className="cb-admin-header-title-row">
+              <span className="cb-admin-badge">SYSTEM ADMIN</span>
+              <h2 className="cb-admin-title">관리자 대시보드</h2>
+            </div>
             <p className="cb-admin-subtitle">
               챗봇, 교육, 퀴즈, 지표를 한 곳에서 관리하고 운영 상태를
               모니터링합니다.
             </p>
-            <span className="cb-admin-context-chip">
-              현재 <strong>{activeTabLabel}</strong> 기준으로 요약을 보고
-              있습니다.
-            </span>
+
+            <div className="cb-admin-header-context">
+              <span className="cb-admin-context-chip">
+                현재 <strong>{activeTabLabel}</strong> 기준으로 요약을 보고
+                있습니다.
+              </span>
+              <span className="cb-admin-context-meta">
+                기간 <strong>
+                  {PERIOD_OPTIONS.find((p) => p.id === period)?.label}
+                </strong>
+                · 부서 <strong>{selectedDeptLabel}</strong>
+              </span>
+            </div>
           </div>
 
           {onClose && (
@@ -1314,7 +1344,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           )}
         </header>
 
-        <nav className="cb-admin-tabs">
+        <nav className="cb-admin-tabs" aria-label="관리자 대시보드 탭">
           <button
             type="button"
             className={`cb-admin-tab-btn ${
@@ -1322,7 +1352,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             }`}
             onClick={() => setActiveTab("chatbot")}
           >
-            챗봇
+            <span className="cb-admin-tab-label">챗봇</span>
+            <span className="cb-admin-tab-sub">질문 통계</span>
           </button>
           <button
             type="button"
@@ -1331,7 +1362,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             }`}
             onClick={() => setActiveTab("education")}
           >
-            교육
+            <span className="cb-admin-tab-label">교육</span>
+            <span className="cb-admin-tab-sub">이수 현황</span>
           </button>
           <button
             type="button"
@@ -1340,7 +1372,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             }`}
             onClick={() => setActiveTab("quiz")}
           >
-            퀴즈
+            <span className="cb-admin-tab-label">퀴즈</span>
+            <span className="cb-admin-tab-sub">점수 & 응시율</span>
           </button>
           <button
             type="button"
@@ -1349,7 +1382,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             }`}
             onClick={() => setActiveTab("metrics")}
           >
-            지표
+            <span className="cb-admin-tab-label">지표</span>
+            <span className="cb-admin-tab-sub">보안 · 품질</span>
           </button>
           <button
             type="button"
@@ -1358,7 +1392,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             }`}
             onClick={() => setActiveTab("accounts")}
           >
-            계정/롤 관리
+            <span className="cb-admin-tab-label">계정/롤 관리</span>
+            <span className="cb-admin-tab-sub">권한 설정</span>
           </button>
         </nav>
 

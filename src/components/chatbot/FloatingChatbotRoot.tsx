@@ -4,10 +4,28 @@ import FloatingDock from "./FloatingDock";
 import ChatbotApp from "./ChatbotApp";
 import EduPanel from "./EduPanel";
 import QuizPanel from "./QuizPanel";
+import AdminDashboardView from "./AdminDashboardView";
 import { initialCourses } from "./quizData";
 import type { Anchor } from "../../utils/chat";
 
 type VideoProgressMap = Record<string, number>;
+
+/**
+ * EMPLOYEE / SYSTEM_ADMIN Role
+ * - 현재는 둘 다 같은 디자인/플로우를 쓰지만,
+ *   이후 관리자 전용 기능을 분기할 때 이 타입을 그대로 확장해서 사용.
+ */
+type UserRole = "SYSTEM_ADMIN" | "EMPLOYEE";
+
+interface FloatingChatbotRootProps {
+  userRole: UserRole;
+}
+
+/**
+ * 여러 패널을 동시에 띄우면서 z-index를 제어하기 위한 Panel ID
+ */
+type PanelId = "chat" | "edu" | "quiz" | "admin";
+type PanelOpenState = Record<PanelId, boolean>;
 
 /**
  * 시험 중 챗봇 막힐 때 보여줄 토스트용 타이머 (모듈 전역)
@@ -21,8 +39,6 @@ const ANCHOR_MARGIN = 24;
 
 /**
  * Anchor 를 현재 viewport 안으로 강제(clamp)하는 헬퍼
- * - Anchor 구조가 { x, y, width, height } 이든 { left, top } 이든 둘 다 최대한 대응
- * - 화면 밖으로 나간 경우, 마진을 두고 안쪽으로 끌어옴
  */
 type AnchorWithOptionalRect = Anchor & {
   x?: number;
@@ -38,7 +54,6 @@ const clampAnchorToViewport = (anchor: Anchor): Anchor => {
 
   const rectAnchor = anchor as AnchorWithOptionalRect;
 
-  // 우선 x / y 또는 left / top 좌표를 가져온다.
   let x: number | null = null;
   let y: number | null = null;
 
@@ -53,7 +68,6 @@ const clampAnchorToViewport = (anchor: Anchor): Anchor => {
     y = rectAnchor.top;
   }
 
-  // 좌표 정보가 없으면 건드리지 않고 그대로 반환
   if (x === null || y === null) {
     return anchor;
   }
@@ -79,7 +93,6 @@ const clampAnchorToViewport = (anchor: Anchor): Anchor => {
   const clampedX = Math.min(Math.max(x, ANCHOR_MARGIN), maxX);
   const clampedY = Math.min(Math.max(y, ANCHOR_MARGIN), maxY);
 
-  // 원래 anchor 를 복사해서, 실제로 존재하는 좌표 필드에만 보정값을 덮어씀
   const nextAnchor: AnchorWithOptionalRect = {
     ...rectAnchor,
   };
@@ -102,22 +115,17 @@ const clampAnchorToViewport = (anchor: Anchor): Anchor => {
 
 /**
  * 시험 중 챗봇을 열려고 할 때 화면 하단에 예쁜 토스트를 띄워주는 함수
- * - React state와는 완전히 분리 (DOM 직접 조작)
- * - 다시 눌러도 3초 동안 유지되고 부드럽게 사라짐
  */
 const showExamBlockedToast = (): void => {
   if (typeof document === "undefined") return;
 
   const TOAST_ID = "ctrlf-exam-toast";
-
-  // 이미 떠있는 토스트가 있으면 재사용
   let toastEl = document.getElementById(TOAST_ID) as HTMLDivElement | null;
 
   if (!toastEl) {
     toastEl = document.createElement("div");
     toastEl.id = TOAST_ID;
 
-    // 기본 스타일
     toastEl.style.position = "fixed";
     toastEl.style.left = "50%";
     toastEl.style.bottom = "28px";
@@ -140,7 +148,6 @@ const showExamBlockedToast = (): void => {
     toastEl.style.transition =
       "opacity 0.25s ease-out, transform 0.25s ease-out";
 
-    // 내용 (아이콘 + 문구 + 닫기 버튼)
     toastEl.innerHTML = `
       <span style="font-size:16px;">⏳</span>
       <span>
@@ -163,7 +170,6 @@ const showExamBlockedToast = (): void => {
       </button>
     `;
 
-    // X 버튼 클릭 시 닫기
     toastEl.addEventListener("click", (e) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
@@ -194,11 +200,9 @@ const showExamBlockedToast = (): void => {
     document.body.appendChild(toastEl);
   }
 
-  // 보이도록 애니메이션
   toastEl.style.opacity = "1";
   toastEl.style.transform = "translateX(-50%) translateY(0)";
 
-  // 3.2초 뒤 자동으로 사라지게
   if (examToastHideTimer !== null) {
     window.clearTimeout(examToastHideTimer);
   }
@@ -224,64 +228,96 @@ const showExamBlockedToast = (): void => {
 };
 
 /**
- * 플로팅 아이콘 + 챗봇 패널 + 교육/퀴즈 패널의 "최상위 컨테이너"
+ * 플로팅 아이콘 + 챗봇 패널 + 교육/퀴즈/관리자 패널의 "최상위 컨테이너"
  */
-const FloatingChatbotRoot: React.FC = () => {
-  // 플로팅 아이콘 강제 리마운트를 위한 key
+const FloatingChatbotRoot: React.FC<FloatingChatbotRootProps> = ({
+  userRole,
+}) => {
   const [dockInstanceKey, setDockInstanceKey] = useState(0);
-
-  // 챗봇 패널 열림/닫힘
-  const [isChatbotOpen, setIsChatbotOpen] = useState(false);
-
-  // 챗봇 패널 애니메이션 상태
   const [chatbotAnimationState, setChatbotAnimationState] = useState<
     "opening" | "closing" | null
   >(null);
-
-  // 챗봇/교육/퀴즈 패널 위치 기준이 되는 앵커 (플로팅 아이콘 위치 등)
   const [anchor, setAnchor] = useState<Anchor | null>(null);
 
-  // 교육 패널 열림/닫힘
-  const [isEduPanelOpen, setIsEduPanelOpen] = useState(false);
-  // 퀴즈 패널 열림/닫힘
-  const [isQuizPanelOpen, setIsQuizPanelOpen] = useState(false);
+  // 여러 패널의 열린 상태를 하나의 객체로 관리
+  const [openPanels, setOpenPanels] = useState<PanelOpenState>({
+    chat: false,
+    edu: false,
+    quiz: false,
+    admin: false,
+  });
 
-  // 현재 "시험 모드(퀴즈 풀기 화면)"인지 여부
+  // z-index 우선순위 관리 (마지막에 있는 PanelId 가 가장 위)
+  const [zOrder, setZOrder] = useState<PanelId[]>([
+    "chat",
+    "edu",
+    "quiz",
+    "admin",
+  ]);
+
   const [isQuizExamMode, setIsQuizExamMode] = useState(false);
 
-  // 이미 언락된 퀴즈 id 목록 (기본: initialCourses 중 unlocked=true)
   const [unlockedCourseIds, setUnlockedCourseIds] = useState<string[]>(() =>
     initialCourses.filter((c) => c.unlocked).map((c) => c.id)
   );
 
-  // 교육 영상 시청률 상태 (videoId → 0~100)
   const [videoProgressMap, setVideoProgressMap] = useState<VideoProgressMap>(
     {}
   );
 
-  /**
-   * 창 리사이즈 시:
-   *  - 플로팅 아이콘을 리마운트해서 기본 위치로 되돌림(= 화면 안으로 강제)
-   *  - 저장되어 있던 anchor 좌표를 현재 viewport 안으로 보정
-   *  - ❗열려 있던 패널(챗봇/교육/퀴즈)은 그대로 유지
-   */
+  // chat 패널 열림 여부 (기존 isChatbotOpen 역할)
+  const isChatbotOpen = openPanels.chat;
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const handleResize = () => {
-      // 플로팅 도크 강제 리마운트 → position: fixed 기준으로 항상 화면 안에 보이도록
       setDockInstanceKey((prev) => prev + 1);
-
-      // 기존 anchor 도 화면 안으로 클램프
       setAnchor((prev) => (prev ? clampAnchorToViewport(prev) : prev));
-      // 패널 open/close 상태는 건드리지 않음
     };
 
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // 시청률 업데이트 (항상 더 큰 값만 반영해서 진행률이 줄어들지 않게)
+  /**
+   * z-index 계산: 기본 1000부터 시작해서 zOrder 순서대로 +1
+   */
+  const getZIndexForPanel = (id: PanelId): number => {
+    const base = 1000;
+    const idx = zOrder.indexOf(id);
+    if (idx === -1) return base;
+    return base + idx;
+  };
+
+  /**
+   * 특정 패널을 "맨 위"로 올림
+   */
+  const bringToFront = (id: PanelId) => {
+    setZOrder((prev) => [...prev.filter((p) => p !== id), id]);
+  };
+
+  /**
+   * 패널 열기 + z-order 최상단으로 이동
+   */
+  const openPanel = (id: PanelId) => {
+    setOpenPanels((prev) => ({
+      ...prev,
+      [id]: true,
+    }));
+    bringToFront(id);
+  };
+
+  /**
+   * 패널 닫기
+   */
+  const closePanel = (id: PanelId) => {
+    setOpenPanels((prev) => ({
+      ...prev,
+      [id]: false,
+    }));
+  };
+
   const handleUpdateVideoProgress = (videoId: string, progress: number) => {
     setVideoProgressMap((prev) => {
       const prevVal = prev[videoId] ?? 0;
@@ -295,43 +331,40 @@ const FloatingChatbotRoot: React.FC = () => {
   };
 
   /**
-   * 플로팅 아이콘 토글
+   * 플로팅 Dock 아이콘 클릭 → 챗봇 토글
+   * - 열 때: chat 패널 open + z-order 맨 위 + opening 애니메이션
+   * - 닫을 때: closing 애니메이션 후, 애니메이션 끝에서 실제 closePanel("chat")
    */
   const handleDockToggleChatbot = (nextAnchor: Anchor) => {
-    // 시험(퀴즈 풀기 화면) 중에는 챗봇 패널 열기/닫기 막고
-    // 커스텀 토스트만 보여주기
     if (isQuizExamMode) {
       showExamBlockedToast();
       return;
     }
 
-    // 현재 viewport 기준으로 anchor 를 한 번 보정해서 저장
     const safeAnchor = clampAnchorToViewport(nextAnchor);
     setAnchor(safeAnchor);
 
-    // 단순 토글: 열려 있으면 닫기, 닫혀 있으면 열기
     if (!isChatbotOpen) {
-      setIsChatbotOpen(true);
+      openPanel("chat");
       setChatbotAnimationState("opening");
     } else {
       setChatbotAnimationState("closing");
     }
   };
 
-  /**
-   * ChatbotApp 내부 X 버튼에서 호출
-   */
   const handleChatbotClose = () => {
     if (!isChatbotOpen) return;
     setChatbotAnimationState("closing");
   };
 
   /**
-   * 지니 애니메이션 종료
+   * Genie 애니메이션 종료 콜백
+   * - closing → 실제로 chat 패널 닫기
+   * - opening → 애니메이션 상태만 초기화
    */
   const handleChatbotAnimationEnd = () => {
     if (chatbotAnimationState === "closing") {
-      setIsChatbotOpen(false);
+      closePanel("chat");
       setChatbotAnimationState(null);
       return;
     }
@@ -342,21 +375,23 @@ const FloatingChatbotRoot: React.FC = () => {
   };
 
   /**
-   * ChatWindow → ChatbotApp → 여기까지
-   * 교육 영상 패널 열기 요청
+   * 교육 패널 열기
+   * - 기존처럼 챗봇과 함께 떠 있을 수 있음
+   * - 마지막에 연 패널이므로 z-order 최상단으로 올림
    */
   const handleOpenEduPanel = () => {
-    setIsEduPanelOpen(true);
+    openPanel("edu");
   };
 
   const handleCloseEduPanel = () => {
-    setIsEduPanelOpen(false);
+    closePanel("edu");
   };
 
   /**
-   * ChatWindow / EduPanel → 여기까지
-   * 퀴즈 대시보드/퀴즈 패널 열기 요청
-   *  - quizId가 넘어오면 해당 퀴즈를 언락 처리
+   * 퀴즈 패널 열기
+   * - 필요 시 코스 언락
+   * - 기존 흐름처럼 교육 패널은 닫고, 퀴즈 패널을 띄움
+   * - 마지막에 연 패널 → z-order 최상단
    */
   const handleOpenQuizPanel = (quizId?: string) => {
     if (quizId) {
@@ -364,27 +399,34 @@ const FloatingChatbotRoot: React.FC = () => {
         prev.includes(quizId) ? prev : [...prev, quizId]
       );
     }
-
-    // 교육 패널은 닫고
-    setIsEduPanelOpen(false);
-
-    // 퀴즈 패널 열기
-    setIsQuizPanelOpen(true);
+    closePanel("edu");
+    openPanel("quiz");
   };
 
   const handleCloseQuizPanel = () => {
-    setIsQuizPanelOpen(false);
-    // 시험 모드 초기화
+    closePanel("quiz");
     setIsQuizExamMode(false);
   };
 
-  // QuizPanel에서 모드가 바뀔 때 호출되는 콜백
-  // solve 모드일 때만 true, 나머지 모드는 false
+  /**
+   * 관리자 대시보드 패널 열기/닫기
+   * - 기존처럼 Edu/Quiz 패널은 닫고, Admin 패널만 띄움
+   * - 마지막에 연 패널 → z-order 최상단
+   */
+  const handleOpenAdminPanel = () => {
+    closePanel("edu");
+    closePanel("quiz");
+    openPanel("admin");
+  };
+
+  const handleCloseAdminPanel = () => {
+    closePanel("admin");
+  };
+
   const handleQuizExamModeChange = (isExamMode: boolean) => {
     setIsQuizExamMode(isExamMode);
   };
 
-  // unlockedCourseIds가 바뀔 때마다 다른 key를 줘서 QuizPanel을 리마운트
   const quizKey =
     unlockedCourseIds.length > 0
       ? `quiz-${unlockedCourseIds.join("|")}`
@@ -392,51 +434,92 @@ const FloatingChatbotRoot: React.FC = () => {
 
   return (
     <>
-      {/* 플로팅 아이콘 (챗봇 열기/닫기 토글)
-          - key 를 줘서 창 크기 변경 시 강제로 리마운트 → 항상 화면 안에 보이도록 */}
       <FloatingDock
         key={dockInstanceKey}
         isChatbotOpen={isChatbotOpen}
         onToggleChatbot={handleDockToggleChatbot}
       />
 
-      {/* 챗봇 패널
-          시험(퀴즈 풀기 화면)일 때는 아예 렌더링하지 않도록 막기 */}
-      {isChatbotOpen && !isQuizExamMode && (
-        <ChatbotApp
-          onClose={handleChatbotClose}
-          anchor={anchor}
-          animationState={chatbotAnimationState ?? undefined}
-          onAnimationEnd={handleChatbotAnimationEnd}
-          onOpenEduPanel={handleOpenEduPanel}
-          // 홈에서 퀴즈 카드 클릭 시 새 퀴즈 패널 열기
-          onOpenQuizPanel={handleOpenQuizPanel}
-        />
+      {/* CHATBOT 패널 (Genie 애니메이션 + 플로팅) */}
+      {openPanels.chat && !isQuizExamMode && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: getZIndexForPanel("chat"),
+            pointerEvents: "none", // 전체 덮는 레이어는 클릭 막지 않기
+          }}
+        >
+          <ChatbotApp
+            onClose={handleChatbotClose}
+            anchor={anchor}
+            animationState={chatbotAnimationState ?? undefined}
+            onAnimationEnd={handleChatbotAnimationEnd}
+            onOpenEduPanel={handleOpenEduPanel}
+            onOpenQuizPanel={handleOpenQuizPanel}
+            onOpenAdminPanel={handleOpenAdminPanel}
+            userRole={userRole}
+            onRequestFocus={() => bringToFront("chat")} // 패널이 클릭되면 맨 앞으로
+          />
+        </div>
       )}
 
-      {/* 교육 영상 패널: 챗봇과 독립 */}
-      {isEduPanelOpen && (
-        <EduPanel
-          anchor={anchor}
-          onClose={handleCloseEduPanel}
-          // 교육 100% 시청 후 "퀴즈 풀기" 버튼에서도 동일한 퀴즈 패널 열기 (+ 언락 처리 가능)
-          onOpenQuizPanel={handleOpenQuizPanel}
-          // 시청 상태 유지용 props
-          videoProgressMap={videoProgressMap}
-          onUpdateVideoProgress={handleUpdateVideoProgress}
-        />
+      {/* 교육 패널 */}
+      {openPanels.edu && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: getZIndexForPanel("edu"),
+            pointerEvents: "none",
+          }}
+        >
+          <EduPanel
+            anchor={anchor}
+            onClose={handleCloseEduPanel}
+            onOpenQuizPanel={handleOpenQuizPanel}
+            videoProgressMap={videoProgressMap}
+            onUpdateVideoProgress={handleUpdateVideoProgress}
+            onRequestFocus={() => bringToFront("edu")}   
+          />
+        </div>
       )}
 
-      {/* 퀴즈 대시보드 + 문제풀이 화면을 모두 포함하는 패널 */}
-      {isQuizPanelOpen && (
-        <QuizPanel
-          key={quizKey} // 언락 상태 바뀔 때마다 초기 state를 새로 만들기 위함
-          anchor={anchor}
-          onClose={handleCloseQuizPanel}
-          unlockedCourseIds={unlockedCourseIds}
-          // solve 모드일 때만 true로 넘어옴
-          onExamModeChange={handleQuizExamModeChange}
-        />
+      {openPanels.quiz && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: getZIndexForPanel("quiz"),
+            pointerEvents: "none",
+          }}
+        >
+          <QuizPanel
+            key={quizKey}
+            anchor={anchor}
+            onClose={handleCloseQuizPanel}
+            unlockedCourseIds={unlockedCourseIds}
+            onExamModeChange={handleQuizExamModeChange}
+            onRequestFocus={() => bringToFront("quiz")} 
+          />
+        </div>
+      )}
+
+      {openPanels.admin && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: getZIndexForPanel("admin"),
+            pointerEvents: "none",
+          }}
+        >
+          <AdminDashboardView
+            anchor={anchor}
+            onClose={handleCloseAdminPanel}
+            onRequestFocus={() => bringToFront("admin")} 
+          />
+        </div>
       )}
     </>
   );

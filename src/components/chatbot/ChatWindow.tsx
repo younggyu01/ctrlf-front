@@ -1,9 +1,8 @@
-// src/components/chatbot/ChatWindow.tsx
-
 import React, { useEffect, useRef, useState } from "react";
 import robotIcon from "../../assets/robot.png";
 import quizIcon from "../../assets/quiz.png";
 import eduIcon from "../../assets/edu.png";
+import adminIcon from "../../assets/admin-dashboard.png";
 
 // 액션 아이콘
 import retryIcon from "../../assets/chat-retry.png"; // 다시 시도 아이콘
@@ -24,6 +23,9 @@ import {
   type FaqCategory,
 } from "./faqData";
 
+// ✅ 사용자 Role 타입 (ChatbotApp / Layout 쪽과 동일)
+type UserRole = "SYSTEM_ADMIN" | "EMPLOYEE";
+
 interface ChatWindowProps {
   activeSession: ChatSession | null;
   onSendMessage: (text: string) => void;
@@ -31,6 +33,7 @@ interface ChatWindowProps {
   onChangeDomain: (domain: ChatDomain) => void;
   onOpenEduPanel?: () => void;
   onOpenQuizPanel?: () => void;
+  onOpenAdminPanel?: () => void;
   onFaqQuickSend?: (faqId: number) => void;
   // 답변 기준 다시 시도 버튼
   onRetryFromMessage?: (
@@ -41,6 +44,8 @@ interface ChatWindowProps {
   onFeedbackChange?: (messageId: string, value: FeedbackValue) => void;
   // 신고 모달에서 제출 시
   onReportSubmit?: (payload: ReportPayload) => void;
+  // ✅ 사용자 Role (관리자 전용 뷰 등 확장용)
+  userRole: UserRole;
 }
 
 // UI에서 사용하는 메시지 타입
@@ -48,8 +53,8 @@ interface UiChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  // 신고 안내 말풍선 같은 특수 메시지 구분용
-  kind?: "normal" | "reportSuggestion";
+  // 신고 안내/접수 말풍선 같은 특수 메시지 구분용
+  kind?: "normal" | "reportSuggestion" | "reportReceipt";
   // 피드백 (좋아요/별로예요)
   feedback?: FeedbackValue;
 }
@@ -84,10 +89,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onChangeDomain,
   onOpenEduPanel,
   onOpenQuizPanel,
+  onOpenAdminPanel,
   onFaqQuickSend,
   onRetryFromMessage,
   onFeedbackChange,
   onReportSubmit,
+  userRole,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -105,6 +112,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const currentDomain: ChatDomain = activeSession?.domain ?? "general";
   const isFaqDomain = currentDomain === "faq";
   const isGeneralDomain = currentDomain === "general";
+
+  // Role 정보
+  const isAdmin = userRole === "SYSTEM_ADMIN";
 
   // 원본 세션 메시지 → UI 타입으로 캐스팅
   const rawMessages = activeSession?.messages ?? [];
@@ -144,6 +154,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [isReportModalOpen]);
 
+  // ====== 공통 핸들러들 ======
+
   // 메시지 전송
   const handleSend = () => {
     const trimmed = inputValue.trim();
@@ -175,6 +187,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     onChangeDomain("quiz");
     if (onOpenQuizPanel) {
       onOpenQuizPanel();
+    }
+  };
+
+  // 관리자 카드 클릭 → 상위(FloatingChatbotRoot)에서 관리자 대시보드 패널 열기
+  const handleOpenAdminDashboard = () => {
+    if (!isAdmin) return;
+    if (onOpenAdminPanel) {
+      onOpenAdminPanel();
     }
   };
 
@@ -293,7 +313,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             }
           }
 
-          // kind (신고 안내 말풍선 등)
+          // kind (신고 안내 / 신고 접수 말풍선 등)
           const msgKind = msg.kind ?? "normal";
           const isReportSuggestion = msgKind === "reportSuggestion";
 
@@ -303,9 +323,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           return (
             <div
               key={msg.id}
-              className={`cb-chat-bubble-row ${
-                isUser ? "cb-chat-bubble-row-user" : "cb-chat-bubble-row-bot"
-              }`}
+              className={`cb-chat-bubble-row ${isUser ? "cb-chat-bubble-row-user" : "cb-chat-bubble-row-bot"
+                }`}
             >
               {/* 챗봇 아바타는 디자인상 제거된 상태 */}
 
@@ -342,9 +361,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   <>
                     {/* 기본 말풍선 */}
                     <div
-                      className={`cb-chat-bubble ${
-                        isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
-                      } ${isErrorAssistant ? "cb-chat-bubble-error" : ""}`}
+                      className={`cb-chat-bubble ${isUser ? "cb-chat-bubble-user" : "cb-chat-bubble-bot"
+                        } ${isErrorAssistant ? "cb-chat-bubble-error" : ""}`}
                     >
                       <div className="cb-chat-bubble-text">
                         {msg.content}
@@ -365,9 +383,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           <div className="cb-chat-feedback-group">
                             <button
                               type="button"
-                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                                feedback === "up" ? "is-selected" : ""
-                              }`}
+                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${feedback === "up" ? "is-selected" : ""
+                                }`}
                               onClick={() => {
                                 if (!onFeedbackChange) return;
                                 const next: FeedbackValue =
@@ -387,9 +404,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
                             <button
                               type="button"
-                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                                feedback === "down" ? "is-selected" : ""
-                              }`}
+                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${feedback === "down" ? "is-selected" : ""
+                                }`}
                               onClick={() => {
                                 if (!onFeedbackChange) return;
                                 const next: FeedbackValue =
@@ -455,8 +471,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     );
   };
 
-  // 헤더 타이틀: 일반 = chatbot, FAQ 도메인 = FAQ
-  const headerTitle = isFaqDomain ? "FAQ" : "chatbot";
+  // 헤더 타이틀: FAQ 도메인 = FAQ, 그 외 = chatbot / chatbot (관리자)
+  const headerTitle = isFaqDomain
+    ? "FAQ"
+    : isAdmin
+      ? "chatbot (관리자)"
+      : "chatbot";
+
   // 메인(환영 화면)에서는 칩 숨기고, 채팅 메시지가 있는 "채팅방"에서만 칩 표시
   const showHeaderChips = hasMessages;
 
@@ -508,7 +529,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
         <section className="cb-main-content">
           <div className="cb-chat-scroll">
-            {/* 홈 영역: 메시지가 없을 때만 환영 카드 + 퀴즈/교육 + FAQ 노출 */}
+            {/* 홈 영역: 메시지가 없을 때만 환영 카드 + 퀴즈/교육(+관리자) + FAQ 노출 */}
             {!hasMessages && (
               <div
                 className="cb-feature-container"
@@ -526,8 +547,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   </div>
                 </div>
 
-                {/* 상단 기능 카드: 퀴즈 / 교육 */}
-                <div className="cb-feature-row">
+                {/* 상단 기능 카드: 퀴즈 / (관리자) / 교육 */}
+                <div
+                  className={
+                    "cb-feature-row" + (isAdmin ? " cb-feature-row--admin" : "")
+                  }
+                >
                   <button
                     type="button"
                     className="cb-feature-card"
@@ -540,6 +565,21 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     />
                     <span className="cb-feature-label">퀴즈</span>
                   </button>
+
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="cb-feature-card cb-feature-card-admin"
+                      onClick={handleOpenAdminDashboard}
+                    >
+                      <img
+                        src={adminIcon}
+                        alt="관리자 대시보드"
+                        className="cb-feature-icon"
+                      />
+                      <span className="cb-feature-label">관리자</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"

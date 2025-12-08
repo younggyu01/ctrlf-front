@@ -40,6 +40,7 @@ export interface EduPanelProps {
   videoProgressMap?: VideoProgressMap;
   // 시청률 변경 시 부모에 알려주는 콜백
   onUpdateVideoProgress?: (videoId: string, progress: number) => void;
+  onRequestFocus?: () => void;
 }
 
 // 최소 크기는 기존과 비슷하게 유지
@@ -218,6 +219,7 @@ const EduPanel: React.FC<EduPanelProps> = ({
   onOpenQuizPanel,
   videoProgressMap,
   onUpdateVideoProgress,
+  onRequestFocus,
 }) => {
   // 패널 크기 + 위치 (처음에는 큰 목록용 사이즈로 시작)
   const [size, setSize] = useState<Size>(() => createInitialSize());
@@ -372,22 +374,22 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
   const handleResizeMouseDown =
     (dir: ResizeDirection) =>
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
+      (event: React.MouseEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
 
-      resizeRef.current = {
-        resizing: true,
-        dir,
-        startX: event.clientX,
-        startY: event.clientY,
-        startWidth: size.width,
-        startHeight: size.height,
-        startTop: panelPos.top,
-        startLeft: panelPos.left,
+        resizeRef.current = {
+          resizing: true,
+          dir,
+          startX: event.clientX,
+          startY: event.clientY,
+          startWidth: size.width,
+          startHeight: size.height,
+          startTop: panelPos.top,
+          startLeft: panelPos.left,
+        };
+        dragRef.current.dragging = false;
       };
-      dragRef.current.dragging = false;
-    };
 
   const handleDragMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -583,6 +585,7 @@ const EduPanel: React.FC<EduPanelProps> = ({
         <div
           className="cb-edu-panel cb-chatbot-panel"
           style={{ width: size.width, height: size.height }}
+          onMouseDown={onRequestFocus} 
         >
           {/* 드래그 바 + 리사이즈 핸들 */}
           <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />

@@ -3,7 +3,6 @@
 .cb-genie-wrapper {
   position: fixed;
   inset: 0;
-  z-index: 9999;
   pointer-events: none; /* 배경 클릭 가능 */
 }
 
@@ -1052,6 +1051,11 @@
   gap: 12px;
 }
 
+/* 관리자 홈: 퀴즈 / 관리자 / 교육 카드 3개 한 줄 */
+.cb-feature-row.cb-feature-row--admin {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .cb-feature-card {
   height: 80px;
   border-radius: 16px;
@@ -1198,7 +1202,6 @@
 .cb-edu-wrapper {
   position: fixed;
   inset: 0;
-  z-index: 9999; 
   pointer-events: none;
 }
 
@@ -2725,5 +2728,869 @@
     width: 100%;
     max-width: calc(100% - 24px);
     padding: 18px 18px 16px;
+  }
+}
+
+/* =========================
+   관리자 대시보드 (SYSTEM ADMIN)
+   ========================= */
+
+.cb-admin-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.cb-admin-overlay-inner {
+  pointer-events: auto;
+}
+
+/* 플로팅 컨테이너 – 위치/크기는 TS쪽 inline style에서 제어 */
+.cb-admin-panel-container {
+  pointer-events: none; /* 패널 밖 클릭 통과 */
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+/* 실제 패널만 클릭 가능 */
+.cb-admin-panel-container .cb-admin-root {
+  pointer-events: auto;
+}
+
+/* MSA / 관제 콘솔 느낌 메인 패널 */
+.cb-admin-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+
+  display: flex;
+  flex-direction: column;
+
+  color: #0f172a;
+  background:
+    radial-gradient(160% 160% at 0% 0%, #eef2ff 0, #f9fafb 45%, #ffffff 100%);
+  border-radius: 22px;
+  border: 1px solid #e2e8f0;
+  box-shadow:
+    0 22px 80px rgba(15, 23, 42, 0.16),
+    0 0 0 1px rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+}
+
+/* 좌측 라인 – 관제용 vertical status bar 느낌 */
+.cb-admin-root::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, #22c55e, #0ea5e9, #6366f1);
+}
+
+/* 헤더 영역 – 상단 바 */
+.cb-admin-header {
+  padding: 18px 24px 12px 32px;
+  border-bottom: 1px solid #e2e8f0;
+  background:
+    radial-gradient(110% 170% at 0% 0%, rgba(129, 140, 248, 0.14) 0, transparent 48%),
+    #f9fafb;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cb-admin-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #22c55e, #4ade80);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
+  color: #052e16;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cb-admin-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+  color: #020617;
+}
+
+.cb-admin-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+/* 현재 탭 컨텍스트 – 작은 관제 배지 */
+.cb-admin-context-chip {
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #e0e7ff;
+  background: linear-gradient(135deg, #eef2ff, #f9fafb);
+  font-size: 10px;
+  color: #4b5563;
+}
+
+.cb-admin-context-chip strong {
+  color: #111827;
+  font-weight: 600;
+}
+
+/* 우측 상단 닫기 버튼 */
+.cb-admin-header-close-btn {
+  border: none;
+  background: transparent;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #9ca3af;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    transform 0.05s ease;
+}
+
+.cb-admin-header-close-btn:hover {
+  background-color: #e5e7eb;
+  color: #111827;
+}
+
+.cb-admin-header-close-btn:active {
+  transform: translateY(1px);
+}
+
+/* 탭 네비게이션 – 클러스터형 MSA 탭 */
+.cb-admin-tabs {
+  padding: 8px 24px 8px 32px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(90deg, #f9fafb, #ffffff);
+}
+
+.cb-admin-tab-btn {
+  position: relative;
+  border: none;
+  background: transparent;
+  padding: 7px 12px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #6b7280;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.06s ease;
+}
+
+.cb-admin-tab-btn::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background-color: transparent;
+  box-shadow: none;
+  transition:
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.cb-admin-tab-btn:hover {
+  color: #111827;
+  background-color: #e5edff;
+}
+
+.cb-admin-tab-btn.is-active {
+  color: #111827;
+  background: linear-gradient(135deg, #e0ebff, #eff6ff);
+  box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.4);
+  transform: translateY(-1px);
+}
+
+.cb-admin-tab-btn.is-active::before {
+  background-color: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
+}
+
+/* 콘텐츠 영역 – 관제 그리드 배경 */
+.cb-admin-content {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 24px 20px 32px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  background-color: #f5f7fb;
+  background-image:
+    linear-gradient(to right, rgba(209, 213, 219, 0.4) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(209, 213, 219, 0.35) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: -1px -1px;
+}
+
+.cb-admin-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 필터 바 */
+.cb-admin-filter-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cb-admin-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cb-admin-filter-label {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.cb-admin-filter-control select {
+  min-width: 120px;
+  font-size: 12px;
+  padding: 6px 28px 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  background-color: #ffffff;
+  color: #111827;
+  outline: none;
+  cursor: pointer;
+
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #9ca3af 50%),
+    linear-gradient(135deg, #9ca3af 50%, transparent 50%);
+  background-position:
+    calc(100% - 11px) 50%,
+    calc(100% - 7px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+.cb-admin-filter-control select:focus {
+  border-color: #818cf8;
+  box-shadow:
+    0 0 0 1px rgba(129, 140, 248, 0.35),
+    0 0 0 4px rgba(191, 219, 254, 0.5);
+}
+
+/* 새로고침 버튼 */
+.cb-admin-filter-refresh-btn {
+  margin-left: auto;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: linear-gradient(135deg, #eef2ff, #ffffff);
+  font-size: 12px;
+  color: #1f2933;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.05s ease,
+    box-shadow 0.15s ease;
+}
+
+.cb-admin-filter-refresh-btn:hover {
+  border-color: #818cf8;
+  box-shadow:
+    0 0 0 1px rgba(129, 140, 248, 0.35),
+    0 6px 14px rgba(148, 163, 184, 0.4);
+}
+
+.cb-admin-filter-refresh-btn:active {
+  transform: translateY(1px);
+}
+
+/* KPI 카드 – 밝은 위젯 타일 느낌 */
+.cb-admin-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cb-admin-kpi-card {
+  position: relative;
+  border-radius: 16px;
+  padding: 12px 14px;
+  background:
+    radial-gradient(130% 180% at 0% 0%, rgba(191, 219, 254, 0.8) 0, transparent 52%),
+    #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow:
+    0 10px 25px rgba(148, 163, 184, 0.25),
+    0 0 0 1px rgba(226, 232, 240, 0.9);
+}
+
+.cb-admin-kpi-card::before {
+  content: "";
+  position: absolute;
+  inset-inline: 10px;
+  top: 7px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, #4f46e5);
+  opacity: 0.55;
+}
+
+.cb-admin-kpi-label {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 6px; /* 상단 라인 공간 */
+  margin-bottom: 4px;
+}
+
+.cb-admin-kpi-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-admin-kpi-caption {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #818cf8;
+}
+
+/* 섹션 레이아웃 */
+.cb-admin-section-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 16px;
+}
+
+.cb-admin-section {
+  position: relative;
+  padding: 12px 13px;
+  border-radius: 16px;
+  background:
+    radial-gradient(160% 220% at 0% 0%, rgba(219, 234, 254, 0.9) 0, transparent 55%),
+    #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 12px 28px rgba(148, 163, 184, 0.25);
+}
+
+.cb-admin-section::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #0ea5e9);
+  opacity: 0.8;
+}
+
+.cb-admin-section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 10px;
+  padding-left: 4px;
+}
+
+.cb-admin-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.cb-admin-section-sub {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* 바 차트 */
+.cb-admin-bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-bar-row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.cb-admin-bar-label {
+  color: #64748b;
+}
+
+.cb-admin-bar-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background-color: #e5e7eb;
+  overflow: hidden;
+}
+
+.cb-admin-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, #38bdf8);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.45);
+}
+
+.cb-admin-bar-value {
+  font-size: 11px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+/* 도메인 비율 리스트 */
+.cb-admin-domain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cb-admin-domain-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cb-admin-domain-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.cb-admin-domain-label {
+  color: #111827;
+}
+
+.cb-admin-domain-ratio {
+  color: #4f46e5;
+  font-weight: 600;
+}
+
+.cb-admin-domain-track {
+  height: 7px;
+  border-radius: 999px;
+  background-color: #e5e7eb;
+  overflow: hidden;
+}
+
+.cb-admin-domain-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+}
+
+/* 키워드/오답 리스트 */
+.cb-admin-keyword-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cb-admin-keyword-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  font-size: 11px;
+}
+
+.cb-admin-keyword-label {
+  color: #0f172a;
+}
+
+.cb-admin-keyword-count {
+  color: #6366f1;
+}
+
+/* 교육 - 직무교육 리스트 */
+.cb-admin-course-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-course-item {
+  padding: 7px 9px;
+  border-radius: 10px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+}
+
+.cb-admin-course-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.cb-admin-course-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #0f172a;
+}
+
+.cb-admin-course-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.cb-admin-course-status.is-in-progress {
+  background-color: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.cb-admin-course-status.is-completed {
+  background-color: #ecfdf3;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.cb-admin-course-status.is-not-started {
+  background-color: #fef9c3;
+  border-color: #facc15;
+  color: #854d0e;
+}
+
+.cb-admin-course-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 테이블 공통 */
+.cb-admin-table-wrapper {
+  margin-top: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.cb-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.cb-admin-table thead {
+  position: sticky;
+  top: 0;
+  background-color: #f3f4ff;
+  z-index: 1;
+}
+
+.cb-admin-table th,
+.cb-admin-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+}
+
+.cb-admin-table th {
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.cb-admin-table td {
+  color: #111827;
+}
+
+/* 지표 리스트 */
+.cb-admin-metric-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-metric-item {
+  padding: 7px 9px;
+  border-radius: 10px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+}
+
+.cb-admin-metric-main {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.cb-admin-metric-label {
+  color: #111827;
+}
+
+.cb-admin-metric-value {
+  font-weight: 600;
+  color: #4f46e5;
+}
+
+.cb-admin-metric-desc {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 계정/롤 관리 레이아웃 */
+.cb-admin-account-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+  gap: 10px;
+}
+
+.cb-admin-account-card {
+  padding: 10px 12px;
+  border-radius: 16px;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 10px 24px rgba(148, 163, 184, 0.25);
+}
+
+.cb-admin-account-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+/* 사용자 기본 정보 */
+.cb-admin-account-info {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  font-size: 11px;
+}
+
+.cb-admin-account-info div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cb-admin-account-info dt {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.cb-admin-account-info dd {
+  margin: 0;
+  color: #111827;
+}
+
+/* 역할 체크박스 */
+.cb-admin-role-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.cb-admin-role-checkboxes label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 필드셋/라디오 */
+.cb-admin-fieldset {
+  margin: 8px 0 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background-color: #f9fafb;
+}
+
+.cb-admin-fieldset legend {
+  padding: 0 4px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.cb-admin-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.cb-admin-radio-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 힌트/경고 문구 */
+.cb-admin-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.cb-admin-hint--warning {
+  color: #b45309;
+}
+
+/* 부서 스코프 선택 */
+.cb-admin-scope-grid {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  font-size: 11px;
+}
+
+.cb-admin-scope-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 액션 버튼 */
+.cb-admin-account-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cb-admin-secondary-btn,
+.cb-admin-primary-btn {
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.05s ease,
+    box-shadow 0.15s ease;
+}
+
+.cb-admin-secondary-btn {
+  background-color: #ffffff;
+  border-color: #cbd5e1;
+  color: #374151;
+}
+
+.cb-admin-secondary-btn:hover {
+  background-color: #f3f4f6;
+  box-shadow: 0 4px 12px rgba(148, 163, 184, 0.4);
+}
+
+.cb-admin-primary-btn {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  color: #f9fafb;
+  border-color: #1d4ed8;
+}
+
+.cb-admin-primary-btn:hover {
+  box-shadow:
+    0 0 0 1px rgba(129, 140, 248, 0.6),
+    0 6px 16px rgba(79, 70, 229, 0.55);
+}
+
+.cb-admin-secondary-btn:active,
+.cb-admin-primary-btn:active {
+  transform: translateY(1px);
+}
+
+/* 반응형 */
+@media (max-width: 960px) {
+  .cb-admin-kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cb-admin-section-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cb-admin-account-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .cb-admin-header {
+    padding: 16px 16px 10px 20px;
+  }
+
+  .cb-admin-tabs {
+    padding: 6px 16px 6px 20px;
+    overflow-x: auto;
+  }
+
+  .cb-admin-content {
+    padding: 14px 16px 18px 20px;
+  }
+
+  .cb-admin-kpi-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

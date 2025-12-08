@@ -65,6 +65,7 @@ interface QuizPanelProps {
   unlockedCourseIds?: string[];
   // 현재 시험 모드(퀴즈 풀기 화면)인지 상위에 알려주는 콜백
   onExamModeChange?: (isExamMode: boolean) => void;
+  onRequestFocus?: () => void;
 }
 
 type PanelMode = "dashboard" | "solve" | "note";
@@ -211,6 +212,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   onOpenNote,
   unlockedCourseIds,
   onExamModeChange,
+  onRequestFocus,
 }) => {
   // === 패널 크기 + 위치 ===
   const [size, setSize] = useState<Size>(INITIAL_SIZE);
@@ -776,6 +778,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         <div
           className="cb-edu-panel cb-chatbot-panel"
           style={{ width: size.width, height: size.height }}
+          onMouseDown={onRequestFocus}
         >
           {/* 드래그 바 + 리사이즈 핸들 */}
           <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />

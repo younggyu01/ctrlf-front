@@ -30,6 +30,10 @@ interface ChatbotAppProps {
   onAnimationEnd?: () => void;
   onOpenEduPanel?: () => void;
   onOpenQuizPanel?: (quizId?: string) => void;
+  onOpenAdminPanel?: () => void;
+  // Layout → FloatingChatbotRoot → 여기까지 전달되는 사용자 Role
+  userRole: UserRole;
+  onRequestFocus?: () => void;
 }
 
 type Size = PanelSize;
@@ -76,6 +80,9 @@ const initialSessions: ChatSession[] = [
   },
 ];
 
+// ✅ 사용자 Role 타입 (Layout/FloatingChatbotRoot와 동일하게 유지)
+type UserRole = "SYSTEM_ADMIN" | "EMPLOYEE";
+
 // "신고하고싶어", "괴롭힘을 신고하고 싶어요" 같은 문장을 잡아주는 간단한 헬퍼
 function shouldSuggestReport(raw: string): boolean {
   const compact = raw.replace(/\s+/g, ""); // 공백 제거
@@ -106,6 +113,9 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   onAnimationEnd,
   onOpenEduPanel,
   onOpenQuizPanel,
+  onOpenAdminPanel,
+  userRole,
+  onRequestFocus,
 }) => {
   // 패널 크기 + 위치
   const [size, setSize] = useState<Size>(INITIAL_SIZE);
@@ -309,23 +319,23 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   // 리사이즈 시작
   const handleResizeMouseDown =
     (dir: ResizeDirection) =>
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
+      (event: React.MouseEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
 
-      resizeRef.current = {
-        resizing: true,
-        dir,
-        startX: event.clientX,
-        startY: event.clientY,
-        startWidth: size.width,
-        startHeight: size.height,
-        startTop: panelPos.top,
-        startLeft: panelPos.left,
+        resizeRef.current = {
+          resizing: true,
+          dir,
+          startX: event.clientX,
+          startY: event.clientY,
+          startWidth: size.width,
+          startHeight: size.height,
+          startTop: panelPos.top,
+          startLeft: panelPos.left,
+        };
+        // 드래그 중이던 것도 끊어주기
+        dragRef.current.dragging = false;
       };
-      // 드래그 중이던 것도 끊어주기
-      dragRef.current.dragging = false;
-    };
 
   // 드래그 시작 (상단 드래그 바)
   const handleDragMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -543,11 +553,11 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       prev.map((session) =>
         session.id === sessionIdForSend
           ? {
-              ...session,
-              title: nextTitle,
-              messages: userAppendedMessages,
-              updatedAt: now,
-            }
+            ...session,
+            title: nextTitle,
+            messages: userAppendedMessages,
+            updatedAt: now,
+          }
           : session
       )
     );
@@ -568,10 +578,10 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         prev.map((session) =>
           session.id === sessionIdForSend
             ? {
-                ...session,
-                messages: [...userAppendedMessages, suggestionMessage],
-                updatedAt: suggestionTime,
-              }
+              ...session,
+              messages: [...userAppendedMessages, suggestionMessage],
+              updatedAt: suggestionTime,
+            }
             : session
         )
       );
@@ -606,10 +616,10 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         prev.map((session) =>
           session.id === sessionIdForSend
             ? {
-                ...session,
-                messages: [...session.messages, assistantMessage],
-                updatedAt: replyTime,
-              }
+              ...session,
+              messages: [...session.messages, assistantMessage],
+              updatedAt: replyTime,
+            }
             : session
         )
       );
@@ -628,10 +638,10 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         prev.map((session) =>
           session.id === sessionIdForSend
             ? {
-                ...session,
-                messages: [...session.messages, errorMessage],
-                updatedAt: replyTime,
-              }
+              ...session,
+              messages: [...session.messages, errorMessage],
+              updatedAt: replyTime,
+            }
             : session
         )
       );
@@ -705,10 +715,10 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       prev.map((session) =>
         session.id === sessionId
           ? {
-              ...session,
-              messages: [...session.messages, receiptMessage],
-              updatedAt: now,
-            }
+            ...session,
+            messages: [...session.messages, receiptMessage],
+            updatedAt: now,
+          }
           : session
       )
     );
@@ -732,6 +742,13 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     onClose(); // 퀴즈 패널이 열릴 때 챗봇 패널 닫기
   };
 
+  const handleOpenAdminPanelFromChat = () => {
+    if (onOpenAdminPanel) {
+      onOpenAdminPanel();
+    }
+    onClose(); // 관리자 패널이 열릴 때 챗봇 패널은 닫기 
+  };
+
   // 지니 애니메이션 종료 이벤트
   useEffect(() => {
     if (!wrapperRef.current || !onAnimationEnd) return;
@@ -753,8 +770,8 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     animationState === "opening"
       ? "cb-genie-opening"
       : animationState === "closing"
-      ? "cb-genie-closing"
-      : "";
+        ? "cb-genie-closing"
+        : "";
 
   return (
     <div className="cb-genie-wrapper">
@@ -766,6 +783,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
           left: panelPos.left,
           transformOrigin,
         }}
+        onMouseDown={onRequestFocus}
       >
         <div
           className="cb-chatbot-panel"
@@ -843,10 +861,13 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               // 교육/퀴즈 카드 클릭 시: 새 패널 열고 챗봇 닫기
               onOpenEduPanel={handleOpenEduPanelFromChat}
               onOpenQuizPanel={handleOpenQuizPanelFromChat}
+              onOpenAdminPanel={handleOpenAdminPanelFromChat}
               onFaqQuickSend={handleFaqQuickSend}
               onRetryFromMessage={handleRetryFromMessage}
               onFeedbackChange={handleFeedbackChange}
               onReportSubmit={handleSubmitReport}
+              // SYSTEM_ADMIN / EMPLOYEE 정보 전달
+              userRole={userRole}
             />
           </div>
         </div>

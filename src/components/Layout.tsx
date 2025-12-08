@@ -18,6 +18,9 @@ interface CtrlfTokenParsed extends KeycloakTokenParsed {
   fullName?: string;
 }
 
+// 사용자 Role 타입 (현재는 EMPLOYEE / SYSTEM_ADMIN 두 가지만 사용)
+type UserRole = "SYSTEM_ADMIN" | "EMPLOYEE";
+
 // loadUserProfile() 결과 타입 확장
 type ExtendedProfile = KeycloakProfile & {
   attributes?: {
@@ -83,6 +86,24 @@ const Layout: React.FC<LayoutProps> = ({ children, pageClassName }) => {
 
   // Keycloak 로그인 여부
   const isAuthenticated = !!keycloak.authenticated;
+
+  /**
+   * ✅ Keycloak Role 기반 사용자 Role 계산
+   *
+   * - realm 레벨 Role: keycloak.realmAccess?.roles
+   * - client 레벨 Role: keycloak.resourceAccess?.["ctrlf-frontend"]?.roles
+   *
+   *  두 군데를 합쳐서 SYSTEM_ADMIN 이 있는지 먼저 보고,
+   *  아니면 EMPLOYEE 로 처리 (기본은 일반 직원으로 간주)
+   */
+  const realmRoles = keycloak.realmAccess?.roles ?? [];
+  const clientRoles =
+    keycloak.resourceAccess?.["ctrlf-frontend"]?.roles ?? [];
+  const allRoles = [...realmRoles, ...clientRoles];
+
+  const userRole: UserRole = allRoles.includes("SYSTEM_ADMIN")
+    ? "SYSTEM_ADMIN"
+    : "EMPLOYEE";
 
   return (
     <div className={`dashboard-page ${pageClassName ?? ""}`}>
@@ -192,8 +213,8 @@ const Layout: React.FC<LayoutProps> = ({ children, pageClassName }) => {
       {/* 각 페이지의 본문이 들어가는 자리 */}
       {children}
 
-      {/* 로그인된 경우에만 플로팅 챗봇 + 교육 패널 루트 표시 */}
-      {isAuthenticated && <FloatingChatbotRoot />}
+      {/* 로그인 + Role 기반 플로팅 챗봇 루트 */}
+      {isAuthenticated && <FloatingChatbotRoot userRole={userRole} />}
     </div>
   );
 };

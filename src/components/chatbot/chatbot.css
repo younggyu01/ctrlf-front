@@ -3,7 +3,8 @@
 .cb-genie-wrapper {
   position: fixed;
   inset: 0;
-  pointer-events: none; /* 배경 클릭 가능 */
+  pointer-events: none;
+  /* 배경 클릭 가능 */
 }
 
 /* 실제 챗봇 패널 컨테이너 */
@@ -27,122 +28,86 @@
 @keyframes cb-genie-open {
   0% {
     /* 아이콘 쪽에서 얇게 시작 (오른쪽 아래 모서리) */
-    transform: translateY(36px) translateX(8px)
-      scaleX(0.3) scaleY(0.08) skewX(-18deg);
-    clip-path: polygon(
-      82% 0%, 100% 0%, 100% 100%, 84% 100%
-    );
+    transform: translateY(36px) translateX(8px) scaleX(0.3) scaleY(0.08) skewX(-18deg);
+    clip-path: polygon(82% 0%, 100% 0%, 100% 100%, 84% 100%);
     opacity: 0;
   }
 
   20% {
     /* 살짝 올라오면서 폭이 조금 넓어짐 */
-    transform: translateY(18px) translateX(4px)
-      scaleX(0.55) scaleY(0.4) skewX(-14deg);
-    clip-path: polygon(
-      68% 0%, 100% 0%, 100% 100%, 76% 100%
-    );
+    transform: translateY(18px) translateX(4px) scaleX(0.55) scaleY(0.4) skewX(-14deg);
+    clip-path: polygon(68% 0%, 100% 0%, 100% 100%, 76% 100%);
     opacity: 0.9;
   }
 
   40% {
     /* 위로 끌려 올라가며 더 넓어짐 */
-    transform: translateY(6px) translateX(2px)
-      scaleX(0.8) scaleY(0.75) skewX(-10deg);
-    clip-path: polygon(
-      52% 0%, 100% 0%, 100% 100%, 64% 100%
-    );
+    transform: translateY(6px) translateX(2px) scaleX(0.8) scaleY(0.75) skewX(-10deg);
+    clip-path: polygon(52% 0%, 100% 0%, 100% 100%, 64% 100%);
     opacity: 1;
   }
 
   60% {
     /* 거의 다 펼쳐짐, 살짝 과장된 상태 */
-    transform: translateY(-4px) translateX(0)
-      scaleX(1.03) scaleY(1.05) skewX(-5deg);
-    clip-path: polygon(
-      20% 0%, 100% 0%, 100% 100%, 30% 100%
-    );
+    transform: translateY(-4px) translateX(0) scaleX(1.03) scaleY(1.05) skewX(-5deg);
+    clip-path: polygon(20% 0%, 100% 0%, 100% 100%, 30% 100%);
     opacity: 1;
   }
 
   80% {
     /* 튕기면서 원래 모양에 가까워짐 */
-    transform: translateY(0) translateX(0)
-      scaleX(1) scaleY(0.98) skewX(-2deg);
-    clip-path: polygon(
-      5% 0%, 100% 0%, 100% 100%, 10% 100%
-    );
+    transform: translateY(0) translateX(0) scaleX(1) scaleY(0.98) skewX(-2deg);
+    clip-path: polygon(5% 0%, 100% 0%, 100% 100%, 10% 100%);
     opacity: 1;
   }
 
   100% {
     /* 정상 직사각형 */
-    transform: translateY(0) translateX(0)
-      scaleX(1) scaleY(1) skewX(0deg);
-    clip-path: polygon(
-      0% 0%, 100% 0%, 100% 100%, 0% 100%
-    );
+    transform: translateY(0) translateX(0) scaleX(1) scaleY(1) skewX(0deg);
+    clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
     opacity: 1;
   }
 }
 
 @keyframes cb-genie-close {
   0% {
-    transform: translateY(0) translateX(0)
-      scaleX(1) scaleY(1) skewX(0deg);
-    clip-path: polygon(
-      0% 0%, 100% 0%, 100% 100%, 0% 100%
-    );
+    transform: translateY(0) translateX(0) scaleX(1) scaleY(1) skewX(0deg);
+    clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
     opacity: 1;
   }
 
   20% {
     /* 살짝 위로 당겨지면서 줄어듦 */
-    transform: translateY(-4px) translateX(0)
-      scaleX(0.95) scaleY(0.88) skewX(-4deg);
-    clip-path: polygon(
-      10% 0%, 100% 0%, 100% 100%, 15% 100%
-    );
+    transform: translateY(-4px) translateX(0) scaleX(0.95) scaleY(0.88) skewX(-4deg);
+    clip-path: polygon(10% 0%, 100% 0%, 100% 100%, 15% 100%);
     opacity: 1;
   }
 
   40% {
     /* 더 가늘어지면서 오른쪽 아래로 빨려가는 느낌 */
-    transform: translateY(6px) translateX(2px)
-      scaleX(0.8) scaleY(0.7) skewX(-9deg);
-    clip-path: polygon(
-      30% 0%, 100% 0%, 100% 100%, 42% 100%
-    );
+    transform: translateY(6px) translateX(2px) scaleX(0.8) scaleY(0.7) skewX(-9deg);
+    clip-path: polygon(30% 0%, 100% 0%, 100% 100%, 42% 100%);
     opacity: 0.95;
   }
 
   60% {
     /* 거의 리본처럼 */
-    transform: translateY(18px) translateX(4px)
-      scaleX(0.55) scaleY(0.4) skewX(-14deg);
-    clip-path: polygon(
-      52% 0%, 100% 0%, 100% 100%, 64% 100%
-    );
+    transform: translateY(18px) translateX(4px) scaleX(0.55) scaleY(0.4) skewX(-14deg);
+    clip-path: polygon(52% 0%, 100% 0%, 100% 100%, 64% 100%);
     opacity: 0.7;
   }
 
   80% {
     /* 아주 얇은 띠 상태 */
-    transform: translateY(28px) translateX(6px)
-      scaleX(0.38) scaleY(0.18) skewX(-18deg);
-    clip-path: polygon(
-      70% 0%, 100% 0%, 100% 100%, 78% 100%
-    );
+    transform: translateY(28px) translateX(6px) scaleX(0.38) scaleY(0.18) skewX(-18deg);
+    clip-path: polygon(70% 0%, 100% 0%, 100% 100%, 78% 100%);
     opacity: 0.4;
   }
 
   100% {
     /* 완전히 모서리 쪽으로 말려 들어감 */
-    transform: translateY(36px) translateX(8px)
-      scaleX(0.3) scaleY(0.08) skewX(-18deg);
-    clip-path: polygon(
-      82% 0%, 100% 0%, 100% 100%, 84% 100%
-    );
+    transform: translateY(36px) translateX(8px) scaleX(0.3) scaleY(0.08) skewX(-18deg);
+    clip-path: polygon(82% 0%, 100% 0%, 100% 100%, 84% 100%);
     opacity: 0;
   }
 }
@@ -594,7 +559,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-left: 8px; 
+  margin-left: 8px;
 }
 
 .cb-main-chip-btn {
@@ -656,7 +621,7 @@
   display: flex;
   width: 100%;
   align-items: flex-end;
-  gap: 6px; 
+  gap: 6px;
 }
 
 /* 사용자: 오른쪽 정렬 */
@@ -811,8 +776,10 @@
 .cb-chat-bubble-report {
   display: inline-flex;
   align-items: center;
-  gap: 6px;               /* 8px → 6px 로 줄임 */
-  padding: 6px 10px;      /* 6px 12px → 4px 10px 으로 줄여서 말풍선 높이 축소 */
+  gap: 6px;
+  /* 8px → 6px 로 줄임 */
+  padding: 6px 10px;
+  /* 6px 12px → 4px 10px 으로 줄여서 말풍선 높이 축소 */
   border-radius: 999px;
   background-color: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -823,17 +790,21 @@
 .cb-chat-bubble-report-text {
   font-size: 13px;
   color: #111827;
-  white-space: nowrap;    /* 텍스트도 줄바꿈 안되게 */
+  white-space: nowrap;
+  /* 텍스트도 줄바꿈 안되게 */
 }
 
 .cb-report-suggest-inline-btn {
-  padding: 3px 10px;      /* 버튼도 살짝 작게 */
+  padding: 3px 10px;
+  /* 버튼도 살짝 작게 */
   border-radius: 999px;
   border: 1px solid #d1d5db;
   background-color: #ffffff;
   font-size: 12px;
-  line-height: 1;         /* 높이 줄이기 */
-  white-space: nowrap;    /* "신고" 두 글자가 한 줄로만 나오게 */
+  line-height: 1;
+  /* 높이 줄이기 */
+  white-space: nowrap;
+  /* "신고" 두 글자가 한 줄로만 나오게 */
   cursor: pointer;
 }
 
@@ -870,12 +841,14 @@
 }
 
 @keyframes cb-typing-bounce {
+
   0%,
   80%,
   100% {
     transform: translateY(0);
     opacity: 0.4;
   }
+
   40% {
     transform: translateY(-3px);
     opacity: 1;
@@ -887,10 +860,10 @@
    ========================= */
 
 .cb-faq-view {
-  width: 100%;  
-  max-width: 520px;   
-  margin: 56px auto 24px;   
-  padding: 0 8px;   
+  width: 100%;
+  max-width: 520px;
+  margin: 56px auto 24px;
+  padding: 0 8px;
   box-sizing: border-box;
 }
 
@@ -953,8 +926,8 @@
   cursor: pointer;
   box-shadow: 0 3px 6px rgba(0, 0, 0, 0.06);
   white-space: nowrap;
-  overflow: hidden; 
-  text-overflow: ellipsis; 
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cb-faq-suggestion-btn:hover:not(:disabled) {
@@ -1033,7 +1006,7 @@
   padding: 0 clamp(12px, 3vw, 32px) 24px;
   display: flex;
   flex-direction: column;
-  align-items: center;   
+  align-items: center;
 }
 
 /* 아주 좁은 화면(모바일)일 때는 FAQ 버튼 1열로 */
@@ -1046,7 +1019,7 @@
 .cb-feature-row {
   width: 100%;
   max-width: 720px;
-  display: grid;  
+  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
@@ -1179,8 +1152,8 @@
   .cb-chatbot-panel {
     width: 100vw !important;
     height: 100vh !important;
-    max-width: 100vw; 
-    max-height: 100vh; 
+    max-width: 100vw;
+    max-height: 100vh;
     min-width: 0;
     min-height: 0;
     border-radius: 0;
@@ -1265,7 +1238,7 @@
 }
 
 /* 섹션 */
-.cb-edu-section + .cb-edu-section {
+.cb-edu-section+.cb-edu-section {
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid #e5e7eb;
@@ -1281,7 +1254,7 @@
 /* 섹션 한 줄 */
 .cb-edu-section-row {
   display: flex;
-  align-items: center; 
+  align-items: center;
   justify-content: center;
   gap: 24px;
   margin: 0 auto;
@@ -1354,18 +1327,19 @@
   cursor: pointer;
   color: #4b5563;
 }
+
 .cb-edu-video-close:hover {
   background: #f3f4f6;
 }
 
 /* 썸네일 영역 */
 .cb-edu-video-thumbnail {
-  position: relative; 
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
   border-radius: 20px;
-  overflow: hidden;  
-  background: #e5e7eb; 
+  overflow: hidden;
+  background: #e5e7eb;
 }
 
 /* 썸네일에서 실제 영상 첫 프레임을 보여주기 위한 <video> */
@@ -1375,7 +1349,7 @@
   object-fit: cover;
   border-radius: 20px;
   display: block;
-  pointer-events: none;   
+  pointer-events: none;
 }
 
 /* 가운데 플레이 버튼(검은 원) */
@@ -1446,15 +1420,18 @@
 }
 
 .cb-edu-status-not-started {
-  color: #6b7280; /* 회색 - 시청전 */
+  color: #6b7280;
+  /* 회색 - 시청전 */
 }
 
 .cb-edu-status-in-progress {
-  color: #2563eb; /* 파란색 - 시청중 */
+  color: #2563eb;
+  /* 파란색 - 시청중 */
 }
 
 .cb-edu-status-completed {
-  color: #16a34a; /* 초록색 - 시청완료 */
+  color: #16a34a;
+  /* 초록색 - 시청완료 */
 }
 
 /* 반응형: 패널이 작을 때 패딩/간격 살짝 줄이기 */
@@ -1501,11 +1478,11 @@
 
 /* 교육 영상 패널 전용 닫기 버튼 크기 조정 */
 .cb-edu-close-btn {
-  width: 24px;    
+  width: 24px;
   height: 24px;
   font-size: 14px;
-  top: 12px;  
-  right: 16px; 
+  top: 12px;
+  right: 16px;
 }
 
 .cb-edu-watch-title {
@@ -1680,7 +1657,7 @@
 
 .cb-quiz-dept-card {
   flex: 1 1 0;
-  max-width: 260px; 
+  max-width: 260px;
   min-width: 0;
   border-radius: 18px;
   border: 1px solid #e2e2e8;
@@ -1773,7 +1750,7 @@
 
 .cb-quiz-course-card {
   flex: 1 1 0;
-  max-width: 320px; 
+  max-width: 320px;
   min-width: 0;
   border-radius: 18px;
   border: 1px solid #e2e2e8;
@@ -1888,7 +1865,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden; 
+  overflow: hidden;
 }
 
 .cb-quiz-solve-header {
@@ -1969,13 +1946,13 @@
 
 .cb-quiz-solve-body {
   flex: 1;
-  min-height: 0; 
+  min-height: 0;
   display: flex;
 }
 
 .cb-quiz-solve-card {
   flex: 1;
-  min-height: 0; 
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-radius: 28px;
@@ -1988,7 +1965,7 @@
 
 .cb-quiz-solve-scroll {
   flex: 1;
-  min-height: 0; 
+  min-height: 0;
   overflow-y: auto;
   padding-right: 8px;
 }
@@ -2019,7 +1996,7 @@
   border-radius: 4px;
 }
 
-.cb-quiz-solve-option + .cb-quiz-solve-option {
+.cb-quiz-solve-option+.cb-quiz-solve-option {
   margin-top: 2px;
 }
 
@@ -2226,7 +2203,7 @@
   padding: 6px 0;
 }
 
-.cb-quiz-note-row + .cb-quiz-note-row {
+.cb-quiz-note-row+.cb-quiz-note-row {
   border-top: 1px solid #f3f4f6;
 }
 
@@ -2324,8 +2301,8 @@
 
 .cb-policy-view {
   box-sizing: border-box;
-  width: 310px; 
-  margin: 16px auto 24px;  
+  width: 310px;
+  margin: 16px auto 24px;
   padding: 0 0 8px 0;
   display: flex;
   flex-direction: column;
@@ -2575,7 +2552,7 @@
 
 .cb-report-body {
   margin-top: 4px;
-  padding-left: 32px; 
+  padding-left: 32px;
   padding-right: 32px;
 }
 
@@ -2608,7 +2585,7 @@
   line-height: 1.5;
   border-bottom: 1px solid #e5e7eb;
   padding: 4px 0 8px;
-  padding-left: 20px; 
+  padding-left: 20px;
 }
 
 /* 상세 내용 입력 영역 – 1줄 말풍선 느낌 */
@@ -2638,7 +2615,7 @@
   color: #111827;
   line-height: 1.5;
   max-height: 19px;
-  overflow-y: auto; 
+  overflow-y: auto;
   scrollbar-width: none;
 }
 
@@ -2733,7 +2710,6 @@
 
 /* =========================
    관리자 대시보드 (SYSTEM ADMIN)
-   - 라이트 톤 점수판 / Quiz 카드 스타일
    ========================= */
 
 .cb-admin-overlay {
@@ -2751,7 +2727,8 @@
 
 /* 플로팅 컨테이너 – 위치/크기는 TS쪽 inline style에서 제어 */
 .cb-admin-panel-container {
-  pointer-events: none; /* 패널 밖 클릭 통과 */
+  pointer-events: none;
+  /* 패널 밖 클릭 통과 */
   display: flex;
   align-items: flex-start;
   justify-content: flex-start;
@@ -2793,7 +2770,6 @@
 /* ===== 헤더 영역 ===== */
 .cb-admin-header {
   padding: 18px 24px 12px 32px;
-  border-bottom: 1px solid #e5e7eb;
   background-color: #ffffff;
   display: flex;
   align-items: flex-start;
@@ -2845,7 +2821,7 @@
 
 /* 현재 탭/필터 컨텍스트 영역 */
 .cb-admin-header-context {
-  margin-top: 6px;
+  margin-top: -5px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2855,12 +2831,12 @@
 .cb-admin-context-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  border: 1px solid #e5e7eb;
-  background-color: #f3f4f6;
-  font-size: 10px;
+  gap: 4px;
+  padding: 0;
+  border-radius: 0;
+  border: none;
+  background-color: transparent;
+  font-size: 11px;
   color: #6b7280;
 }
 
@@ -2908,7 +2884,7 @@
 /* ===== 탭 네비게이션 ===== */
 .cb-admin-tabs {
   padding: 8px 24px 8px 32px;
-  border-bottom: 1px solid #e5e7eb;
+  /* 🔥 탭바 아래 구분선 제거: border-bottom 삭제 */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2919,7 +2895,7 @@
   position: relative;
   border: 1px solid transparent;
   background: #f9fafb;
-  padding: 7px 12px 9px;
+  padding: 2px 12px 2px;
   border-radius: 999px;
   font-size: 12px;
   color: #6b7280;
@@ -2943,7 +2919,7 @@
 }
 
 .cb-admin-tab-sub {
-  font-size: 10px;
+  font-size: 8px;
   color: #9ca3af;
 }
 
@@ -2971,7 +2947,8 @@
   padding: 16px 24px 20px 32px;
   overflow-y: auto;
   box-sizing: border-box;
-  background-color: #f5f5f5;
+  /* 🔥 메인 영역 배경색을 흰색으로 변경 */
+  background-color: #ffffff;
 }
 
 .cb-admin-tab-panel {
@@ -3116,25 +3093,15 @@
 .cb-admin-kpi-card {
   position: relative;
   border-radius: 18px;
-  padding: 14px 16px;
+  padding: 8px 16px 14px;
   background-color: #ffffff;
   border: 1px solid #d4d4d8;
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
 }
 
-/* 상단 얇은 선 (점수판 카드의 위쪽 라인) */
-.cb-admin-kpi-card::before {
-  content: "";
-  position: absolute;
-  inset-inline: 12px;
-  top: 12px;
-  height: 1px;
-  background-color: #e5e7eb;
-}
-
 /* KPI 헤더 – 점 + 라벨 */
 .cb-admin-kpi-header {
-  margin-top: 8px;
+  margin-top: 2px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3179,16 +3146,8 @@
   background-color: #ffffff;
   border: 1px solid #d4d4d8;
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
-}
-
-.cb-admin-section::before {
-  content: "";
-  position: absolute;
-  left: 16px;
-  top: 12px;
-  width: 28px;
-  height: 1px;
-  background-color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
 }
 
 .cb-admin-section-header {
@@ -3211,28 +3170,85 @@
   color: #9ca3af;
 }
 
+/* ===== Metrics 전용 섹션 ===== */
+
+/* 섹션 자체를 column flex 로 바꿔서 마지막 블록(차트 카드)을 아래까지 늘림 */
+.cb-admin-section--metric {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 마지막 자식(PII 감지 추이 / 응답 시간 분포 박스)을 남는 영역 전부 차지하게 */
+.cb-admin-section--metric> :last-child {
+  margin-top: 8px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 차트 카드 안에서는 마지막 줄(‘기간 기준: 최근 30일’, 모델별 평균 응답 시간 등)을 맨 아래로 붙이기 */
+.cb-admin-section--metric> :last-child> :last-child {
+  margin-top: auto;
+}
+
+/* 질문 수 추이 – 상단 요약 칩 */
+.cb-admin-trend-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cb-admin-trend-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  font-size: 11px;
+}
+
+.cb-admin-trend-label {
+  color: #6b7280;
+}
+
+.cb-admin-trend-value {
+  color: #111827;
+  font-weight: 600;
+}
+
 /* ===== 바 차트 (상단 점수판 바 스타일) ===== */
 .cb-admin-bar-chart {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  flex: 1;
+  justify-content: space-evenly;
+  padding: 6px 0 10px;
 }
 
 .cb-admin-bar-row {
   display: grid;
-  grid-template-columns: 70px minmax(0, 1fr) auto;
+  grid-template-columns: 140px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
 }
 
 .cb-admin-bar-label {
-  color: #6b7280;
+  color: #4b5563;
+  font-weight: 500;
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.4;
 }
 
 .cb-admin-bar-track {
   position: relative;
-  height: 8px;
+  height: 10px;
   border-radius: 999px;
   background-color: #e5e7eb;
   overflow: hidden;
@@ -3241,11 +3257,11 @@
 .cb-admin-bar-fill {
   height: 100%;
   border-radius: 999px;
-  background-color: #111827; /* 점수판 progress bar처럼 진한 바 */
+  background-color: #111827;
 }
 
 .cb-admin-bar-value {
-  font-size: 11px;
+  font-size: 12px;
   color: #4b5563;
   white-space: nowrap;
 }
@@ -3327,6 +3343,9 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 188px;
+  /* 숫자는 보면서 조금씩 조정해도 됨 */
+  overflow-y: auto;
 }
 
 .cb-admin-course-item {
@@ -3455,11 +3474,169 @@
   color: #6b7280;
 }
 
+/* ===== 지표 – 그래프 카드 ===== */
+
+.cb-admin-metric-chart {
+  margin-top: 8px;
+  padding: 10px 12px 10px;
+  border-radius: 14px;
+  background-color: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11px;
+  color: #4b5563;
+}
+
+.cb-admin-metric-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cb-admin-metric-chart-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cb-admin-metric-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #6b7280;
+}
+
+.cb-admin-metric-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.cb-admin-metric-legend-dot--input {
+  background-color: #111827;
+}
+
+.cb-admin-metric-legend-dot--output {
+  background-color: #6b7280;
+}
+
+.cb-admin-metric-legend-separator {
+  color: #d1d5db;
+  margin: 0 2px;
+}
+
+.cb-admin-metric-chart-caption {
+  font-size: 10px;
+  color: #9ca3af;
+}
+
+.cb-admin-metric-chart-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-metric-chart-body--pii {
+  justify-content: space-between;
+}
+
+.cb-admin-metric-chart-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.cb-admin-metric-chart-row-label {
+  color: #6b7280;
+}
+
+.cb-admin-metric-chart-row-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cb-admin-metric-chart-track {
+  height: 8px;
+  border-radius: 999px;
+  background-color: #e5e7eb;
+  overflow: hidden;
+}
+
+.cb-admin-metric-chart-bar {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.cb-admin-metric-chart-bar--input {
+  background-color: #111827;
+}
+
+.cb-admin-metric-chart-bar--output {
+  background-color: #6b7280;
+}
+
+.cb-admin-metric-chart-bar--latency {
+  background-color: #111827;
+}
+
+.cb-admin-metric-chart-row-value {
+  text-align: right;
+  white-space: nowrap;
+  color: #4b5563;
+}
+
+/* 푸터 – 모델별 평균 응답 시간, 기간 라벨 등 */
+.cb-admin-metric-chart-footer {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cb-admin-metric-chart-footer-label {
+  font-size: 10px;
+  color: #6b7280;
+}
+
+/* 모델별 평균 응답 시간 pill */
+.cb-admin-metric-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cb-admin-metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #ffffff;
+  font-size: 10px;
+  color: #374151;
+}
+
+.cb-admin-metric-pill-value {
+  font-weight: 600;
+  color: #111827;
+}
+
 /* ===== 계정/롤 관리 레이아웃 (카드 3개) ===== */
 .cb-admin-account-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
   gap: 10px;
+  align-items: stretch;
 }
 
 .cb-admin-account-card {
@@ -3468,6 +3645,9 @@
   background-color: #ffffff;
   border: 1px solid #d4d4d8;
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .cb-admin-account-title {
@@ -3475,6 +3655,69 @@
   font-size: 13px;
   font-weight: 600;
   color: #111827;
+  flex-shrink: 0;
+}
+
+/* 선택한 사용자 요약 박스 */
+.cb-admin-account-selected {
+  margin: 4px 0 10px;
+  padding: 10px 10px 8px;
+  border-radius: 12px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+}
+
+/* 이름 / 사번 / 부서 라인 */
+.cb-admin-account-selected-main {
+  display: flex;
+  flex-wrap: wrap; 
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+}
+
+.cb-admin-account-selected-name {
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.cb-admin-account-selected-meta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* 역할(Role) 칩 리스트 */
+.cb-admin-account-selected-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ROLE 칩 기본 스타일
+   - span 에 className 이 없어도 적용되게 container 기준으로도 한 번 더 잡아줌 */
+.cb-admin-role-chip,
+.cb-admin-account-selected-roles span {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #ffffff;
+  font-size: 11px;
+  color: #374151;
+  white-space: nowrap;
+}
+
+/* 기준 역할(예: EMPLOYEE (기본))을 강조하고 싶을 때 */
+.cb-admin-role-chip--primary {
+  background-color: #111827;
+  border-color: #111827;
+  color: #f9fafb;
 }
 
 /* 사용자 기본 정보 */
@@ -3482,7 +3725,8 @@
   margin: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 10px;
+  column-gap: 14px;
+  row-gap: 6px;
   font-size: 11px;
 }
 
@@ -3502,30 +3746,39 @@
   color: #111827;
 }
 
-/* 역할 체크박스 */
+/* 역할 체크 박스 영역 스타일 */
 .cb-admin-role-checkboxes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  margin-bottom: 4px;
 }
 
 .cb-admin-role-checkboxes label {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-/* 필드셋/라디오 */
-.cb-admin-fieldset {
-  margin: 8px 0 0;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 8px 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
   background-color: #f9fafb;
+  font-size: 12px;
 }
 
-.cb-admin-fieldset legend {
+.cb-admin-role-checkboxes input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
+/* 필드셋 / 라디오 그룹 기본 스타일 */
+.cb-admin-fieldset {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+
+.cb-admin-fieldset>legend {
   padding: 0 4px;
   font-size: 11px;
   color: #6b7280;
@@ -3534,46 +3787,50 @@
 .cb-admin-radio-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
-  font-size: 11px;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .cb-admin-radio-group label {
   display: flex;
   align-items: center;
   gap: 6px;
+  font-size: 12px;
 }
 
 /* 힌트/경고 문구 */
 .cb-admin-hint {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   font-size: 11px;
   color: #6b7280;
 }
 
 .cb-admin-hint--warning {
-  color: #b45309;
+  color: #b91c1c;
 }
 
-/* 부서 스코프 선택 */
+/* 영상 제작 가능 부서 선택 영역 */
 .cb-admin-scope-grid {
-  margin-top: 6px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 8px;
-  font-size: 11px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .cb-admin-scope-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background-color: #f9fafb;
 }
 
 /* 액션 버튼 (오답노트 버튼 느낌) */
 .cb-admin-account-actions {
-  margin-top: 10px;
+  margin-top: auto;
+  padding-top: 12px; 
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -3621,6 +3878,196 @@
   transform: translateY(1px);
 }
 
+/* 왼쪽: 사용자 검색 / 선택 카드 전용 레이아웃 */
+.cb-admin-account-layout>.cb-admin-account-card:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 안내 문구(설명 텍스트) 예쁘게 정리 */
+.cb-admin-account-layout>.cb-admin-account-card:first-child p,
+.cb-admin-account-layout>.cb-admin-account-card:first-child .cb-admin-account-desc {
+  margin: 2px 0 10px;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+/* 검색 인풋 + 부서 셀렉트 줄 */
+.cb-admin-account-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) 0.9fr 0.9fr; 
+  gap: 8px;
+  align-items: center;
+  max-width: 640px; 
+  margin-bottom: 12px;
+}
+
+/* 검색 input, select 공통 */
+.cb-admin-input,
+.cb-admin-select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  background-color: #ffffff;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.cb-admin-input::placeholder {
+  color: #9ca3af;
+}
+
+/* 역할(전체 역할 / ROLE 필터) 줄 */
+.cb-admin-account-role-row {
+  margin-top: 4px;
+}
+
+/* 검색/필터 인풋 공통 스타일 (이름/사번 검색 + 부서/역할 셀렉트) */
+.cb-admin-account-layout>.cb-admin-account-card:first-child input[type="text"],
+.cb-admin-account-layout>.cb-admin-account-card:first-child select {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  background-color: #f9fafb;
+  font-size: 12px;
+  color: #111827;
+  outline: none;
+  box-sizing: border-box;
+}
+
+/* 검색 인풋은 가로로 넓게 */
+.cb-admin-account-layout>.cb-admin-account-card:first-child input[type="text"] {
+  flex: 1;
+}
+
+.cb-admin-account-layout>.cb-admin-account-card:first-child select {
+  min-width: 120px;
+}
+
+/* 포커스 시 하이라이트 */
+.cb-admin-account-layout>.cb-admin-account-card:first-child input[type="text"]:focus,
+.cb-admin-account-layout>.cb-admin-account-card:first-child select:focus {
+  border-color: #111827;
+  box-shadow: 0 0 0 1px #111827;
+}
+
+.cb-admin-account-layout>.cb-admin-account-card:first-child input[type="text"]::placeholder {
+  color: #9ca3af;
+}
+
+/* 역할 셀렉트는 한 줄 전체 사용 */
+.cb-admin-account-role-row select {
+  width: 100%;
+}
+
+/* ========== 사용자 목록 ========== */
+
+/* ul에 class 안 달려 있어도 적용되도록 두 가지 모두 잡아줌 */
+.cb-admin-account-user-list,
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul {
+  margin: -5px 0 0;
+  padding: 4px 0 0;
+  list-style: none;
+  border-top: none;
+}
+
+/* 각 사용자 아이템 */
+.cb-admin-account-user-item,
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul li {
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid transparent;
+  background-color: transparent;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.08s ease;
+}
+
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul li+li {
+  margin-top: 4px;
+}
+
+/* 첫 줄: 이름/사번/부서 */
+.cb-admin-account-user-item-main {
+  font-weight: 500;
+  color: #111827;
+}
+
+/* 둘째 줄: ROLE 표기 */
+.cb-admin-account-user-item-meta {
+  color: #6b7280;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px; 
+  margin-top: 3px; 
+}
+
+.cb-admin-account-layout>.cb-admin-account-card:first-child .cb-admin-role-chip {
+  margin-right: 4px;
+  margin-bottom: 3px;
+}
+
+/* hover / 선택 스타일 */
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul li:hover:not(.is-active) {
+  background-color: #f3f4f6;
+}
+
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul li.is-active,
+.cb-admin-account-user-item.is-active {
+  background-color: #ffffff;
+  border-color: #111827;
+  box-shadow: 0 0 0 1px #111827;
+  color: #111827;
+  transform: translateY(-1px);
+}
+
+/* 선택된 줄 안에서 이름/메타 컬러 조금만 정리 */
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul li.is-active .cb-admin-account-user-item-main,
+.cb-admin-account-user-item.is-active .cb-admin-account-user-item-main {
+  color: #111827;
+}
+
+.cb-admin-account-layout>.cb-admin-account-card:first-child ul li.is-active .cb-admin-account-user-item-meta,
+.cb-admin-account-user-item.is-active .cb-admin-account-user-item-meta {
+  color: #1f2937;
+}
+
+/* 계정/롤 관리 - 사용자 검색 결과 없음 상태 */
+.cb-admin-account-empty {
+  padding: 20px 12px;
+  margin-top: 4px;
+  border-radius: 12px;
+
+  text-align: center;
+  font-size: 13px;
+  color: #9ca3af;
+
+  background-color: #f9fafb;
+  border: 1px dashed #e5e7eb;
+
+  /* 살짝 spacing */
+  letter-spacing: -0.01em;
+}
+
+/* 선택 영역 안에서만 조금 더 정중하게 보이도록 */
+.cb-admin-account-user-list .cb-admin-account-empty {
+  margin: 8px 8px 6px;
+}
+
 /* ===== 반응형 ===== */
 @media (max-width: 960px) {
   .cb-admin-kpi-row {
@@ -3653,4 +4100,160 @@
   .cb-admin-kpi-row {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .cb-admin-account-layout>.cb-admin-account-card:first-child select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+/* 로그 필터 상단 줄 정렬 */
+.cb-admin-log-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.cb-admin-tab-panel--logs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.cb-admin-section--logs-drilldown {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-top: -12px;
+}
+
+.cb-admin-table-wrapper--logs {
+  flex: 1;
+  min-height: 260px;
+  /* 필요하면 이 숫자로 카드 높이 미세 조정 */
+  max-height: none;
+  overflow-y: auto;
+}
+
+/* 왼쪽 멀티 셀렉트 묶음 */
+.cb-admin-log-filter-selects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 1 1 auto;
+}
+
+.cb-admin-filter-control select[multiple] {
+  min-width: 170px;
+  height: auto;
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+/* 토글 버튼 그룹을 오른쪽으로 밀기 */
+.cb-admin-log-flag-group {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* 토글 공통 스타일 */
+.cb-admin-flag-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  font-size: 12px;
+  font-weight: 500;
+  color: #4b5563;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease;
+}
+
+/* 실제 체크박스는 숨기기 */
+.cb-admin-flag-toggle input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 동그란 표시 */
+.cb-admin-flag-toggle-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid #d4d4d8;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.04);
+  flex-shrink: 0;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+/* 활성 상태 */
+.cb-admin-flag-toggle.is-active {
+  background-color: #111111;
+  border-color: #111111;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.25);
+}
+
+.cb-admin-flag-toggle.is-active .cb-admin-flag-toggle-knob {
+  border-color: #ffffff;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4);
+}
+
+/* 라벨 텍스트 */
+.cb-admin-flag-toggle-label {
+  line-height: 1;
+}
+
+/* ===== 계정/롤 관리 탭 – 토스트 메시지 ===== */
+.cb-admin-toast {
+  margin-top: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+
+.cb-admin-toast--info {
+  background-color: #f3f4f6; 
+  border-color: #e5e7eb; 
+  color: #111827;    
+}
+
+.cb-admin-toast--success {
+  background-color: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #111827;
+}
+
+.cb-admin-toast--warning {
+  background-color: #fffbeb;
+  border-color: #facc15;
+  color: #92400e;
+}
+
+.cb-admin-toast--error {
+  background-color: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
 }

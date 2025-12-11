@@ -11,6 +11,7 @@ import type {
   PeriodPreset,
   DepartmentOption,
 } from "./adminFilterTypes";
+import AdminRagGapView from "./AdminRagGapView";
 
 /**
  * 관리자 대시보드 탭 ID
@@ -142,6 +143,34 @@ interface ModelLatency {
   id: string;
   modelLabel: string;
   avgMs: number; // 평균 응답 시간(ms)
+}
+
+type PiiRiskLevel = "none" | "warning" | "high";
+
+interface PiiReport {
+  riskLevel: PiiRiskLevel;
+  /**
+   * 요약 문장 블록 (문단 단위)
+   */
+  summaryLines: string[];
+  /**
+   * 탐지된 개인정보 항목 리스트 (이미 포맷팅된 문장)
+   */
+  detectedItems: string[];
+  /**
+   * 권장 조치 리스트
+   */
+  recommendedActions: string[];
+  /**
+   * 마스킹된 텍스트 (있을 때만 표시)
+   */
+  maskedText?: string;
+  /**
+   * 하단 메타 정보
+   */
+  modelName: string;
+  analyzedAt: string;
+  traceId: string;
 }
 
 /**
@@ -963,6 +992,215 @@ const LOG_LIST_MOCK: LogListItem[] = [
   },
 ];
 
+const PII_REPORT_NONE: PiiReport = {
+  riskLevel: "none",
+  summaryLines: [
+    "현재 선택된 로그 기준으로 이름, 주민등록번호, 여권번호, 계좌번호, 휴대전화, 이메일, 주소, 사번 등 주요 개인정보가 탐지되지 않았습니다.",
+    "동일한 조건으로 운영을 지속해도 개인정보 관점에서 즉각적인 위험 신호는 보이지 않습니다.",
+  ],
+  detectedItems: [
+    "탐지된 주민등록번호 / 여권번호 / 운전면허번호: 0건",
+    "탐지된 계좌번호 / 카드번호: 0건",
+    "탐지된 연락처(휴대전화, 이메일, 주소): 0건",
+    "탐지된 사번 / 고객번호 / 내부 식별자: 0건",
+  ],
+  recommendedActions: [
+    "다만, 문서 내에 서버명, 내부 시스템 URL, 사내 IP, 회의 링크 등 회사 내부 인프라 정보가 포함되어 있다면 외부 공유 시에는 별도의 보안 검토를 받는 것을 권장합니다.",
+  ],
+  maskedText: undefined,
+  modelName: "GLiNER-PII v1.0",
+  analyzedAt: "2025-12-11 10:32:18",
+  traceId: "pii-trace-demo-none",
+};
+
+const PII_REPORT_WARNING: PiiReport = {
+  riskLevel: "warning",
+  summaryLines: [
+    "현재 선택된 로그 집합에서 이름, 연락처, 이메일, 사번 등 일반 개인정보가 다수 포함된 요청·응답이 탐지되었습니다.",
+    "내부 참고용으로 사용하는 것은 가능하지만, 외부 공유나 교육 자료로 활용하기 전에는 반드시 마스킹 또는 삭제가 필요합니다.",
+  ],
+  detectedItems: [
+    "이름·별칭: 5개",
+    "휴대전화번호: 3개",
+    "이메일 주소(회사/개인 포함): 2개",
+    "사번·직원ID·내부 계정명: 4개",
+  ],
+  recommendedActions: [
+    "모든 이름, 전화번호, 이메일 주소, 사번은 각각 [이름], [휴대전화번호], [이메일], [사번]과 같이 가상의 토큰으로 대체해 주세요.",
+    "실제 고객·직원을 특정할 수 있는 내부 계정명, 고객번호, 티켓ID 등은 교육/매뉴얼 문서에는 등장하지 않도록 샘플 ID로 치환하는 것을 권장합니다.",
+    "외부 파트너나 고객에게 전달하는 자료라면, 본문에 실제 사례가 아닌 가상의 예시 데이터만 남도록 최종 검수 과정을 거쳐 주세요.",
+  ],
+  maskedText: [
+    "[이름]님(사번 [사번])의 요청에 따라 [날짜]에 처리된 상담 내용입니다.",
+    "연락처는 [휴대전화번호], 이메일은 [이메일]로 등록되어 있으며, 추가 문의는 내부 포털의 문의 게시판을 통해 접수해 주세요.",
+  ].join("\n"),
+  modelName: "GLiNER-PII v1.0",
+  analyzedAt: "2025-12-11 10:32:18",
+  traceId: "pii-trace-demo-warning",
+};
+
+const PII_REPORT_HIGH: PiiReport = {
+  riskLevel: "high",
+  summaryLines: [
+    "현재 선택된 로그들 중 일부에서 주민등록번호, 계좌번호, 카드번호 등 고위험 개인정보가 포함된 요청·응답이 탐지되었습니다.",
+    "이 상태로 저장·공유하거나 교육 자료에 포함하는 것은 회사 내부 규정 및 개인정보보호법을 위반할 가능성이 매우 높습니다.",
+  ],
+  detectedItems: [
+    "주민등록번호: 1개",
+    "계좌번호(급여·정산 계좌 포함): 1개",
+    "신용/체크카드 번호(PAN): 2개",
+    "고객ID·내부 식별자(계약번호, 청구ID 등): 3개",
+    "주소(자택/직장 주소): 2개",
+    "생년월일(주민번호 외 별도 표기 포함): 2개",
+  ],
+  recommendedActions: [
+    "원본 텍스트를 즉시 보안 구역(암호화된 사내 저장소)으로 옮기고, 개인 PC, 메일함, 메신저, 공유 드라이브 등에 남아 있는 동일 내용의 복사본은 모두 삭제해 주세요.",
+    "주민등록번호, 계좌번호, 카드번호, 생년월일 등 고위험 정보는 전부 [주민등록번호], [계좌번호], [카드번호], [생년월일]과 같이 완전히 마스킹하거나, 필요 시 해당 문장을 통째로 삭제해야 합니다.",
+    "이 내용이 이미 외부로 전송·공유되었을 가능성이 있다면, 즉시 보안 담당자(신고 관리자)에게 Incident 신고를 접수하고, 수신 대상·전송 채널을 함께 공유해 후속 조치를 진행해 주세요.",
+    "실제 고객·직원 사례가 필요한 교육 자료라면, 유사한 패턴의 더미 데이터 세트를 별도로 생성해 활용하고, 실데이터가 포함된 원본 텍스트는 교육 환경에 업로드하지 않도록 관리해 주세요.",
+  ],
+  maskedText: [
+    "[이름] 고객님의 주민등록번호는 [주민등록번호]이며 급여 이체 계좌는 [계좌번호]로 등록되어 있습니다.",
+    "결제에 사용된 카드번호는 [카드번호]로, 청구지는 [주소]로 설정되어 있으며, 생년월일은 [생년월일]로 관리됩니다.",
+  ].join("\n"),
+  modelName: "GLiNER-PII v1.0",
+  analyzedAt: "2025-12-11 10:32:18",
+  traceId: "pii-trace-demo-high",
+};
+
+interface PiiReportCardProps {
+  report: PiiReport;
+  /**
+   * 카드 상단에 "어떤 기간/부서/조건 기준 요약인지" 한 줄로 보여줄 문장
+   */
+  contextSummary: string;
+}
+
+const PiiReportCard: React.FC<PiiReportCardProps> = ({
+  report,
+  contextSummary,
+}) => {
+  const [showMasked, setShowMasked] = useState(false);
+
+  const hasMaskedText = !!report.maskedText && report.riskLevel !== "none";
+
+  let badgeLabel = "";
+  let badgeClass = "";
+
+  switch (report.riskLevel) {
+    case "none":
+      badgeLabel = "위험 없음";
+      badgeClass = "cb-admin-pii-badge--safe";
+      break;
+    case "warning":
+      badgeLabel = "주의";
+      badgeClass = "cb-admin-pii-badge--warning";
+      break;
+    case "high":
+      badgeLabel = "고위험";
+      badgeClass = "cb-admin-pii-badge--danger";
+      break;
+  }
+
+  return (
+    <section className="cb-admin-section cb-admin-section--pii-report">
+      {/* 카드 제목 줄 */}
+      <div className="cb-admin-pii-header">
+        <div className="cb-admin-pii-header-main">
+          <h3 className="cb-admin-section-title">PII 점검 결과</h3>
+
+          {/* 어떤 기간/부서/조건 기준 요약인지 한 줄로 표시 */}
+          <span className="cb-admin-section-sub">
+            {contextSummary}
+          </span>
+          <span className="cb-admin-section-sub cb-admin-section-sub--muted">
+            위 조건에 해당하는 요청·응답 로그를 기준으로 개인정보 탐지 위험도를
+            요약합니다.
+          </span>
+        </div>
+
+        <div className="cb-admin-pii-header-right">
+          <span className={`cb-admin-pii-badge ${badgeClass}`}>
+            {badgeLabel}
+          </span>
+        </div>
+      </div>
+
+      {/* 요약 문장 블록 */}
+      <div className="cb-admin-pii-block">
+        {report.summaryLines.map((line, idx) => (
+          <p key={idx} className="cb-admin-pii-summary-line">
+            {line}
+          </p>
+        ))}
+      </div>
+
+      {/* 탐지된 항목 리스트 */}
+      <div className="cb-admin-pii-block">
+        <h4 className="cb-admin-pii-block-title">탐지된 개인정보 항목</h4>
+        {report.detectedItems.length === 0 ? (
+          <p className="cb-admin-pii-empty">탐지된 개인정보 항목 없음.</p>
+        ) : (
+          <ul className="cb-admin-pii-list">
+            {report.detectedItems.map((item, idx) => (
+              <li key={idx}>{item}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* 권장 조치 */}
+      <div className="cb-admin-pii-block">
+        <h4 className="cb-admin-pii-block-title">권장 조치</h4>
+        <ol className="cb-admin-pii-actions">
+          {report.recommendedActions.map((item, idx) => (
+            <li key={idx}>{item}</li>
+          ))}
+        </ol>
+      </div>
+
+      {/* 마스킹된 텍스트 보기 토글 */}
+      <div className="cb-admin-pii-block cb-admin-pii-block--mask">
+        <button
+          type="button"
+          className="cb-admin-ghost-btn cb-admin-pii-mask-toggle"
+          disabled={!hasMaskedText}
+          onClick={() => hasMaskedText && setShowMasked((prev) => !prev)}
+        >
+          {showMasked ? "마스킹된 텍스트 숨기기" : "마스킹된 텍스트 보기"}
+        </button>
+
+        {!hasMaskedText && (
+          <p className="cb-admin-pii-hint">
+            탐지된 개인정보가 없거나, 아직 마스킹된 텍스트가 생성되지
+            않았습니다.
+          </p>
+        )}
+
+        {hasMaskedText && showMasked && (
+          <div className="cb-admin-pii-masked-text">
+            <pre>{report.maskedText}</pre>
+          </div>
+        )}
+      </div>
+
+      {/* 카드 하단 메타 정보 */}
+      <div className="cb-admin-pii-meta">
+        <span>분석 모델: {report.modelName}</span>
+        <span>분석 시간: {report.analyzedAt}</span>
+        <span>분석 ID: {report.traceId}</span>
+      </div>
+
+      {/* AI 기반 자동 탐지 디스클레이머 (푸터용 작은 문구) */}
+      <p className="cb-admin-pii-disclaimer">
+        ※ 로그 내 개인정보 여부는 AI 기반 자동 탐지 결과이며, 일부 누락이나
+        오탐이 있을 수 있습니다. 민감도가 높은 사례는 반드시 보안 담당자의
+        추가 검토를 거쳐 주세요.
+      </p>
+    </section>
+  );
+};
+
 const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   onClose,
   anchor,
@@ -1003,6 +1241,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [logModelFilter, setLogModelFilter] = useState<string>("ALL");
   const [logOnlyError, setLogOnlyError] = useState<boolean>(false);
   const [logHasPiiOnly, setLogHasPiiOnly] = useState<boolean>(false);
+  const [showRagGapView, setShowRagGapView] = useState<boolean>(false);
 
   /**
    * === 패널 크기 + 위치 (EduPanel / QuizPanel 과 동일 패턴) ===
@@ -2760,11 +2999,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       if (logOnlyError && !item.errorCode) {
         return false;
       }
-      if (
-        logHasPiiOnly &&
-        !item.hasPiiInput &&
-        !item.hasPiiOutput
-      ) {
+      if (logHasPiiOnly && !item.hasPiiInput && !item.hasPiiOutput) {
         return false;
       }
       return true;
@@ -2772,9 +3007,89 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
     const totalCount = filteredItems.length;
     const errorCount = filteredItems.filter((i) => i.errorCode).length;
+
+    // 입력/출력 PII를 각각 분리 집계
+    const piiInputCount = filteredItems.filter((i) => i.hasPiiInput).length;
+    const piiOutputCount = filteredItems.filter((i) => i.hasPiiOutput).length;
     const piiCount = filteredItems.filter(
       (i) => i.hasPiiInput || i.hasPiiOutput,
     ).length;
+
+    const errorRatioInLogs =
+      totalCount > 0 ? (errorCount / totalCount) * 100 : 0;
+    const piiRatioInLogs =
+      totalCount > 0 ? (piiCount / totalCount) * 100 : 0;
+
+    // 전체 로그 대비 "입력/출력 PII 비율" 계산
+    const inputRatioInLogs =
+      totalCount > 0 ? (piiInputCount / totalCount) * 100 : 0;
+    const outputRatioInLogs =
+      totalCount > 0 ? (piiOutputCount / totalCount) * 100 : 0;
+
+    // PII 리스크 레벨 산정 로직 (입력/출력 PII 비율까지 고려)
+    let riskLevel: PiiRiskLevel = "none";
+    if (totalCount > 0 && piiCount > 0) {
+      // 1) 출력 PII가 일정 비율 이상이면 고위험
+      if (outputRatioInLogs >= 5 || piiOutputCount >= 3) {
+        riskLevel = "high";
+      }
+      // 2) 출력 PII는 없지만, 입력 PII 비율/건수가 과도하게 높으면 고위험
+      else if (
+        outputRatioInLogs === 0 &&
+        (inputRatioInLogs >= 20 || piiInputCount >= 15)
+      ) {
+        riskLevel = "high";
+      }
+      // 3) 그 외에는 경고 수준
+      else {
+        riskLevel = "warning";
+      }
+    }
+
+    // 리스크 레벨에 따라 카드 시나리오 선택
+    let activePiiReport: PiiReport;
+    switch (riskLevel) {
+      case "none":
+        activePiiReport = PII_REPORT_NONE;
+        break;
+      case "high":
+        activePiiReport = PII_REPORT_HIGH;
+        break;
+      case "warning":
+      default:
+        activePiiReport = PII_REPORT_WARNING;
+        break;
+    }
+
+    // PII 리포트 카드 상단에 표시할 컨텍스트 문장 구성
+    const periodLabel =
+      PERIOD_OPTIONS.find((p) => p.id === period)?.label ?? "전체 기간";
+    const logDomainLabel =
+      LOG_DOMAIN_OPTIONS.find((d) => d.id === logDomainFilter)?.label ??
+      "전체 도메인";
+    const logRouteLabel =
+      LOG_ROUTE_OPTIONS.find((r) => r.id === logRouteFilter)?.label ??
+      "전체 라우트";
+    const logModelLabel =
+      LOG_MODEL_OPTIONS.find((m) => m.id === logModelFilter)?.label ??
+      "전체 모델";
+
+    const contextParts: string[] = [
+      `기간 ${periodLabel}`,
+      `부서 ${selectedDeptLabel}`,
+      `도메인 ${logDomainLabel}`,
+      `라우트 ${logRouteLabel}`,
+      `모델 ${logModelLabel}`,
+    ];
+
+    if (logOnlyError) {
+      contextParts.push("에러 로그만");
+    }
+    if (logHasPiiOnly) {
+      contextParts.push("PII 포함 로그만");
+    }
+
+    const piiContextSummary = contextParts.join(" · ");
 
     return (
       <div className="cb-admin-tab-panel cb-admin-tab-panel--logs">
@@ -2790,106 +3105,139 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         />
 
         <section className="cb-admin-section cb-admin-section--logs-drilldown">
-          <div className="cb-admin-section-header">
-            <h3 className="cb-admin-section-title">세부 로그 Drilldown</h3>
-            <span className="cb-admin-section-sub">
-              시간 / 도메인 / 라우트 / 모델 / PII / 에러 기준으로 필터링해서 턴
-              단위 로그를 확인합니다.
-            </span>
+          {/* Logs 헤더 + RAG 갭 분석 고스트 버튼 */}
+          <div className="cb-admin-section-header cb-admin-section-header--logs">
+            <div className="cb-admin-section-header-main">
+              <h3 className="cb-admin-section-title">
+                {showRagGapView ? "RAG 갭 분석" : "세부 로그 Drilldown"}
+              </h3>
+              <span className="cb-admin-section-sub">
+                {showRagGapView
+                  ? "RAG 검색 실패·갭 후보를 모아서 어떤 규정/교육 문서가 추가로 필요할지 확인합니다."
+                  : "시간 / 도메인 / 라우트 / 모델 / PII / 에러 기준으로 필터링해서 턴 단위 로그를 확인합니다."}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="cb-admin-ghost-btn"
+              onClick={() => setShowRagGapView((prev) => !prev)}
+            >
+              {showRagGapView ? "전체 로그 보기" : "RAG 갭 분석"}
+            </button>
           </div>
 
-          {/* 스펙 적용: 선택된 필터 기준 로그 요약 배지 */}
-          <div className="cb-admin-trend-summary">
-            <div className="cb-admin-trend-pill">
-              <span className="cb-admin-trend-label">총 로그</span>
-              <span className="cb-admin-trend-value">
-                {totalCount.toLocaleString()}건
-              </span>
-            </div>
-            <div className="cb-admin-trend-pill">
-              <span className="cb-admin-trend-label">에러 로그</span>
-              <span className="cb-admin-trend-value">
-                {errorCount.toLocaleString()}건
-              </span>
-            </div>
-            <div className="cb-admin-trend-pill">
-              <span className="cb-admin-trend-label">PII 포함</span>
-              <span className="cb-admin-trend-value">
-                {piiCount.toLocaleString()}건
-              </span>
-            </div>
-          </div>
+          {showRagGapView ? (
+            // RAG 갭 분석 뷰
+            <AdminRagGapView filterValue={filterValue} />
+          ) : (
+            // 세부 로그 Drilldown + PII 점검 리포트 카드
+            <>
+              {/* PII 점검 리포트 카드 */}
+              <PiiReportCard
+                report={activePiiReport}
+                contextSummary={piiContextSummary}
+              />
 
-          <div className="cb-admin-table-wrapper cb-admin-table-wrapper--logs">
-            <table className="cb-admin-table cb-admin-table--logs">
-              <thead>
-                <tr>
-                  <th>시간</th>
-                  <th>user_id</th>
-                  <th>user_role</th>
-                  <th>부서</th>
-                  <th>domain</th>
-                  <th>route</th>
-                  <th>model</th>
-                  <th>PII</th>
-                  <th>latency(ms)</th>
-                  <th>error_code</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredItems.length === 0 && (
-                  <tr>
-                    <td colSpan={10} className="cb-admin-table-empty">
-                      조건에 해당하는 로그가 없습니다.
-                    </td>
-                  </tr>
-                )}
-                {filteredItems.map((item) => {
-                  const hasError = !!item.errorCode;
-                  const hasPii =
-                    item.hasPiiInput || item.hasPiiOutput;
+              {/* 선택된 필터 기준 로그 요약 배지 */}
+              <div className="cb-admin-trend-summary">
+                <div className="cb-admin-trend-pill">
+                  <span className="cb-admin-trend-label">총 로그</span>
+                  <span className="cb-admin-trend-value">
+                    {totalCount.toLocaleString()}건
+                  </span>
+                </div>
+                <div className="cb-admin-trend-pill">
+                  <span className="cb-admin-trend-label">에러 로그</span>
+                  <span className="cb-admin-trend-value">
+                    {errorCount.toLocaleString()}건
+                    {totalCount > 0 &&
+                      ` (${errorRatioInLogs.toFixed(1)}%)`}
+                  </span>
+                </div>
+                <div className="cb-admin-trend-pill">
+                  <span className="cb-admin-trend-label">PII 포함</span>
+                  <span className="cb-admin-trend-value">
+                    {piiCount.toLocaleString()}건
+                    {totalCount > 0 &&
+                      ` (${piiRatioInLogs.toFixed(1)}%)`}
+                  </span>
+                </div>
+              </div>
 
-                  return (
-                    <tr
-                      key={item.id}
-                      className={hasError ? "cb-admin-log-row--error" : ""}
-                    >
-                      <td>{item.createdAt}</td>
-                      <td>{item.userId}</td>
-                      <td>{item.userRole}</td>
-                      <td>{item.department}</td>
-                      <td>{item.domain}</td>
-                      <td>{item.route}</td>
-                      <td>{item.modelName}</td>
-                      <td>
-                        {hasPii ? (
-                          <span className="cb-admin-badge cb-admin-badge--pii">
-                            {item.hasPiiInput && "입력"}
-                            {item.hasPiiInput &&
-                              item.hasPiiOutput &&
-                              " / "}
-                            {item.hasPiiOutput && "출력"}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                      <td>{item.latencyMsTotal.toLocaleString()}</td>
-                      <td>
-                        {hasError ? (
-                          <span className="cb-admin-log-error-code">
-                            {item.errorCode}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
+              <div className="cb-admin-table-wrapper cb-admin-table-wrapper--logs">
+                <table className="cb-admin-table cb-admin-table--logs">
+                  <thead>
+                    <tr>
+                      <th>시간</th>
+                      <th>user_id</th>
+                      <th>user_role</th>
+                      <th>부서</th>
+                      <th>domain</th>
+                      <th>route</th>
+                      <th>model</th>
+                      <th>PII</th>
+                      <th>latency(ms)</th>
+                      <th>error_code</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {filteredItems.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="cb-admin-table-empty">
+                          조건에 해당하는 로그가 없습니다.
+                        </td>
+                      </tr>
+                    )}
+                    {filteredItems.map((item) => {
+                      const hasError = !!item.errorCode;
+                      const hasPii =
+                        item.hasPiiInput || item.hasPiiOutput;
+
+                      return (
+                        <tr
+                          key={item.id}
+                          className={
+                            hasError ? "cb-admin-log-row--error" : ""
+                          }
+                        >
+                          <td>{item.createdAt}</td>
+                          <td>{item.userId}</td>
+                          <td>{item.userRole}</td>
+                          <td>{item.department}</td>
+                          <td>{item.domain}</td>
+                          <td>{item.route}</td>
+                          <td>{item.modelName}</td>
+                          <td>
+                            {hasPii ? (
+                              <span className="cb-admin-badge cb-admin-badge--pii">
+                                {item.hasPiiInput && "입력"}
+                                {item.hasPiiInput &&
+                                  item.hasPiiOutput &&
+                                  " / "}
+                                {item.hasPiiOutput && "출력"}
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                          <td>{item.latencyMsTotal.toLocaleString()}</td>
+                          <td>
+                            {hasError ? (
+                              <span className="cb-admin-log-error-code">
+                                {item.errorCode}
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
       </div>
     );

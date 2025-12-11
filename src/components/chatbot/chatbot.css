@@ -4257,3 +4257,743 @@
   border-color: #fecaca;
   color: #b91c1c;
 }
+
+/* ===== Logs 탭 헤더 + RAG 갭 분석 버튼 ===== */
+
+/* Logs 탭 전용 섹션 헤더 레이아웃 */
+.cb-admin-section-header--logs {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cb-admin-section-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 오른쪽 상단 고스트 버튼 (RAG 갭 분석 / 전체 로그 보기 토글) */
+.cb-admin-ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 6px 14px;
+  border-radius: 999px;
+
+  border: 1px solid #d4d4d8;
+  background-color: #ffffff;
+
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #111827;
+
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.cb-admin-ghost-btn:hover {
+  background-color: #111827;
+  color: #ffffff;
+  border-color: #111827;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+}
+
+.cb-admin-ghost-btn:active {
+  background-color: #020617;
+  border-color: #020617;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.3);
+}
+
+.cb-admin-ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* ===== RAG 갭 분석 카드 헤더 (제목/설명 + 우측 버튼) ===== */
+
+.cb-admin-rag-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px; /* 헤더와 요약 Pill 사이 간격 */
+}
+
+.cb-admin-rag-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ===== RAG 갭 분석 - 우선 보완 영역 empty state ===== */
+
+.cb-admin-raggap-empty-hint {
+  margin-top: 8px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background-color: #f9fafb;
+  border: 1px dashed #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-raggap-empty-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background-color: #e5e7eb;
+  color: #4b5563;
+}
+
+.cb-admin-raggap-empty-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
+/* ===== RAG Gap 분석 메인 뷰 레이아웃 ===== */
+
+/* 전체 RAG Gap 탭 컨테이너 */
+.cb-admin-raggap-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 리스트 + 상세가 들어가는 두 번째 섹션 */
+.cb-admin-raggap-body {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 좌측 리스트 + 우측 상세 2열 레이아웃 */
+.cb-admin-raggap-layout {
+  display: flex;
+  align-items: flex-start; 
+  gap: 16px;
+  margin-top: 12px;
+}
+
+/* 좌측 리스트 컬럼 */
+.cb-admin-raggap-list {
+  flex: 1.1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 우측 상세 패널 컬럼 */
+.cb-admin-raggap-detail {
+  flex: 1;
+  min-width: 0;
+  display: flex; 
+  flex-direction: column; 
+  height: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
+}
+
+/* RAG Gap 리스트 테이블 래퍼 (좌측) */
+.cb-admin-table-wrapper--raggap-list {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* RAG Gap 리스트 테이블 */
+.cb-admin-table--raggap-list {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.cb-admin-raggap-list .cb-admin-table-wrapper {
+  max-height: none;
+  height: 100%; 
+}
+
+.cb-admin-table--raggap-list th,
+.cb-admin-table--raggap-list td {
+  padding: 8px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.cb-admin-table--raggap-list th {
+  text-align: left;
+  font-weight: 600;
+  color: #4b5563;
+  background-color: #f9fafb;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* 클릭 가능한 행 공통 스타일 */
+.cb-admin-table-row--clickable {
+  cursor: pointer;
+  transition: background-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.cb-admin-table-row--clickable:hover {
+  background-color: #f3f4f6;
+}
+
+/* 선택된 행 하이라이트 */
+.cb-admin-table-row--selected {
+  background-color: #e5e7eb;
+  outline: 1px solid #94a3b8; 
+  outline-offset: -1px; 
+}
+
+.cb-admin-table-row--selected > td {
+  border-bottom-color: transparent; 
+}
+
+/* 질문 프리뷰 텍스트 (좌측 리스트) */
+.cb-admin-raggap-question-preview {
+  font-size: 11px;
+  font-weight: 500;
+  color: #111827;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 도메인/역할 메타 텍스트 */
+.cb-admin-raggap-meta-line {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 우측 상세 패널 빈 상태 */
+.cb-admin-empty-state {
+  font-size: 12px;
+  color: #6b7280;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed #d1d5db;
+  background-color: #f9fafb;
+}
+
+/* 상세 헤더 (질문 + 뱃지들) */
+.cb-admin-raggap-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cb-admin-raggap-question-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+  line-height: 1.5;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* 상세 헤더 아래 뱃지 줄 */
+.cb-admin-raggap-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 상세 메타 작은 텍스트 */
+.cb-admin-raggap-meta-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 상세 섹션 공통 컨테이너 */
+.cb-admin-raggap-detail-section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+
+/* 상세 섹션 제목 */
+.cb-admin-raggap-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+/* 2열 그리드 (Route/모델, RAG 결과 등) */
+.cb-admin-raggap-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+
+/* 라벨 / 값 */
+.cb-admin-raggap-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #4b5563;
+  margin-bottom: 2px;
+}
+
+.cb-admin-raggap-value {
+  font-size: 11px;
+  color: #111827;
+}
+
+/* RAG 힌트 문구 */
+.cb-admin-raggap-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 문단 블록 */
+.cb-admin-raggap-block {
+  margin-top: 8px;
+}
+
+.cb-admin-raggap-text {
+  font-size: 11px;
+  color: #111827;
+  line-height: 1.5;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* AI 답변 내용 (snippet + full) */
+.cb-admin-raggap-answer-snippet {
+  font-size: 11px;
+  color: #111827;
+  line-height: 1.5;
+  margin-top: 2px;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.cb-admin-raggap-answer-full {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #4b5563;
+  line-height: 1.5;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* 전문 보기 / 접기 토글 버튼 */
+.cb-admin-raggap-toggle-btn {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  background-color: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: #111827;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.cb-admin-raggap-toggle-btn:hover {
+  background-color: #111827;
+  color: #ffffff;
+  border-color: #111827;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+}
+
+.cb-admin-raggap-toggle-btn:active {
+  background-color: #020617;
+  border-color: #020617;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.3);
+}
+
+/* 관리자 메모 placeholder */
+.cb-admin-raggap-note-placeholder {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed #d1d5db;
+  background-color: #f9fafb;
+}
+
+.cb-admin-section.cb-admin-raggap-body
+  .cb-admin-raggap-layout
+  .cb-admin-raggap-list
+  .cb-admin-table-wrapper--raggap-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ===== RAG Gap 전용 필터 UI ===== */
+
+.cb-admin-raggap-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cb-admin-raggap-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.cb-admin-raggap-filter-group--sort {
+  margin-left: auto;
+  min-width: 220px;
+}
+
+.cb-admin-raggap-filter-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280; /* gray-500 */
+}
+
+.cb-admin-raggap-filter-select,
+.cb-admin-raggap-filter-input {
+  height: 30px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #d4d4d8;
+  font-size: 12px;
+  color: #111827;
+  background-color: #ffffff;
+}
+
+.cb-admin-raggap-filter-input {
+  width: 80px;
+}
+
+.cb-admin-raggap-filter-select:focus,
+.cb-admin-raggap-filter-input:focus {
+  outline: none;
+  border-color: #111827;
+}
+
+.cb-admin-raggap-sort-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 작은 pill 형태 토글 버튼 */
+.cb-admin-chip {
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background-color: #f9fafb;
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.cb-admin-chip--active {
+  border-color: #111827;
+  background-color: #111827;
+  color: #ffffff;
+}
+
+.cb-admin-raggap-filter-reset {
+  font-size: 11px;
+  padding-inline: 12px;
+}
+
+
+/* ===== RAG Gap 리스트 헤더 + 체크박스 ===== */
+
+.cb-admin-raggap-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.cb-admin-raggap-list-caption {
+  white-space: nowrap;
+}
+
+.cb-admin-raggap-proposal-btn {
+  border-radius: 999px;
+  border: 1px dashed #d4d4d8;
+  background-color: #f9fafb;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #9ca3af;
+  cursor: not-allowed;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cb-admin-raggap-proposal-badge {
+  font-size: 10px;
+  font-weight: 400;
+  color: #9ca3af;
+}
+
+.cb-admin-raggap-checkbox {
+  cursor: pointer;
+}
+
+
+/* ===== 관리자 메모 / 태깅 ===== */
+
+.cb-admin-raggap-admin-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cb-admin-tag-toggle {
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.cb-admin-tag-toggle--active {
+  border-color: #111827;
+  background-color: #111827;
+  color: #ffffff;
+}
+
+.cb-admin-raggap-note-textarea {
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #111827;
+  background-color: #f9fafb;
+}
+
+.cb-admin-raggap-note-textarea:focus {
+  outline: none;
+  border-color: #111827;
+  background-color: #ffffff;
+}
+
+.cb-admin-raggap-note-help {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+/* ===== 관리자 대시보드 - PII 점검 리포트 카드 ===== */
+
+.cb-admin-section--pii-report {
+  margin-bottom: 16px;
+}
+
+.cb-admin-pii-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cb-admin-pii-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cb-admin-pii-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+/* 위험 없음 (초록 계열) */
+.cb-admin-pii-badge--safe {
+  background-color: #ecfdf3;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+/* 주의 (노랑 계열) */
+.cb-admin-pii-badge--warning {
+  background-color: #fef9c3;
+  border-color: #facc15;
+  color: #854d0e;
+}
+
+/* 고위험 (빨강 계열) */
+.cb-admin-pii-badge--danger {
+  background-color: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.cb-admin-pii-block {
+  margin-top: 10px;
+}
+
+.cb-admin-pii-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.cb-admin-pii-summary-line {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #374151;
+}
+
+.cb-admin-pii-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.cb-admin-pii-actions {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.cb-admin-pii-empty {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.cb-admin-pii-block--mask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-admin-pii-mask-toggle {
+  align-self: flex-start;
+}
+
+.cb-admin-pii-masked-text {
+  border-radius: 10px;
+  padding: 10px 12px;
+  background-color: #f9fafb;
+  border: 1px dashed #e5e7eb;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #111827;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.cb-admin-pii-masked-text pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cb-admin-pii-hint {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.cb-admin-pii-meta {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e7eb;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* PII 리포트 카드 푸터 디스클레이머 */
+.cb-admin-pii-disclaimer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e7eb; 
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6b7280;   
+  text-align: left;  
+}
+
+/* 좁은 화면에서는 조금 더 낮게 제한 */
+@media (max-width: 1040px) {
+  .cb-admin-section.cb-admin-raggap-body
+    .cb-admin-raggap-layout
+    .cb-admin-raggap-list
+    .cb-admin-table-wrapper--raggap-list {
+    max-height: 260px;
+  }
+}
+
+/* ===== 반응형: 좁은 화면에서는 리스트/상세 세로 스택 ===== */
+
+@media (max-width: 1040px) {
+  .cb-admin-raggap-layout {
+    flex-direction: column;
+    max-height: none;       /* 모바일에서는 높이 상한 제거 */
+  }
+
+  .cb-admin-raggap-detail {
+    order: 2;
+  }
+
+  .cb-admin-raggap-list {
+    order: 1;
+  }
+
+  .cb-admin-table-wrapper--raggap-list {
+    max-height: 260px; 
+  }
+}

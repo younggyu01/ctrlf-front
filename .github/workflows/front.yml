@@ -19,22 +19,18 @@ jobs:
           node-version: '18' # 프로젝트에 맞는 노드 버전
 
       - name: Install dependencies
-        run: |
-          cd frontend
-          npm install
+        run: npm install
 
       - name: Build project
-        run: |
-          cd frontend
-          npm run build
+        run: pm run build
 
       - name: Deploy to S3
         uses: jakejarvis/s3-sync-action@master
         with:
-          args: --delete # S3에 있는 옛날 파일은 삭제하고 동기화
+          args: --delete
         env:
-          AWS_S3_BUCKET: "ctrl-s3" # 생성한 버킷 이름
+          AWS_S3_BUCKET: "ctrl-s3"
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: 'ap-northeast-2' # 서울 리전
-          SOURCE_DIR: 'frontend/build' # 빌드된 결과물 위치
+          SOURCE_DIR: 'dist'

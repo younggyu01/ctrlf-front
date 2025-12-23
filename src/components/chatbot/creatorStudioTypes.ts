@@ -61,6 +61,18 @@ export type CreatorSortMode =
   | "created_asc";
 
 /**
+ * sourceFiles[0]이 Primary(기본)
+ * 기존 단일 필드(sourceFileName/Size/Mime)는 항상 sourceFiles[0]과 동기화
+ */
+export interface CreatorSourceFile {
+  id: string;
+  name: string;
+  size: number;
+  mime?: string;
+  addedAt: number; // epoch ms
+}
+
+/**
  * 자동 생성 파이프라인 진행 상태(프론트 mock)
  */
 export interface CreatorPipeline {
@@ -74,14 +86,17 @@ export interface CreatorPipeline {
 }
 
 export interface CreatorAssets {
+  sourceFiles?: CreatorSourceFile[];
+
   sourceFileName?: string;
-  sourceFileSize?: number;   // bytes
-  sourceFileMime?: string;   // file.type
+  sourceFileSize?: number; // bytes
+  sourceFileMime?: string; // file.type
 
   script?: string;
   videoUrl?: string;
   thumbnailUrl?: string;
 }
+
 
 export interface CreatorWorkItem {
   id: string;

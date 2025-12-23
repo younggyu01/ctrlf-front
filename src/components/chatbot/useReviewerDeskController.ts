@@ -1,5 +1,5 @@
 // src/components/chatbot/useReviewerDeskController.ts
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createMockReviewWorkItems,
   formatDateTime,
@@ -18,6 +18,7 @@ import { getReviewerApi, type ReviewerApi } from "./reviewerApi";
 import { createReviewerApiMock } from "./reviewerApiMock";
 import { isReviewerApiError } from "./reviewerApiErrors";
 import type { ConflictPayload } from "./reviewerApiTypes";
+import { subscribeReviewStore } from "./reviewFlowStore";
 
 export type ReviewerTabId = "pending" | "approved" | "rejected" | "my";
 export type DetailTabId = "preview" | "script" | "checks" | "audit";
@@ -29,7 +30,7 @@ type StageCounts = { all: number; stage1: number; stage2: number; docs: number }
 
 function getReviewStage(it: ReviewWorkItem): 1 | 2 | null {
   if (it.contentType !== "VIDEO") return null; // 문서/정책 등
-  return it.videoUrl?.trim() ? 2 : 1;          // VIDEO: videoUrl 있으면 2차(최종)
+  return it.videoUrl?.trim() ? 2 : 1; // VIDEO: videoUrl 있으면 2차(최종)
 }
 
 export type ToastState =
@@ -148,12 +149,12 @@ type LockState =
   | { kind: "idle" }
   | { kind: "locking"; itemId: string }
   | {
-    kind: "locked";
-    itemId: string;
-    lockToken: string;
-    expiresAt?: string;
-    ownerName?: string;
-  }
+      kind: "locked";
+      itemId: string;
+      lockToken: string;
+      expiresAt?: string;
+      ownerName?: string;
+    }
   | { kind: "blocked"; itemId: string; ownerName?: string; expiresAt?: string };
 
 function formatConflictToast(payload?: ConflictPayload) {
@@ -179,12 +180,183 @@ function formatConflictToast(payload?: ConflictPayload) {
   };
 }
 
+/**
+ * 승인/반려 실패 원인을 토스트에 노출하기 위한 메시지 추출기
+ * - http 모드(백엔드)에서 401/404/500 등의 원인을 빠르게 확인
+ * - mock 모드에서 LOCK_TOKEN/버전 불일치 등 디버깅
+ */
+function extractApiErrorMessage(err: unknown): string | null {
+  if (isReviewerApiError(err)) {
+    const status = (err as { status?: unknown }).status;
+    const statusNum = typeof status === "number" ? status : undefined;
+
+    const details = err.details as unknown;
+    const detailsObj =
+      details && typeof details === "object" ? (details as Record<string, unknown>) : undefined;
+
+    const code = typeof detailsObj?.code === "string" ? detailsObj.code : null;
+
+    const detailsMessage = typeof detailsObj?.message === "string" ? detailsObj.message : null;
+
+    const errMessage =
+      err && typeof err === "object" && "message" in err
+        ? (() => {
+            const m = (err as unknown as Record<string, unknown>).message;
+            return typeof m === "string" ? m : null;
+          })()
+        : null;
+
+    const msg = detailsMessage ?? errMessage;
+
+    if (msg && code && typeof statusNum === "number") return `${msg} (${code}, ${statusNum})`;
+    if (msg && typeof statusNum === "number") return `${msg} (${statusNum})`;
+    if (msg && code) return `${msg} (${code})`;
+    if (msg) return msg;
+    if (code && typeof statusNum === "number") return `요청 실패 (${code}, ${statusNum})`;
+    if (code) return `요청 실패 (${code})`;
+    if (typeof statusNum === "number") return `요청 실패 (${statusNum})`;
+    return "요청 실패";
+  }
+
+  if (err instanceof Error && err.message) return err.message;
+
+  if (err && typeof err === "object" && "message" in err) {
+    const m = (err as Record<string, unknown>).message;
+    if (typeof m === "string" && m.trim()) return m.trim();
+  }
+
+  return null;
+}
+
+/**
+ * P1 표준: http 상태코드 기반의 “짧고 일관된” 토스트 메시지
+ * - TS18048 방지: status가 undefined일 수 있으므로 number 체크 후 비교/범위 연산
+ */
+function toStdHttpErrorMessage(
+  kindLabel: string,
+  err: unknown
+): { tone: "warn" | "danger"; message: string } {
+  if (isReviewerApiError(err)) {
+    const rawStatus = (err as { status?: unknown }).status;
+    const s = typeof rawStatus === "number" ? rawStatus : undefined;
+
+    if (s === 403) return { tone: "danger", message: `${kindLabel} 실패: 권한이 없습니다. (403)` };
+    if (s === 404) return { tone: "danger", message: `${kindLabel} 실패: 대상을 찾을 수 없습니다. (404)` };
+    if (s === 409)
+      return {
+        tone: "warn",
+        message: `${kindLabel} 실패: 상태가 변경되었습니다. 새로고침 후 다시 시도하세요. (409)`,
+      };
+    if (typeof s === "number" && s >= 500)
+      return {
+        tone: "danger",
+        message: `${kindLabel} 실패: 서버 오류가 발생했습니다. 잠시 후 다시 시도하세요. (500)`,
+      };
+
+    // status가 없거나(undefined) 위 케이스에 안 걸리는 경우도 표준 메시지 유지
+    return {
+      tone: "danger",
+      message: `${kindLabel} 실패: 요청에 실패했습니다.${typeof s === "number" ? ` (${s})` : ""}`,
+    };
+  }
+
+  const m = extractApiErrorMessage(err);
+  return {
+    tone: "danger",
+    message: m ? `${kindLabel} 실패: ${m}` : `${kindLabel} 실패: 알 수 없는 오류`,
+  };
+}
+
+function isMissingLinkedDocMessage(msg: string | null) {
+  if (!msg) return false;
+  return msg.includes("연결된 문서를 찾을 수 없습니다");
+}
+
+function isPolicyDocItem(it: ReviewWorkItem) {
+  return it.contentType === "POLICY_DOC" || it.contentCategory === "POLICY";
+}
+
+function readPolicyMeta(it: ReviewWorkItem): { documentId: string; versionLabel: string } {
+  const any = it as unknown as Record<string, unknown>;
+
+  const documentId =
+    (typeof any.contentId === "string" && any.contentId.trim()) ||
+    (typeof any.policyDocId === "string" && any.policyDocId.trim()) ||
+    "";
+
+  const versionLabel = (typeof any.contentVersionLabel === "string" && any.contentVersionLabel.trim()) || "";
+
+  return { documentId, versionLabel };
+}
+
+// id 기반 병합(중복 제거) 유틸
+function mergeUniqueById<T extends { id: string }>(lists: T[][]): T[] {
+  const map = new Map<string, T>();
+  for (const arr of lists) for (const it of arr) map.set(it.id, it);
+  return Array.from(map.values());
+}
+
 export function useReviewerDeskController(options: UseReviewerDeskControllerOptions) {
   const effectiveReviewerName = options.reviewerName ?? "Reviewer";
 
   const apiModeRaw = getEnvString("VITE_REVIEWER_API_MODE");
   const apiMode: "mock" | "http" = apiModeRaw === "http" ? "http" : "mock";
   const isHttpMode = apiMode === "http";
+
+  // ===== toast 표준화 =====
+  const TOAST_MS = 2200;
+
+  const [toast, setToast] = useState<ToastState>({ open: false });
+  const toastTimerRef = useRef<number | null>(null);
+
+  const closeToast = useCallback(() => {
+    setToast({ open: false });
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+  }, []);
+
+  const pushToast = useCallback(
+    (tone: "neutral" | "warn" | "danger", message: string) => {
+      const msg = String(message ?? "").replace(/\s+/g, " ").trim();
+      if (!msg) return;
+
+      setToast({ open: true, tone, message: msg });
+
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      toastTimerRef.current = window.setTimeout(() => {
+        setToast({ open: false });
+        toastTimerRef.current = null;
+      }, TOAST_MS);
+    },
+    [TOAST_MS]
+  );
+
+  const toastStd = useMemo(() => {
+    return {
+      ok: (message: string) => pushToast("neutral", message),
+      warn: (message: string) => pushToast("warn", message),
+      err: (message: string) => pushToast("danger", message),
+      conflict: (payload?: ConflictPayload) => {
+        const t = formatConflictToast(payload);
+        pushToast(t.tone, t.message);
+      },
+    } as const;
+  }, [pushToast]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // ===== mock data (운영 시나리오 + 대량 생성 지원) =====
   const [datasetKey, setDatasetKey] = useState<"base" | "load">("base");
@@ -207,15 +379,13 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     apiRef.current = isHttpMode
       ? getReviewerApi()
       : createReviewerApiMock({
-        initialItems: seedItems,
-        me: { id: effectiveReviewerName, name: effectiveReviewerName },
-      });
+          initialItems: seedItems,
+          me: { id: effectiveReviewerName, name: effectiveReviewerName },
+        });
   }
 
   // http 모드: 최초 refresh로 세팅 / mock 모드: seedItems로 초기화
-  const [items, setItems] = useState<ReviewWorkItemExt[]>(() =>
-    isHttpMode ? [] : seedItems
-  );
+  const [items, setItems] = useState<ReviewWorkItemExt[]>(() => (isHttpMode ? [] : seedItems));
 
   // 탭/필터/정렬
   const [activeTab, setActiveTab] = useState<ReviewerTabId>("pending");
@@ -254,20 +424,14 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
   });
   const [previewOpen, setPreviewOpen] = useState(false);
 
-  // busy / toast
+  // busy
   const [busy, setBusy] = useState<BusyState>({ busy: false });
-  const [toast, setToast] = useState<ToastState>({ open: false });
-  const toastTimerRef = useRef<number | null>(null);
 
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<string>(
-    new Date().toISOString()
-  );
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string>(new Date().toISOString());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // decision optimistic-lock context (+ lockToken)
-  const decisionCtxRef = useRef<{ itemId: string; version: number; lockToken: string } | null>(
-    null
-  );
+  const decisionCtxRef = useRef<{ itemId: string; version: number; lockToken: string } | null>(null);
 
   // lock state
   const [lockState, setLockState] = useState<LockState>({ kind: "idle" });
@@ -276,6 +440,17 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
   const isBusy = busy.busy;
   const isOverlayOpen = decisionModal.open || previewOpen;
+
+  // busy/refreshing 최신값을 callback 내부에서 안정적으로 읽기 위한 ref
+  const isBusyRef = useRef(isBusy);
+  useEffect(() => {
+    isBusyRef.current = isBusy;
+  }, [isBusy]);
+
+  const isRefreshingRef = useRef(isRefreshing);
+  useEffect(() => {
+    isRefreshingRef.current = isRefreshing;
+  }, [isRefreshing]);
 
   // busy timer label
   const [nowTs, setNowTs] = useState(() => Date.now());
@@ -294,49 +469,21 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     return `${kind} 처리 중 · ${sec.toFixed(1)}s`;
   }, [busy, nowTs]);
 
-  const lastRefreshedAtLabel = useMemo(
-    () => formatDateTime(lastRefreshedAt),
-    [lastRefreshedAt]
-  );
+  const lastRefreshedAtLabel = useMemo(() => formatDateTime(lastRefreshedAt), [lastRefreshedAt]);
 
-  const closeToast = () => setToast({ open: false });
-
-  const showToast = (tone: "neutral" | "warn" | "danger", message: string) => {
-    setToast({ open: true, tone, message });
-
-    if (toastTimerRef.current) {
-      window.clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-
-    toastTimerRef.current = window.setTimeout(() => {
-      setToast({ open: false });
-      toastTimerRef.current = null;
-    }, 2200);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) {
-        window.clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const isRiskItem = (it: ReviewWorkItem) => {
+  const isRiskItem = useCallback((it: ReviewWorkItem) => {
     const pii = it.autoCheck.piiRiskLevel;
     const banned = it.autoCheck.bannedWords?.length ?? 0;
     const qwarn = it.autoCheck.qualityWarnings?.length ?? 0;
     return pii === "high" || pii === "medium" || banned > 0 || qwarn > 0;
-  };
+  }, []);
 
   useEffect(() => {
     return () => {
       // 언마운트 시 남은 락 해제(상태 업데이트는 의미 없으니 API만 best-effort)
       const cur = decisionLockRef.current;
       if (cur) {
-        void apiRef.current?.releaseLock(cur.itemId, cur.lockToken).catch(() => { });
+        void apiRef.current?.releaseLock(cur.itemId, cur.lockToken).catch(() => {});
         decisionLockRef.current = null;
       }
       decisionCtxRef.current = null;
@@ -368,52 +515,50 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     );
   };
 
-  const mergeUniqueById = (lists: ReviewWorkItemExt[][]) => {
-    const map = new Map<string, ReviewWorkItemExt>();
-    for (const arr of lists) for (const it of arr) map.set(it.id, it);
-    return Array.from(map.values());
-  };
+  // ===== refreshAllFromApi (useCallback + refs로 안정화) =====
+  const refreshAllFromApi = useCallback(
+    async (opts?: { silent?: boolean; force?: boolean }) => {
+      if (!opts?.force) {
+        if (isBusyRef.current) return;
+      }
+      if (isRefreshingRef.current) return;
 
-  // ===== refreshAllFromApi =====
-  const refreshAllFromApi = async (opts?: { silent?: boolean; force?: boolean }) => {
-    if (!opts?.force) {
-      if (isBusy) return;
-    }
-    if (isRefreshing) return;
+      isRefreshingRef.current = true;
+      setIsRefreshing(true);
 
-    setIsRefreshing(true);
-    try {
-      const api = apiRef.current!;
-      const [p, a, r] = await Promise.all([
-        api.listWorkItems({ tab: "REVIEW_PENDING", limit: 2000 }),
-        api.listWorkItems({ tab: "APPROVED", limit: 2000 }),
-        api.listWorkItems({ tab: "REJECTED", limit: 2000 }),
-      ]);
+      try {
+        const api = apiRef.current!;
+        const [p, a, r] = await Promise.all([
+          api.listWorkItems({ tab: "REVIEW_PENDING", limit: 2000 }),
+          api.listWorkItems({ tab: "APPROVED", limit: 2000 }),
+          api.listWorkItems({ tab: "REJECTED", limit: 2000 }),
+        ]);
 
-      const merged = mergeUniqueById([
-        p.items as ReviewWorkItemExt[],
-        a.items as ReviewWorkItemExt[],
-        r.items as ReviewWorkItemExt[],
-      ]);
+        const merged = mergeUniqueById([
+          p.items as ReviewWorkItemExt[],
+          a.items as ReviewWorkItemExt[],
+          r.items as ReviewWorkItemExt[],
+        ]);
 
-      setItems(merged);
-      setLastRefreshedAt(new Date().toISOString());
-      if (!opts?.silent) showToast("neutral", "새로고침 완료");
-    } catch (err) {
-      if (import.meta.env.DEV)
-        console.warn("[ReviewerDesk] refreshAllFromApi failed", err);
-      showToast("danger", "새로고침에 실패했습니다.");
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
+        setItems(merged);
+        setLastRefreshedAt(new Date().toISOString());
+        if (!opts?.silent) toastStd.ok("새로고침 완료");
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn("[ReviewerDesk] refreshAllFromApi failed", err);
+        toastStd.err("새로고침에 실패했습니다.");
+      } finally {
+        isRefreshingRef.current = false;
+        setIsRefreshing(false);
+      }
+    },
+    [toastStd]
+  );
 
   // http 모드: 최초 1회 로딩
   useEffect(() => {
     if (!isHttpMode) return;
     void refreshAllFromApi({ silent: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHttpMode]);
+  }, [isHttpMode, refreshAllFromApi]);
 
   // datasetKey 변경 시(mock) api store 재시드 + 상태 초기화
   useEffect(() => {
@@ -422,7 +567,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     // 기존 락이 있으면 best-effort 해제 (mock에서도 상태 꼬임 방지)
     const cur = decisionLockRef.current;
     if (cur) {
-      void apiRef.current?.releaseLock(cur.itemId, cur.lockToken).catch(() => { });
+      void apiRef.current?.releaseLock(cur.itemId, cur.lockToken).catch(() => {});
       decisionLockRef.current = null;
     }
 
@@ -438,14 +583,40 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     setOnlyMine(false);
     setRiskOnly(false);
     setSortMode("newest");
+    setStageFilter("all");
     setPageIndex(0);
     setListMode(seedItems.length >= 260 ? "virtual" : "paged");
     setSelectedId(null);
     setLastRefreshedAt(new Date().toISOString());
     setLockState({ kind: "idle" });
     decisionCtxRef.current = null;
-
+    lockReqSeqRef.current += 1;
   }, [datasetKey, seedItems, isHttpMode, effectiveReviewerName]);
+
+  // store 이벤트에서 최신 refresh 콜백을 쓰기 위한 ref
+  const refreshRef = useRef(refreshAllFromApi);
+  useEffect(() => {
+    refreshRef.current = refreshAllFromApi;
+  }, [refreshAllFromApi]);
+
+  useEffect(() => {
+    if (isHttpMode) return;
+    let t: number | null = null;
+
+    const unsub = subscribeReviewStore(() => {
+      if (t) window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        void refreshRef.current({ silent: true, force: true });
+      }, 60);
+    });
+
+    void refreshRef.current({ silent: true, force: true });
+
+    return () => {
+      if (t) window.clearTimeout(t);
+      unsub();
+    };
+  }, [isHttpMode, datasetKey]);
 
   // ===== counts =====
   const counts = useMemo(() => {
@@ -475,9 +646,9 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
     const byQuery = q
       ? byRisk.filter((it) => {
-        const hay = `${it.title} ${it.department} ${it.creatorName}`.toLowerCase();
-        return hay.includes(q);
-      })
+          const hay = `${it.title} ${it.department} ${it.creatorName}`.toLowerCase();
+          return hay.includes(q);
+        })
       : byRisk;
 
     const list = [...byQuery];
@@ -502,7 +673,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
     list.sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
     return list;
-  }, [items, activeTab, query, onlyMine, riskOnly, sortMode, effectiveReviewerName]);
+  }, [items, activeTab, query, onlyMine, riskOnly, sortMode, effectiveReviewerName, isRiskItem]);
 
   const stageCounts = useMemo((): StageCounts => {
     let stage1 = 0;
@@ -552,7 +723,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
   const selectionFrozen = isOverlayOpen || isBusy || lockState.kind === "locking";
 
   useEffect(() => {
-    if (selectionFrozen) return; // overlay/처리/락확보 중에는 선택 자동 변경 금지
+    if (selectionFrozen) return;
 
     if (filtered.length === 0) {
       setSelectedId(null);
@@ -636,7 +807,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     try {
       await apiRef.current!.releaseLock(cur.itemId, cur.lockToken);
     } catch {
-      // TTL 기반 회복 가정: 치명 처리 금지
+      // TTL 기반 회복 가정
     } finally {
       patchItemLock(cur.itemId, undefined);
       setLockState({ kind: "idle" });
@@ -676,14 +847,16 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
           const ownerName = readLockOwnerName(cur?.lock as unknown);
           const expiresAt = readLockExpiresAt(cur?.lock as unknown);
 
+          if (cur?.lock) patchItemLock(itemId, cur.lock as WorkItemLockView);
+
           setLockState({ kind: "blocked", itemId, ownerName, expiresAt });
-          showToast("warn", "다른 검토자가 먼저 처리 중입니다.");
+          toastStd.warn("다른 검토자가 먼저 처리 중입니다.");
           return null;
         }
       }
 
       setLockState({ kind: "idle" });
-      showToast("danger", "락 확보에 실패했습니다.");
+      toastStd.err("락 확보에 실패했습니다.");
       return null;
     }
   };
@@ -702,7 +875,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
     const commonBlockers: GuardPill[] = [];
 
-    const stage = getReviewStage(selectedItem); // 1 | 2 | null
+    const stage = getReviewStage(selectedItem);
 
     if (lockBlockingForSelected) {
       if (lockState.kind === "locking") {
@@ -716,8 +889,9 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
           tone: "warn",
           label: "다른 검토자가 처리 중",
           detail: lockState.ownerName
-            ? `처리자: ${lockState.ownerName}${lockState.expiresAt ? ` · 만료 ${formatDateTime(lockState.expiresAt)}` : ""
-            }`
+            ? `처리자: ${lockState.ownerName}${
+                lockState.expiresAt ? ` · 만료 ${formatDateTime(lockState.expiresAt)}` : ""
+              }`
             : "잠시 후 다시 시도하세요.",
         });
       }
@@ -761,24 +935,38 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
       commonBlockers.length === 0 && !overlayBlock && !busyBlock && !statusBlock && !lockBlockingForSelected;
 
     const approvePills: GuardPill[] = approveAllowed
-      ? [
-        selectedItem.contentType === "VIDEO" && stage === 1
-          ? {
-            tone: "neutral",
-            label: "1차 승인: 비공개",
-            detail: "스크립트만 승인되며, 제작자가 영상 생성을 진행합니다.",
-          }
-          : {
-            tone: "neutral",
-            label: "승인 시 즉시 공개",
-            detail:
-              "승인(APPROVED) 후 자동 공개(PUBLISHED) 이력이 함께 기록됩니다.",
-          },
-      ]
+      ? isPolicyDocItem(selectedItem)
+        ? [
+            {
+              tone: "neutral",
+              label: "승인 시 즉시 공개 + 인덱싱",
+              detail:
+                "승인 후 문서가 ACTIVE로 전환되며 인덱싱이 자동 시작됩니다. 실패 시 인덱싱 재시도를 진행하세요.",
+            },
+          ]
+        : [
+            selectedItem.contentType === "VIDEO" && stage === 1
+              ? {
+                  tone: "neutral",
+                  label: "1차 승인: 비공개",
+                  detail: "스크립트만 승인되며, 제작자가 영상 생성을 진행합니다.",
+                }
+              : {
+                  tone: "neutral",
+                  label: "승인 시 즉시 공개",
+                  detail: "승인(APPROVED) 후 자동 공개(PUBLISHED) 이력이 함께 기록됩니다.",
+                },
+          ]
       : commonBlockers;
 
     const rejectPills: GuardPill[] = rejectAllowed
-      ? [{ tone: "neutral", label: "반려 사유 필수", detail: "반려 사유는 제작자에게 전달되며, 감사 이력에 기록됩니다." }]
+      ? [
+          {
+            tone: "neutral",
+            label: "반려 사유 필수",
+            detail: "반려 사유는 제작자에게 전달되며, 감사 이력에 기록됩니다.",
+          },
+        ]
       : commonBlockers;
 
     const headline = approveAllowed && rejectAllowed ? "처리 가이드" : "실행 제한 사유";
@@ -805,7 +993,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
   };
 
   const closeDecisionModal = () => {
-    lockReqSeqRef.current += 1; // in-flight acquire 결과 무효화(취소 토큰 역할)
+    lockReqSeqRef.current += 1;
     setDecisionModal({ open: false, kind: null });
     decisionCtxRef.current = null;
     void releaseDecisionLockSafely();
@@ -813,21 +1001,28 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
   const openApproveModal = () => {
     if (!selectedItem) return;
-    if (selectedItem.status !== "REVIEW_PENDING") return showToast("warn", "현재 상태에서는 승인할 수 없습니다.");
+    if (selectedItem.status !== "REVIEW_PENDING") {
+      toastStd.warn("현재 상태에서는 승인할 수 없습니다.");
+      return;
+    }
     if (isBusy) return;
     if (decisionModal.open || previewOpen) return;
 
     const itemId = selectedItem.id;
     const itemVersion = selectedItem.version;
     const stage = getReviewStage(selectedItem);
+    const isPolicy = isPolicyDocItem(selectedItem);
+    const { documentId, versionLabel } = readPolicyMeta(selectedItem);
 
-    const message =
-      selectedItem.contentType !== "VIDEO"
+    const message = isPolicy
+      ? `'${selectedItem.title}' 사규/정책을 승인합니다.${
+          documentId ? ` (${documentId}${versionLabel ? ` · ${versionLabel}` : ""})` : ""
+        }\n승인 즉시 공개되며 인덱싱이 시작됩니다.`
+      : selectedItem.contentType !== "VIDEO"
         ? `'${selectedItem.title}' 항목을 승인합니다. 승인 시 즉시 공개(PUBLISHED) 처리됩니다.`
         : stage === 1
           ? `'${selectedItem.title}' 항목을 1차(스크립트) 승인합니다. (공개되지 않으며, 제작자가 영상 생성을 진행합니다.)`
           : `'${selectedItem.title}' 항목을 2차(최종) 승인합니다. 승인 시 즉시 공개(PUBLISHED) 처리됩니다.`;
-
 
     const seq = ++lockReqSeqRef.current;
 
@@ -847,7 +1042,10 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
   const openRejectModal = () => {
     if (!selectedItem) return;
-    if (selectedItem.status !== "REVIEW_PENDING") return showToast("warn", "현재 상태에서는 반려할 수 없습니다.");
+    if (selectedItem.status !== "REVIEW_PENDING") {
+      toastStd.warn("현재 상태에서는 반려할 수 없습니다.");
+      return;
+    }
     if (isBusy) return;
     if (decisionModal.open || previewOpen) return;
 
@@ -896,19 +1094,22 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
   const applyApprove = async () => {
     if (!selectedItem) return;
-    if (!canApprove) return showToast("warn", "승인 조건을 만족하지 않습니다.");
+    if (!canApprove) {
+      toastStd.warn("승인 조건을 만족하지 않습니다.");
+      return;
+    }
     if (isBusy) return;
 
     const ctx = decisionCtxRef.current;
     if (!ctx || ctx.itemId !== selectedItem.id) {
-      showToast("warn", "처리 컨텍스트가 유효하지 않습니다. 다시 시도하세요.");
+      toastStd.warn("처리 컨텍스트가 유효하지 않습니다. 다시 시도하세요.");
       closeDecisionModal();
       return;
     }
 
     const fresh = ensureDecisionFresh({ itemId: ctx.itemId, version: ctx.version });
     if (!fresh.ok) {
-      showToast("danger", fresh.reason);
+      toastStd.err(fresh.reason);
       closeDecisionModal();
       return;
     }
@@ -947,22 +1148,22 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
         }
       }
 
-      showToast(
-        "neutral",
-        selectedItem.contentType !== "VIDEO"
-          ? "승인 완료 (공개됨)"
-          : isFinal
-            ? "2차(최종) 승인 완료 (공개됨)"
-            : "1차 승인 완료 (공개되지 않음: 제작자가 영상 생성 가능)"
+      toastStd.ok(
+        isPolicyDocItem(selectedItem)
+          ? "사규/정책 승인 완료 · 인덱싱 시작"
+          : selectedItem.contentType !== "VIDEO"
+            ? "승인 완료 (공개됨)"
+            : isFinal
+              ? "2차(최종) 승인 완료 (공개됨)"
+              : "1차 승인 완료 (비공개: 제작자가 영상 생성 가능)"
       );
+
       setDecisionModal({ open: false, kind: null });
       decisionCtxRef.current = null;
     } catch (err: unknown) {
-      // 409 처리 중복 제거 + ctx.itemId 기준으로 최신 상태 갱신
       if (isReviewerApiError(err) && err.status === 409) {
         const payload = err.details as ConflictPayload | undefined;
-        const t = formatConflictToast(payload);
-        showToast(t.tone, t.message);
+        toastStd.conflict(payload);
 
         const targetId = ctx.itemId;
         try {
@@ -977,7 +1178,20 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
         return;
       }
 
-      showToast("danger", "승인 처리에 실패했습니다.");
+      const m = extractApiErrorMessage(err);
+
+      // mock 모드: policyStore 연동 문서 미존재로 실패하는 경우 UI 실패 방지
+      if (!isHttpMode && isMissingLinkedDocMessage(m)) {
+        toastStd.warn("연결된 문서를 찾지 못해 연동 반영은 생략했습니다. (Mock)");
+        setDecisionModal({ open: false, kind: null });
+        decisionCtxRef.current = null;
+        await refreshAllFromApi({ silent: true, force: true });
+        return;
+      }
+
+      const f = toStdHttpErrorMessage("승인", err);
+      if (f.tone === "warn") toastStd.warn(f.message);
+      else toastStd.err(f.message);
     } finally {
       setBusy({ busy: false });
       await releaseDecisionLockSafely();
@@ -986,7 +1200,10 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
   const applyReject = async (reason: string) => {
     if (!selectedItem) return;
-    if (!canReject) return showToast("warn", "반려 조건을 만족하지 않습니다.");
+    if (!canReject) {
+      toastStd.warn("반려 조건을 만족하지 않습니다.");
+      return;
+    }
     if (isBusy) return;
 
     const trimmed = reason.trim();
@@ -997,14 +1214,14 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
     const ctx = decisionCtxRef.current;
     if (!ctx || ctx.itemId !== selectedItem.id) {
-      showToast("warn", "처리 컨텍스트가 유효하지 않습니다. 다시 시도하세요.");
+      toastStd.warn("처리 컨텍스트가 유효하지 않습니다. 다시 시도하세요.");
       closeDecisionModal();
       return;
     }
 
     const fresh = ensureDecisionFresh({ itemId: ctx.itemId, version: ctx.version });
     if (!fresh.ok) {
-      showToast("danger", fresh.reason);
+      toastStd.err(fresh.reason);
       closeDecisionModal();
       return;
     }
@@ -1013,22 +1230,24 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
     try {
       const api = apiRef.current!;
-      const res = await api.reject(selectedItem.id, { version: ctx.version, lockToken: ctx.lockToken, reason: trimmed });
+      const res = await api.reject(selectedItem.id, {
+        version: ctx.version,
+        lockToken: ctx.lockToken,
+        reason: trimmed,
+      });
 
       const next = normalizeDecisionResult(res.item as ReviewWorkItemExt, "reject", trimmed);
       patchItemInState(next);
 
       if (!isHttpMode) appendAudit(selectedItem.id, "REJECTED", trimmed);
 
-      showToast("neutral", "반려 완료");
+      toastStd.ok(isPolicyDocItem(selectedItem) ? "사규/정책 반려 완료" : "반려 완료");
       setDecisionModal({ open: false, kind: null });
       decisionCtxRef.current = null;
     } catch (err: unknown) {
-      // reject도 ctx.itemId 기준으로 갱신
       if (isReviewerApiError(err) && err.status === 409) {
         const payload = err.details as ConflictPayload | undefined;
-        const t = formatConflictToast(payload);
-        showToast(t.tone, t.message);
+        toastStd.conflict(payload);
 
         const targetId = ctx.itemId;
         try {
@@ -1043,7 +1262,20 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
         return;
       }
 
-      showToast("danger", "반려 처리에 실패했습니다.");
+      const m = extractApiErrorMessage(err);
+
+      // mock 모드: policyStore 연동 문서 미존재로 실패하는 경우 UI 실패 방지
+      if (!isHttpMode && isMissingLinkedDocMessage(m)) {
+        toastStd.warn("연결된 문서를 찾지 못해 연동 반영은 생략했습니다. (Mock)");
+        setDecisionModal({ open: false, kind: null });
+        decisionCtxRef.current = null;
+        await refreshAllFromApi({ silent: true, force: true });
+        return;
+      }
+
+      const f = toStdHttpErrorMessage("반려", err);
+      if (f.tone === "warn") toastStd.warn(f.message);
+      else toastStd.err(f.message);
     } finally {
       setBusy({ busy: false });
       await releaseDecisionLockSafely();
@@ -1062,7 +1294,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     const note = (notesById[selectedItem.id] ?? "").trim();
     if (!note) return;
     appendAudit(selectedItem.id, "COMMENTED", note);
-    showToast("neutral", "메모가 감사 이력에 저장되었습니다.");
+    toastStd.ok("메모가 감사 이력에 저장되었습니다.");
   };
 
   // ===== DEV: 대량 데이터 + 충돌 시뮬레이션 =====
@@ -1071,12 +1303,14 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
   const toggleDataset = () => {
     if (!devEnabled) return;
     if (isBusy || isOverlayOpen || lockState.kind === "locking") return;
-    if (isHttpMode) return showToast("warn", "http 모드에서는 로컬 데이터셋 전환이 비활성화됩니다.");
+    if (isHttpMode) {
+      toastStd.warn("http 모드에서는 로컬 데이터셋 전환이 비활성화됩니다.");
+      return;
+    }
 
-    // 토스트/라벨 역전 + stale datasetKey 문제 해결
     setDatasetKey((prev) => {
       const next = prev === "base" ? "load" : "base";
-      showToast("neutral", next === "load" ? "대량 데이터 로드" : "기본 데이터 로드");
+      toastStd.ok(next === "load" ? "대량 데이터 로드" : "기본 데이터 로드");
       return next;
     });
   };
@@ -1085,7 +1319,10 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     if (!devEnabled) return;
     if (!selectedId) return;
     if (isBusy || isOverlayOpen || lockState.kind === "locking") return;
-    if (isHttpMode) return showToast("warn", "http 모드에서는 충돌 시뮬레이션이 비활성화됩니다.");
+    if (isHttpMode) {
+      toastStd.warn("http 모드에서는 충돌 시뮬레이션이 비활성화됩니다.");
+      return;
+    }
 
     const modes: Array<Parameters<typeof mutateMockForConflict>[2]> = [
       "version_bump",
@@ -1103,8 +1340,7 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
       return next;
     });
 
-    // setItems updater 내부에서 showToast 호출하지 않게 분리
-    showToast("warn", `충돌 시뮬레이션 적용: ${mode.replace("_", " ")}`);
+    toastStd.warn(`충돌 시뮬레이션 적용: ${mode.replace("_", " ")}`);
   };
 
   return {
@@ -1182,7 +1418,6 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
 
     devtools: {
       enabled: devEnabled,
-      // 라벨 역전 수정: 현재 상태를 그대로 보여줌
       datasetLabel: datasetKey === "load" ? "대량 데이터" : "기본 데이터",
       toggleDataset,
       simulateConflict,

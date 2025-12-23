@@ -60,6 +60,7 @@ export const TAB_LABELS: Record<AdminTabId, string> = {
     quiz: "퀴즈 성적 현황",
     metrics: "보안·품질 지표",
     accounts: "계정 / 역할 관리",
+    policy: "사규 / 정책 관리",
     logs: "세부 로그 조회",
 };
 

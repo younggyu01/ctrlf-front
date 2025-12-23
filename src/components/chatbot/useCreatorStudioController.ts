@@ -26,6 +26,7 @@ import type {
   CreatorWorkItem,
   CreatorSortMode,
   DepartmentOption,
+  CreatorSourceFile,
 } from "./creatorStudioTypes";
 import {
   listReviewItemsSnapshot,
@@ -252,6 +253,37 @@ function clearVideoAssetsOnly(item: CreatorWorkItem): CreatorWorkItem["assets"] 
     videoUrl: "",
     thumbnailUrl: "",
   };
+}
+
+function normalizeCreatorSourceFilesForItem(it: CreatorWorkItem): CreatorWorkItem {
+  const src = Array.isArray(it.assets.sourceFiles) ? it.assets.sourceFiles.slice() : [];
+
+  if (src.length === 0 && it.assets.sourceFileName) {
+    src.push({
+      id: `src-legacy-${it.id}`,
+      name: it.assets.sourceFileName,
+      size: it.assets.sourceFileSize ?? 0,
+      mime: it.assets.sourceFileMime ?? "",
+      addedAt: it.updatedAt,
+    });
+  }
+
+  const primary = src[0];
+
+  return {
+    ...it,
+    assets: {
+      ...it.assets,
+      sourceFiles: src,
+      sourceFileName: primary?.name ?? it.assets.sourceFileName ?? "",
+      sourceFileSize: primary ? primary.size : it.assets.sourceFileSize ?? 0,
+      sourceFileMime: primary?.mime ?? it.assets.sourceFileMime ?? "",
+    },
+  };
+}
+
+function normalizeCreatorSourceFiles(items: CreatorWorkItem[]): CreatorWorkItem[] {
+  return items.map(normalizeCreatorSourceFilesForItem);
 }
 
 function makeId(prefix = "CR"): string {
@@ -616,7 +648,9 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
 
   const isDeptCreator = creatorType === "DEPT_CREATOR";
 
-  const [items, setItems] = useState<CreatorWorkItem[]>(() => createMockCreatorWorkItems());
+  const [items, setItems] = useState<CreatorWorkItem[]>(() =>
+    normalizeCreatorSourceFiles(createMockCreatorWorkItems())
+  );
   const [tab, setTab] = useState<CreatorTabId>("draft");
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<CreatorSortMode>("updated_desc");
@@ -1117,10 +1151,7 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
     updateSelected(normalizedPatch);
   };
 
-  /**
-   * 업로드: 실제 File 객체를 받아서 검증/메타 저장
-   */
-  const attachFileToSelected = (file: File) => {
+  const addSourceFilesToSelected = (files: File[]) => {
     if (!selectedItem) return;
 
     const approvedAt = getScriptApprovedAt(selectedItem);
@@ -1134,28 +1165,94 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
       return;
     }
 
-    const v = validateSourceFile(file);
-    if (!v.ok) {
-      showToast("error", v.issues[0] ?? "파일 검증에 실패했습니다.", 3500);
-      return;
+    const cur = normalizeCreatorSourceFilesForItem(selectedItem);
+    const prevFiles = Array.isArray(cur.assets.sourceFiles) ? cur.assets.sourceFiles.slice() : [];
+
+    const existingNames = new Set(prevFiles.map((x) => x.name.trim().toLowerCase()));
+
+    const added: CreatorSourceFile[] = [];
+    for (const f of files) {
+      const v = validateSourceFile(f);
+      if (!v.ok) {
+        showToast("error", v.issues[0] ?? "파일 검증에 실패했습니다.", 3500);
+        return;
+      }
+      if (v.warnings.length > 0) showToast("info", v.warnings[0]);
+
+      const key = v.name.trim().toLowerCase();
+      if (existingNames.has(key)) continue;
+      existingNames.add(key);
+
+      added.push({
+        id: makeId("SRC"),
+        name: v.name,
+        size: v.size,
+        mime: v.mime ?? "",
+        addedAt: Date.now(),
+      });
     }
 
-    if (v.warnings.length > 0) {
-      showToast("info", v.warnings[0]);
-    }
+    if (added.length === 0) return;
+
+    const nextFiles = [...prevFiles, ...added];
+    const primary = nextFiles[0];
 
     updateSelected({
       assets: {
         ...clearGeneratedAllAssets(selectedItem),
-        sourceFileName: v.name,
-        sourceFileSize: v.size,
-        sourceFileMime: v.mime ?? "",
+        sourceFiles: nextFiles,
+        sourceFileName: primary?.name ?? "",
+        sourceFileSize: primary?.size ?? 0,
+        sourceFileMime: primary?.mime ?? "",
       },
       pipeline: resetPipeline(),
       failedReason: undefined,
     });
 
     showToast("success", "파일이 업로드되었습니다. 자동 생성을 실행해 주세요.");
+  };
+
+  const removeSourceFileFromSelected = (fileId: string) => {
+    if (!selectedItem) return;
+
+    const approvedAt = getScriptApprovedAt(selectedItem);
+    if (approvedAt != null) {
+      showToast("info", "1차(스크립트) 승인 이후에는 자료 파일을 변경할 수 없습니다.");
+      return;
+    }
+
+    if (isLockedForEdit(selectedItem)) {
+      showToast("info", "검토 대기/승인/반려/생성 중 상태에서는 파일을 변경할 수 없습니다.");
+      return;
+    }
+
+    const cur = normalizeCreatorSourceFilesForItem(selectedItem);
+    const prevFiles = Array.isArray(cur.assets.sourceFiles) ? cur.assets.sourceFiles.slice() : [];
+
+    const removed = prevFiles.find((x) => x.id === fileId);
+    const nextFiles = prevFiles.filter((x) => x.id !== fileId);
+    if (nextFiles.length === prevFiles.length) return;
+
+    const primary = nextFiles[0];
+
+    updateSelected({
+      assets: {
+        ...clearGeneratedAllAssets(selectedItem),
+        sourceFiles: nextFiles,
+        sourceFileName: primary?.name ?? "",
+        sourceFileSize: primary?.size ?? 0,
+        sourceFileMime: primary?.mime ?? "",
+      },
+      pipeline: resetPipeline(),
+      failedReason: undefined,
+    });
+
+    showToast("success", `파일이 삭제되었습니다${removed?.name ? `: ${removed.name}` : ""}.`);
+  };
+
+  // legacy 호환: 기존 단일 업로드 호출도 멀티로 흡수
+  const attachFileToSelected = (file: File) => {
+    addSourceFilesToSelected([file]);
   };
 
   /**
@@ -1747,5 +1844,7 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
     requestReviewForSelected,
     reopenRejectedToDraft,
     deleteDraft,
+    addSourceFilesToSelected,
+    removeSourceFileFromSelected,
   };
 }

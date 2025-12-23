@@ -25,6 +25,7 @@ import type {
   ReviewStage,
 } from "./creatorStudioTypes";
 import CreatorTrainingSelect from "./CreatorTrainingSelect";
+import ProjectFilesModal, { type ProjectFileItem } from "./ProjectFilesModal";
 
 type Size = PanelSize;
 
@@ -196,10 +197,8 @@ function readOptionalNumber(obj: unknown, key: string): number | null {
 
   const v = (obj as Record<string, unknown>)[key];
 
-  // 이미 number(타임스탬프)면 그대로
   if (typeof v === "number" && Number.isFinite(v)) return v;
 
-  // string이면: (1) 숫자 문자열 → number, (2) ISO/date 문자열 → Date.parse(ms)
   if (typeof v === "string") {
     const s = v.trim();
     if (!s) return null;
@@ -215,8 +214,7 @@ function readOptionalNumber(obj: unknown, key: string): number | null {
 }
 
 /* =========================
-   Policy helpers (NEW)
-   - 탭 매칭/1차-2차 분류를 "파생 상태"로 일관되게 처리
+   Policy helpers
 ========================= */
 
 type CreatorStageFilter = "all" | "stage1" | "stage2";
@@ -230,25 +228,40 @@ function isScriptApproved(it: CreatorWorkItem): boolean {
 }
 
 function inferReviewStage(it: CreatorWorkItem): ReviewStage {
-  // REVIEW_PENDING/REJECTED에서 stage 힌트를 보여줄 때:
-  // 명시(stage 필드)가 있으면 우선, 없으면 scriptApprovedAt 존재로 추론
   if (it.reviewStage) return it.reviewStage;
   return isScriptApproved(it) ? "FINAL" : "SCRIPT";
 }
 
 function inferRejectedStage(it: CreatorWorkItem): ReviewStage {
   if (it.rejectedStage) return it.rejectedStage;
-  // fallback: reviewStage가 남아있을 수 있음
   if (it.reviewStage) return it.reviewStage;
   return isScriptApproved(it) ? "FINAL" : "SCRIPT";
 }
 
 /**
- * 탭 매칭 정책
- * - 초안(draft): DRAFT/GENERATING 중 scriptApprovedAt 없는 것(=1차 승인 전)
- * - 승인(approved): (1) APPPROVED(2차) + (2) DRAFT/GENERATING인데 scriptApprovedAt 있는 것(=1차 승인 완료)
- * - 검토대기/반려/실패: status 기반 그대로
+ * 4대 의무교육(전사필수) 여부 (카테고리 기반)
  */
+function isCategoryMandatoryFixed(categoryId: string): boolean {
+  return !isJobCategory(categoryId);
+}
+
+/**
+ * 정책상 필수 여부 (4대면 무조건 true)
+ */
+function getEffectiveMandatoryForItem(it: CreatorWorkItem): boolean {
+  return isCategoryMandatoryFixed(it.categoryId) ? true : Boolean(it.isMandatory);
+}
+
+/**
+ * 정책상 전사 대상 여부
+ * - 4대/필수면 무조건 전사
+ * - 아니면 targetDeptIds=[] 일 때 전사
+ */
+function isAllCompanyByPolicy(it: CreatorWorkItem): boolean {
+  const effMandatory = getEffectiveMandatoryForItem(it);
+  return effMandatory ? true : it.targetDeptIds.length === 0;
+}
+
 function matchTab(tab: CreatorTabId, it: CreatorWorkItem): boolean {
   const sa = isScriptApproved(it);
 
@@ -276,18 +289,6 @@ function matchTab(tab: CreatorTabId, it: CreatorWorkItem): boolean {
   }
 }
 
-/**
- * 1차/2차(서브탭) 의미를 탭별로 분리
- * - 승인 탭:
- *   - 1차: scriptApprovedAt 있고 status!=APPROVED (영상 생성/최종요청 전 단계)
- *   - 2차: status==APPROVED (최종 승인/게시)
- * - 검토대기 탭:
- *   - 1차: stage==SCRIPT
- *   - 2차: stage==FINAL
- * - 반려 탭:
- *   - 1차: rejectedStage==SCRIPT
- *   - 2차: rejectedStage==FINAL
- */
 function getStageForTab(tab: CreatorTabId, it: CreatorWorkItem): 1 | 2 | null {
   if (tab === "approved") {
     if (it.status === "APPROVED") return 2;
@@ -305,19 +306,12 @@ function getStageForTab(tab: CreatorTabId, it: CreatorWorkItem): 1 | 2 | null {
     return st === "FINAL" ? 2 : 1;
   }
 
-  // draft/failed는 서브탭 의미가 약해서 null(서브탭 UI 자체를 숨김)
   return null;
 }
 
-/**
- * 상태 pill 표시(리스트/상세 공통)
- * - 1차 승인 완료(=scriptApprovedAt 있고 DRAFT/GENERATING)는 "승인(1차)" + approved 톤
- * - REVIEW_PENDING/REJECTED는 (1차/2차) 힌트 추가
- */
 function getDisplayStatusPill(it: CreatorWorkItem): { label: string; className: string } {
   const sa = isScriptApproved(it);
 
-  // 1차 승인 완료인데 status는 DRAFT로 되돌린 정책 케이스
   if ((it.status === "DRAFT" || it.status === "GENERATING") && sa) {
     return {
       label: "승인(1차)",
@@ -368,12 +362,13 @@ function filterByQuery(
   return items.filter((it) => {
     const pill = getDisplayStatusPill(it);
 
-    const deptText =
-      it.targetDeptIds.length === 0
-        ? "전사"
-        : it.targetDeptIds
-          .map((id) => deptNameById.get(id) ?? deptLabel(id))
-          .join(" ");
+    const allCompany = isAllCompanyByPolicy(it);
+
+    const deptText = allCompany
+      ? "전사"
+      : it.targetDeptIds
+        .map((id) => deptNameById.get(id) ?? deptLabel(id))
+        .join(" ");
 
     const templateText = templateNameById.get(it.templateId) ?? templateLabel(it.templateId);
 
@@ -382,6 +377,9 @@ function filterByQuery(
       : "";
 
     const kindText = isJobCategory(it.categoryId) ? "직무" : "4대 전사필수";
+
+    const effMandatory = getEffectiveMandatoryForItem(it);
+    const mandatoryText = effMandatory ? "필수" : "선택";
 
     const versionText = `v${it.version ?? 1}`;
 
@@ -408,6 +406,7 @@ function filterByQuery(
         deptText,
         templateText,
         trainingText,
+        mandatoryText,
         versionText,
         pill.label,
         stageHint,
@@ -447,7 +446,6 @@ function sortItems(items: CreatorWorkItem[], mode: CreatorSortMode): CreatorWork
 function getEmptyCopy(tab: CreatorTabId, stage: CreatorStageFilter, query: string): { title: string; desc: string } {
   const hasQuery = normalizeText(query).length > 0;
 
-  // 검색이 걸려서 비는 경우는 공통 문구로 통일
   if (hasQuery) {
     return {
       title: "목록이 비어있습니다",
@@ -509,7 +507,7 @@ function getEmptyCopy(tab: CreatorTabId, stage: CreatorStageFilter, query: strin
 }
 
 /* =========================
-   Flow Stepper (NEW)
+   Flow Stepper
 ========================= */
 
 type CreatorFlowStepKey =
@@ -606,7 +604,6 @@ function buildCreatorFlowSteps(input: CreatorFlowInput): {
     },
   ];
 
-  // activeKey 결정
   let activeKey: CreatorFlowStepKey | null = null;
 
   if (status === "APPROVED") {
@@ -633,7 +630,6 @@ function buildCreatorFlowSteps(input: CreatorFlowInput): {
   const steps: CreatorFlowStep[] = base.map((s) => {
     const idx = order.findIndex((k) => k === s.key);
 
-    // error step
     if (status === "REJECTED" && s.key === activeKey) {
       return {
         key: s.key,
@@ -651,12 +647,10 @@ function buildCreatorFlowSteps(input: CreatorFlowInput): {
       };
     }
 
-    // done
     if (s.done) {
       return { key: s.key, label: s.label, state: "done", hint: s.hint };
     }
 
-    // active
     if (activeKey != null && s.key === activeKey) {
       let hint = s.hint;
 
@@ -673,16 +667,13 @@ function buildCreatorFlowSteps(input: CreatorFlowInput): {
       return { key: s.key, label: s.label, state: "active", hint };
     }
 
-    // locked (active 이후 단계는 잠금)
     if (activeIndex >= 0 && idx > activeIndex) {
       return { key: s.key, label: s.label, state: "locked", hint: "잠금" };
     }
 
-    // active 이전인데 done이 아닌 경우(데이터 비정합 방지): 잠금 처리
     return { key: s.key, label: s.label, state: "locked", hint: "잠금" };
   });
 
-  // 정책 잠금: 1차 승인 전에는 영상 생성/2차/게시 잠금
   if (!isScriptApproved) {
     const lockAfter: CreatorFlowStepKey[] = ["video", "review2", "publish"];
     for (let i = 0; i < steps.length; i += 1) {
@@ -748,6 +739,14 @@ const CreatorFlowStepper: React.FC<{
 };
 /* ========================= */
 
+function readSourceFiles(selected: CreatorWorkItem | null): Array<{ id: string; name: string; size: number }> {
+  if (!selected) return [];
+  const assets = selected.assets as unknown as {
+    sourceFiles?: Array<{ id: string; name: string; size: number }>;
+  };
+  return Array.isArray(assets?.sourceFiles) ? assets.sourceFiles : [];
+}
+
 const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   anchor,
   onClose,
@@ -756,7 +755,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   creatorName,
   allowedDeptIds,
 }) => {
-  // 권한 가드(2중)
   const role: UserRole = userRole ?? "VIDEO_CREATOR";
   const canOpen = can(role, "OPEN_CREATOR_STUDIO");
   useEffect(() => {
@@ -783,26 +781,27 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     sortMode,
     setSortMode,
 
-    // 기존 필드들도 유지(상세/액션에서 사용)
-    filteredItems, // fallback 용으로만 사용(컨트롤러가 raw list를 안 줄 수도 있으므로)
+    filteredItems, // fallback
     selectedItem,
     selectItem,
     createDraft,
     updateSelectedMeta,
-    attachFileToSelected,
-    runPipelineForSelected,     // (1차) 스크립트 생성
-    runVideoOnlyForSelected,    // (2차 준비) 영상 생성/재생성
+
+    addSourceFilesToSelected,
+    removeSourceFileFromSelected,
+
+    runPipelineForSelected,
+    runVideoOnlyForSelected,
     retryPipelineForSelected,
     updateSelectedScript,
     showToast,
-    requestReviewForSelected,   // (1차/2차) 검토 요청
+    requestReviewForSelected,
     reopenRejectedToDraft,
     deleteDraft,
     selectedValidation,
     toast,
   } = controller;
 
-  // 가능하면 raw list를 받아서 탭 매칭을 View에서 완결
   const rawItems: CreatorWorkItem[] = useMemo(() => {
     const maybe = controller as unknown as {
       items?: CreatorWorkItem[];
@@ -823,12 +822,10 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   const [creatorStageFilter, setCreatorStageFilter] =
     useState<CreatorStageFilter>("all");
 
-  // 탭 전환 시: stageFilter는 기본 all로 (빈 리스트로 오해하는 UX 방지)
   useEffect(() => {
     setCreatorStageFilter("all");
   }, [tab]);
 
-  // 탭 매칭 + 검색 + 정렬을 View에서 수행 (정책 일관성 확보)
   const tabMatchedItems = useMemo(() => {
     return rawItems.filter((it) => matchTab(tab, it));
   }, [rawItems, tab]);
@@ -842,7 +839,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   }, [searchedItems, sortMode]);
 
   const creatorStageCounts = useMemo(() => {
-    // draft/failed는 stage UI를 숨기므로 카운트도 의미 없음
     if (tab === "draft" || tab === "failed") {
       return { all: sortedItems.length, stage1: 0, stage2: 0, enabled: false };
     }
@@ -867,7 +863,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     return sortedItems.filter((it) => getStageForTab(tab, it) === target);
   }, [sortedItems, creatorStageFilter, tab]);
 
-  // 필터로 인해 선택 항목이 리스트에서 사라지면, 첫 항목으로 자동 이동
   useEffect(() => {
     if (!selectedItem) return;
     if (visibleItems.length === 0) return;
@@ -877,13 +872,9 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
 
   const isDeptCreator = creatorType === "DEPT_CREATOR";
 
-  /**
-   * 초기 size를 “현재 뷰포트에 맞춰” 보정
-   */
   const initialSizeRef = useRef<Size>(fitSizeToViewport(INITIAL_SIZE));
   const [size, setSize] = useState<Size>(initialSizeRef.current);
 
-  // 최신 size/pos 참조용 ref
   const sizeRef = useRef<Size>(size);
   useEffect(() => {
     sizeRef.current = size;
@@ -906,7 +897,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     panelPosRef.current = panelPos;
   }, [panelPos]);
 
-  // anchor 변화로 자동 재배치 튐 방지
   const userMovedRef = useRef(false);
   const didInitFromAnchorRef = useRef(false);
 
@@ -929,13 +919,10 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     startLeft: panelPos.left,
   });
 
-  // file input
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // detail scroll ref
+  const [filesModalOpen, setFilesModalOpen] = useState(false);
+  const [jumpToPipelineOnClose, setJumpToPipelineOnClose] = useState(false);
   const detailScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // anchor 변경 시 재배치
   useEffect(() => {
     const currentSize = fitSizeToViewport(sizeRef.current);
 
@@ -966,7 +953,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     didInitFromAnchorRef.current = true;
   }, [anchor]);
 
-  // 창 크기 변경 시: size 보정 + pos clamp
   useEffect(() => {
     const handleWindowResize = () => {
       setSize((prev) => {
@@ -986,10 +972,8 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     return () => window.removeEventListener("resize", handleWindowResize);
   }, []);
 
-  // window mousemove/mouseup (한 번만 설치)
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
-      // resize
       const rs = resizeRef.current;
       const dir = rs.dir;
 
@@ -1028,7 +1012,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
         return;
       }
 
-      // drag
       const ds = dragRef.current;
       if (ds.dragging) {
         const dx = event.clientX - ds.startX;
@@ -1139,18 +1122,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     onClose();
   };
 
-  const onPickFile = () => {
-    fileInputRef.current?.click();
-  };
-
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    attachFileToSelected(f);
-    e.target.value = "";
-  };
-
-  // ===== 1차/2차 플로우 판단 (selected 기준) =====
   const scriptApprovedAt = selectedItem
     ? readOptionalNumber(selectedItem, "scriptApprovedAt")
     : null;
@@ -1160,7 +1131,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     Boolean(selectedItem?.pipeline?.state === "RUNNING") ||
     selectedItem?.status === "GENERATING";
 
-  // 상태 기반 “행위 잠금”(공통)
   const isHardLocked =
     !selectedItem ||
     selectedItem.status === "REVIEW_PENDING" ||
@@ -1168,18 +1138,35 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     selectedItem.status === "REJECTED" ||
     isPipelineRunning;
 
-  // 메타/스크립트 편집 잠금: 1차 승인 이후에는 편집 금지(영상 생성/2차 요청만)
   const disableMeta = isHardLocked || selectedIsScriptApproved;
 
-  const progress = selectedItem?.pipeline?.progress ?? 0;
-  const progressScale = clamp(progress / 100, 0, 1);
+  const onPickFile = () => {
+    if (!selectedItem) {
+      showToast("info", "선택된 콘텐츠가 없습니다.");
+      return;
+    }
+    if (disableMeta) {
+      showToast(
+        "info",
+        selectedIsScriptApproved
+          ? "1차 승인 이후에는 소스 파일을 변경할 수 없습니다."
+          : "현재 상태에서는 파일을 변경할 수 없습니다."
+      );
+      return;
+    }
+    setJumpToPipelineOnClose(false);
+    setFilesModalOpen(true);
+  };
 
+  // pipeline 안전 접근 (크래시 방지)
+  const pipelineState = selectedItem?.pipeline?.state ?? "IDLE";
+  const pipelineProgress = selectedItem?.pipeline?.progress ?? 0;
+  const pipelineMessage = selectedItem?.pipeline?.message ?? "";
+
+  const progressScale = clamp(pipelineProgress / 100, 0, 1);
   const selectedKey = selectedItem?.id ?? null;
 
-  // 스크립트(Scene) 편집에서 “저장되지 않은 변경사항” 가드용
   const [scriptSceneDirty, setScriptSceneDirty] = useState(false);
-
-  // 아이템이 바뀌면 dirty 상태 초기화
   useEffect(() => {
     setScriptSceneDirty(false);
   }, [selectedKey]);
@@ -1189,7 +1176,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     detailScrollRef.current?.scrollTo({ top: 0 });
   }, [selectedKey]);
 
-  // 위치/크기/진행률은 CSS 변수로만 주입
   const containerStyle: CreatorCSSVars = {
     "--cb-creator-x": `${panelPos.left}px`,
     "--cb-creator-y": `${panelPos.top}px`,
@@ -1205,33 +1191,30 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   const isMockVideo = videoUrl.startsWith("mock://");
   const canRenderVideoPlayer = videoUrl.length > 0 && !isMockVideo;
 
-  // 단일 축: 직무/4대(전사 필수)
   const isJob = selectedItem ? isJobCategory(selectedItem.categoryId) : false;
-  const mandatoryByCategory = selectedItem
-    ? !isJobCategory(selectedItem.categoryId)
-    : false;
+  const mandatoryByCategory = selectedItem ? !isJobCategory(selectedItem.categoryId) : false;
 
-  // effectiveMandatory: 4대면 무조건 true, 아니면 isMandatory
   const effectiveMandatory = selectedItem
     ? mandatoryByCategory
       ? true
       : Boolean(selectedItem.isMandatory)
     : false;
 
-  // 전사/부서 상호배타: targetDeptIds=[]가 “전사”
   const isAllCompany = selectedItem
     ? effectiveMandatory
       ? true
       : selectedItem.targetDeptIds.length === 0
     : false;
 
-  // 에셋 유무
   const hasScript = (selectedItem?.assets?.script?.trim().length ?? 0) > 0;
+  const sourceFilesCount = selectedItem ? readSourceFiles(selectedItem).length : 0;
+
   const hasSourceFile =
+    sourceFilesCount > 0 ||
     (selectedItem?.assets?.sourceFileName ?? "").trim().length > 0;
+
   const hasVideo = (selectedItem?.assets?.videoUrl ?? "").trim().length > 0;
 
-  // 버튼 가드(뷰 레벨)
   const canGenerateScript =
     !!selectedItem &&
     selectedItem.status === "DRAFT" &&
@@ -1250,6 +1233,8 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   const scriptGenLabel = hasScript ? "스크립트 재생성" : "스크립트 생성";
   const videoGenLabel = hasVideo ? "영상 재생성" : "영상 생성";
 
+  const pipelineCardRef = useRef<HTMLDivElement | null>(null);
+
   function phaseHintFor(item: CreatorWorkItem | null) {
     if (!item) return "";
 
@@ -1262,14 +1247,15 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     if (item.status === "REJECTED") return "반려됨";
     if (item.status === "FAILED") return "생성 실패";
 
-    // DRAFT/GENERATING
     if (item.status === "GENERATING") return "생성 중…";
+
+    // 멀티 파일(sourceFiles)까지 포함해서 판정
     const _hasSource =
+      readSourceFiles(item).length > 0 ||
       (item.assets?.sourceFileName ?? "").trim().length > 0;
-    const _hasScript =
-      (item.assets?.script ?? "").trim().length > 0;
-    const _hasVideo =
-      (item.assets?.videoUrl ?? "").trim().length > 0;
+
+    const _hasScript = (item.assets?.script ?? "").trim().length > 0;
+    const _hasVideo = (item.assets?.videoUrl ?? "").trim().length > 0;
 
     if (!_hasSource) return "자료 업로드 대기";
     if (!_hasScript && !sa) return "스크립트 생성 대기";
@@ -1297,7 +1283,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   const selectedId = selectedItem?.id ?? null;
   const selectedStatus = selectedItem?.status ?? null;
 
-  // ===== Stepper model (NEW) =====
   const flowModel = useMemo(() => {
     if (!selectedId || !selectedStatus) return null;
 
@@ -1325,18 +1310,35 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
       : ""
     }`
     : "";
-  // ==============================
 
-  // Empty copy
   const emptyCopy = useMemo(() => {
     return getEmptyCopy(tab, creatorStageFilter, query);
   }, [tab, creatorStageFilter, query]);
 
-  // 승인 탭 Stage 필터가 무의미하게 숨겨지는 것을 방지하기 위해 enabled 플래그 사용
   const showStagePills = tab !== "draft" && tab !== "failed" && creatorStageCounts.enabled;
 
-  // Detail pill (selected)
   const selectedPill = selectedItem ? getDisplayStatusPill(selectedItem) : null;
+
+  const creatorFiles: ProjectFileItem[] = useMemo(() => {
+    if (!selectedItem) return [];
+    const src = readSourceFiles(selectedItem);
+    return src.map((f, idx) => ({
+      id: f.id,
+      name: f.name,
+      sizeBytes: f.size,
+      meta: idx === 0 ? "기본" : undefined,
+    }));
+  }, [selectedItem]);
+
+  // 삭제 버튼 클릭 가드(1차 승인 이후 삭제 금지)
+  const onDeleteDraft = () => {
+    if (!selectedItem) return;
+    if (selectedIsScriptApproved) {
+      showToast("info", "1차 승인 이후에는 삭제할 수 없습니다. 반려 → 새 버전으로 편집 흐름을 사용하세요.");
+      return;
+    }
+    deleteDraft();
+  };
 
   return (
     <div className="cb-creator-wrapper" aria-hidden={false}>
@@ -1428,13 +1430,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                 <div className="cb-creator-left-top">
                   <div className="cb-creator-tabs">
                     {(
-                      [
-                        "draft",
-                        "review_pending",
-                        "rejected",
-                        "approved",
-                        "failed",
-                      ] as CreatorTabId[]
+                      ["draft", "review_pending", "rejected", "approved", "failed"] as CreatorTabId[]
                     ).map((t) => (
                       <button
                         key={t}
@@ -1537,9 +1533,17 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                       const kindText = isJobCategory(it.categoryId)
                         ? "직무"
                         : "4대(전사필수)";
+
+                      const effMandatory = getEffectiveMandatoryForItem(it);
+                      const allCompany = isAllCompanyByPolicy(it);
+
                       const v = it.version ?? 1;
                       const stepText = listStepText(it);
                       const pill = getDisplayStatusPill(it);
+
+                      const deptText = allCompany
+                        ? "전사"
+                        : it.targetDeptIds.map(deptLabel).join(", ");
 
                       return (
                         <button
@@ -1566,7 +1570,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                                 {it.jobTrainingId
                                   ? ` · ${jobTrainingLabel(it.jobTrainingId)}`
                                   : ""}
-                                {it.isMandatory ? " · 필수" : ""}
+                                {effMandatory ? " · 필수" : ""}
                                 {stepText}
                               </div>
                             </div>
@@ -1575,11 +1579,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                           </div>
 
                           <div className="cb-creator-item-bottom">
-                            <div className="cb-creator-item-depts">
-                              {it.targetDeptIds.length === 0
-                                ? "전사"
-                                : it.targetDeptIds.map(deptLabel).join(", ")}
-                            </div>
+                            <div className="cb-creator-item-depts">{deptText}</div>
                             <div className="cb-creator-item-date">
                               {formatDateTime(it.updatedAt)}
                             </div>
@@ -1612,8 +1612,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                         <div className="cb-creator-detail-title-row">
                           <div className="cb-creator-detail-title">
                             {selectedItem.title}{" "}
-                            <span className="cb-creator-muted">{`v${selectedItem.version ?? 1
-                              }`}</span>
+                            <span className="cb-creator-muted">{`v${selectedItem.version ?? 1}`}</span>
                           </div>
 
                           {selectedPill ? (
@@ -1644,11 +1643,12 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
 
                       <div className="cb-creator-detail-header-actions">
                         {(selectedItem.status === "DRAFT" ||
-                          selectedItem.status === "FAILED") && (
+                          selectedItem.status === "FAILED") &&
+                          !selectedIsScriptApproved && (
                             <button
                               className="cb-admin-ghost-btn"
                               onMouseDown={(e) => e.stopPropagation()}
-                              onClick={deleteDraft}
+                              onClick={onDeleteDraft}
                               type="button"
                             >
                               삭제
@@ -1690,7 +1690,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             </div>
                           )}
 
-                        {/* ===== Stepper card (NEW) ===== */}
                         {flowModel?.steps ? (
                           <div className="cb-reviewer-detail-card">
                             <CreatorFlowStepper
@@ -1699,7 +1698,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             />
                           </div>
                         ) : null}
-                        {/* ============================ */}
 
                         {/* Version */}
                         <div className="cb-reviewer-detail-card">
@@ -1777,7 +1775,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                               </select>
                             </label>
 
-                            {/* jobTrainingId: 직무일 때만 활성 */}
                             <label className="cb-creator-field">
                               <div className="cb-creator-field-label">
                                 직무교육(Training ID)
@@ -1813,7 +1810,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                               <div className="cb-creator-field-label">대상 부서</div>
 
                               <div className="cb-creator-checkbox-box">
-                                {/* 전사 대상 토글: targetDeptIds=[] */}
                                 <label className="cb-creator-checkitem">
                                   <input
                                     type="checkbox"
@@ -1859,7 +1855,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
 
                                 <div className="cb-creator-spacer-8" />
 
-                                {/* 부서 체크 */}
                                 {!effectiveMandatory && !mandatoryByCategory && (
                                   <>
                                     {departments.map((d) => {
@@ -1939,7 +1934,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                           </div>
 
                           {selectedIsScriptApproved && (
-                            <div className="cb-creator-muted" style={{ marginTop: 8 }}>
+                            <div className="cb-creator-muted cb-creator-mt-8">
                               1차(스크립트) 승인 이후에는 기본 정보/스크립트 변경이 제한됩니다.
                               수정이 필요하면 반려 처리 후 “새 버전으로 편집” 흐름으로 진행하세요.
                             </div>
@@ -1947,7 +1942,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                         </div>
 
                         {/* Upload + Pipeline */}
-                        <div className="cb-reviewer-detail-card">
+                        <div className="cb-reviewer-detail-card" ref={pipelineCardRef}>
                           <div className="cb-reviewer-detail-card-title">
                             자료 업로드 & 자동 생성
                           </div>
@@ -1967,28 +1962,39 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             >
                               자료 업로드
                             </button>
-                            <input
-                              ref={fileInputRef}
-                              type="file"
-                              accept={SOURCE_ACCEPT}
-                              className="cb-creator-hidden-file-input"
-                              onChange={onFileChange}
-                            />
+
                             <div className="cb-creator-upload-filename">
-                              {selectedItem.assets.sourceFileName ? (
-                                <>
-                                  업로드됨: {selectedItem.assets.sourceFileName}
-                                  {selectedItem.assets.sourceFileSize ? (
-                                    <span className="cb-creator-muted">
-                                      {` (${formatBytes(
-                                        selectedItem.assets.sourceFileSize
-                                      )})`}
-                                    </span>
-                                  ) : null}
-                                </>
-                              ) : (
-                                "업로드된 파일 없음"
-                              )}
+                              {(() => {
+                                const src = readSourceFiles(selectedItem);
+                                if (src.length > 0) {
+                                  const first = src[0];
+                                  const extra = src.length > 1 ? ` 외 ${src.length - 1}개` : "";
+                                  return (
+                                    <>
+                                      업로드됨: {first.name}
+                                      {extra ? <span className="cb-creator-muted">{extra}</span> : null}
+                                      {typeof first.size === "number" && first.size > 0 ? (
+                                        <span className="cb-creator-muted">{` (${formatBytes(first.size)})`}</span>
+                                      ) : null}
+                                    </>
+                                  );
+                                }
+
+                                return selectedItem.assets.sourceFileName ? (
+                                  <>
+                                    업로드됨: {selectedItem.assets.sourceFileName}
+                                    {selectedItem.assets.sourceFileSize ? (
+                                      <span className="cb-creator-muted">
+                                        {` (${formatBytes(
+                                          selectedItem.assets.sourceFileSize
+                                        )})`}
+                                      </span>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  "업로드된 파일 없음"
+                                );
+                              })()}
                             </div>
                           </div>
 
@@ -1996,15 +2002,14 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             <div className="cb-creator-pipeline-status">
                               <div className="cb-creator-pipeline-status-title">
                                 상태:{" "}
-                                {selectedItem.pipeline.state === "RUNNING"
-                                  ? selectedItem.pipeline.message ?? "진행 중"
+                                {pipelineState === "RUNNING"
+                                  ? pipelineMessage || "진행 중"
                                   : phaseHintFor(selectedItem)}
                               </div>
 
                               <div className="cb-creator-pipeline-status-desc">
-                                {selectedItem.pipeline.state !== "IDLE" &&
-                                  selectedItem.pipeline.progress > 0
-                                  ? `진행률 ${selectedItem.pipeline.progress}%`
+                                {pipelineState !== "IDLE" && pipelineProgress > 0
+                                  ? `진행률 ${pipelineProgress}%`
                                   : !hasSourceFile
                                     ? "자료를 업로드하세요."
                                     : !selectedIsScriptApproved
@@ -2051,7 +2056,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             </div>
                           </div>
 
-                          {/* progress bar */}
                           <div className="cb-creator-progress">
                             <div className="cb-creator-progress-bar" />
                           </div>
@@ -2073,7 +2077,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                                   ? "(1차 승인 완료)"
                                   : "(1차 검토 대상)"}
                               </div>
-                              {/* JSON/원문 편집 금지: 씬(Scene) 편집 UI로만 수정 */}
+
                               {hasScript ? (
                                 <>
                                   <CreatorScriptSceneEditor
@@ -2087,7 +2091,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                                   />
 
                                   {scriptSceneDirty && !disableMeta ? (
-                                    <div className="cb-creator-muted" style={{ marginTop: 6 }}>
+                                    <div className="cb-creator-muted cb-creator-mt-6">
                                       저장되지 않은 스크립트 수정이 있습니다. 수정한 씬에서 “저장(씬)”을 눌러 반영하세요.
                                     </div>
                                   ) : null}
@@ -2097,7 +2101,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                               )}
 
                               {selectedIsScriptApproved && (
-                                <div className="cb-creator-muted" style={{ marginTop: 6 }}>
+                                <div className="cb-creator-muted cb-creator-mt-6">
                                   1차 승인 이후 스크립트는 잠금됩니다.
                                 </div>
                               )}
@@ -2206,7 +2210,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             재시도
                           </button>
                         ) : selectedIsScriptApproved && !hasVideo ? (
-                          // 정책: 1차 승인 후에는 "영상 생성"이 우선 CTA
                           <button
                             className="cb-admin-primary-btn"
                             onMouseDown={(e) => e.stopPropagation()}
@@ -2221,7 +2224,12 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                             className="cb-admin-primary-btn"
                             onMouseDown={(e) => e.stopPropagation()}
                             onClick={requestReviewForSelected}
-                            disabled={!selectedValidation.ok || selectedItem.status !== "DRAFT" || scriptSceneDirty}
+                            disabled={
+                              !selectedValidation.ok ||
+                              selectedItem.status !== "DRAFT" ||
+                              scriptSceneDirty ||
+                              isPipelineRunning
+                            }
                             type="button"
                           >
                             {selectedIsScriptApproved ? "최종 검토 요청(2차)" : "스크립트 검토 요청(1차)"}
@@ -2235,7 +2243,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
             </div>
           </div>
 
-          {/* toast */}
           {toast && (
             <div
               className={cx("cb-creator-toast", `cb-creator-toast--${toast.kind}`)}
@@ -2247,6 +2254,50 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
           )}
         </div>
       </div>
+
+      <ProjectFilesModal
+        open={filesModalOpen}
+        title="문서 업로드"
+        accept={SOURCE_ACCEPT}
+        files={creatorFiles}
+        disabled={disableMeta}
+        onClose={() => {
+          setFilesModalOpen(false);
+
+          if (jumpToPipelineOnClose) {
+            setJumpToPipelineOnClose(false);
+            // 상세 스크롤 컨테이너 기준으로 자연스럽게 이동
+            requestAnimationFrame(() => {
+              pipelineCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
+          }
+        }}
+        onAddFiles={(fs) => {
+          if (disableMeta || !selectedItem) return;
+          try {
+            addSourceFilesToSelected(fs);
+
+            // 업로드 후에도 모달은 유지
+            setJumpToPipelineOnClose(true);
+
+            showToast(
+              "info",
+              "파일 업로드 완료 · 닫으면 자동 생성(스크립트/영상) 섹션으로 이동합니다."
+            );
+          } catch {
+            showToast("error", "파일 업로드에 실패했습니다.");
+          }
+        }}
+        onRemoveFile={(id) => {
+          if (disableMeta || !selectedItem) return;
+          try {
+            removeSourceFileFromSelected(id);
+            showToast("info", "파일이 삭제되었습니다.");
+          } catch {
+            showToast("error", "파일 삭제에 실패했습니다.");
+          }
+        }}
+      />
     </div>
   );
 };

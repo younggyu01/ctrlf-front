@@ -1,5 +1,5 @@
 // src/components/chatbot/AdminDashboardView.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   computePanelPosition,
   type Anchor,
@@ -8,6 +8,7 @@ import {
 import AdminFilterBar from "./AdminFilterBar";
 import type { CommonFilterState } from "./adminFilterTypes";
 import AdminRagGapView from "./AdminRagGapView";
+import AdminPolicyView from "./AdminPolicyView";
 import type {
   AdminTabId,
   PeriodFilter,
@@ -95,8 +96,47 @@ type DragState = {
  */
 const MIN_WIDTH = 900;
 const MIN_HEIGHT = 560;
-const MAX_WIDTH = 1180;
+const MAX_WIDTH = Number.POSITIVE_INFINITY;
 const PANEL_MARGIN = 80;
+
+// “데스크톱용 최소”는 유지하되, 뷰포트가 더 작으면 그에 맞춰 자동 축소
+const ABS_MIN_WIDTH = 360;
+const ABS_MIN_HEIGHT = 420;
+
+// 패널이 화면 끝에 딱 붙지 않게 만드는 안전 여백
+const VIEW_PADDING = 32; // 화면 양옆/상하 최소 여백 (패널 max 계산용)
+const VIEW_MARGIN = 16; // 드래그/리사이즈 시 클램프 최소 여백
+
+function clamp(n: number, min: number, max: number) {
+  if (max < min) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function getViewportConstraints() {
+  if (typeof window === "undefined") {
+    return {
+      minW: MIN_WIDTH,
+      minH: MIN_HEIGHT,
+      maxW: MAX_WIDTH,
+      maxH: 9999,
+      margin: VIEW_MARGIN,
+      vw: 1920,
+      vh: 1080,
+    };
+  }
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  const maxW = Math.max(ABS_MIN_WIDTH, vw - VIEW_PADDING * 2);
+  const maxH = Math.max(ABS_MIN_HEIGHT, vh - VIEW_PADDING * 2);
+
+  // 뷰포트가 작으면 min도 같이 내려가야 “패널이 뷰포트를 초과”하지 않음
+  const minW = Math.max(ABS_MIN_WIDTH, Math.min(MIN_WIDTH, maxW));
+  const minH = Math.max(ABS_MIN_HEIGHT, Math.min(MIN_HEIGHT, maxH));
+
+  return { minW, minH, maxW, maxH, margin: VIEW_MARGIN, vw, vh };
+}
 
 /**
  * 화면 크기에 맞게 관리자 대시보드 초기 사이즈 계산
@@ -104,18 +144,41 @@ const PANEL_MARGIN = 80;
  */
 const createInitialSize = (): Size => {
   if (typeof window === "undefined") {
-    // SSR 대비 fallback
     return { width: 980, height: 620 };
   }
 
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const { minW, minH, maxW, maxH, vw, vh } = getViewportConstraints();
 
-  const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, vw - PANEL_MARGIN));
-  const height = Math.max(MIN_HEIGHT, vh - PANEL_MARGIN);
+  // 기본은 “뷰포트 기준으로 넉넉히”, 단 min/max 범위 내에서만
+  const desiredW = vw - VIEW_PADDING * 2;
+  const desiredH = vh - PANEL_MARGIN;
+
+  const width = clamp(desiredW, minW, maxW);
+  const height = clamp(desiredH, minH, maxH);
 
   return { width, height };
 };
+
+function clampPanelToViewport(pos: { top: number; left: number }, size: Size) {
+  if (typeof window === "undefined") return { pos, size };
+
+  const { minW, minH, maxW, maxH, margin, vw, vh } = getViewportConstraints();
+
+  const nextSize: Size = {
+    width: clamp(size.width, minW, maxW),
+    height: clamp(size.height, minH, maxH),
+  };
+
+  const maxLeft = Math.max(margin, vw - margin - nextSize.width);
+  const maxTop = Math.max(margin, vh - margin - nextSize.height);
+
+  const nextPos = {
+    left: clamp(pos.left, margin, maxLeft),
+    top: clamp(pos.top, margin, maxTop),
+  };
+
+  return { pos: nextPos, size: nextSize };
+}
 
 interface AdminDashboardViewProps {
   onClose?: () => void;
@@ -159,15 +222,10 @@ const PiiReportCard: React.FC<PiiReportCardProps> = ({
 
   return (
     <section className="cb-admin-section cb-admin-section--pii-report">
-      {/* 카드 제목 줄 */}
       <div className="cb-admin-pii-header">
         <div className="cb-admin-pii-header-main">
           <h3 className="cb-admin-section-title">PII 점검 결과</h3>
-
-          {/* 어떤 기간/부서/조건 기준 요약인지 한 줄로 표시 */}
-          <span className="cb-admin-section-sub">
-            {contextSummary}
-          </span>
+          <span className="cb-admin-section-sub">{contextSummary}</span>
           <span className="cb-admin-section-sub cb-admin-section-sub--muted">
             위 조건에 해당하는 요청·응답 로그를 기준으로 개인정보 탐지 위험도를
             요약합니다.
@@ -181,7 +239,6 @@ const PiiReportCard: React.FC<PiiReportCardProps> = ({
         </div>
       </div>
 
-      {/* 요약 문장 블록 */}
       <div className="cb-admin-pii-block">
         {report.summaryLines.map((line, idx) => (
           <p key={idx} className="cb-admin-pii-summary-line">
@@ -190,7 +247,6 @@ const PiiReportCard: React.FC<PiiReportCardProps> = ({
         ))}
       </div>
 
-      {/* 탐지된 항목 리스트 */}
       <div className="cb-admin-pii-block">
         <h4 className="cb-admin-pii-block-title">탐지된 개인정보 항목</h4>
         {report.detectedItems.length === 0 ? (
@@ -204,7 +260,6 @@ const PiiReportCard: React.FC<PiiReportCardProps> = ({
         )}
       </div>
 
-      {/* 권장 조치 */}
       <div className="cb-admin-pii-block">
         <h4 className="cb-admin-pii-block-title">권장 조치</h4>
         <ol className="cb-admin-pii-actions">
@@ -214,7 +269,6 @@ const PiiReportCard: React.FC<PiiReportCardProps> = ({
         </ol>
       </div>
 
-      {/* 마스킹된 텍스트 보기 토글 */}
       <div className="cb-admin-pii-block cb-admin-pii-block--mask">
         <button
           type="button"
@@ -239,14 +293,12 @@ const PiiReportCard: React.FC<PiiReportCardProps> = ({
         )}
       </div>
 
-      {/* 카드 하단 메타 정보 */}
       <div className="cb-admin-pii-meta">
         <span>분석 모델: {report.modelName}</span>
         <span>분석 시간: {report.analyzedAt}</span>
         <span>분석 ID: {report.traceId}</span>
       </div>
 
-      {/* AI 기반 자동 탐지 디스클레이머 (푸터용 작은 문구) */}
       <p className="cb-admin-pii-disclaimer">
         ※ 로그 내 개인정보 여부는 AI 기반 자동 탐지 결과이며, 일부 누락이나
         오탐이 있을 수 있습니다. 민감도가 높은 사례는 반드시 보안 담당자의
@@ -266,8 +318,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [selectedDept, setSelectedDept] = useState<string>("ALL");
 
   // 계정/롤 관리용 상태: 사용자 리스트 + 선택 + 편집 버퍼
-  const [userList, setUserList] =
-    useState<AdminUserSummary[]>(MOCK_USERS);
+  const [userList, setUserList] = useState<AdminUserSummary[]>(MOCK_USERS);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(
     MOCK_USERS[0]?.id ?? null,
   );
@@ -280,15 +331,16 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   );
   const [creatorDeptScope, setCreatorDeptScope] = useState<string[]>(
     MOCK_USERS[0]?.creatorDeptScope ??
-    (MOCK_USERS[0] ? [MOCK_USERS[0].deptCode] : []),
+      (MOCK_USERS[0] ? [MOCK_USERS[0].deptCode] : []),
   );
 
   // 계정/롤 관리용 검색/필터 상태
-  const [accountMessage, setAccountMessage] = useState<AccountMessage | null>(null);
+  const [accountMessage, setAccountMessage] = useState<AccountMessage | null>(
+    null,
+  );
   const [userSearchKeyword, setUserSearchKeyword] = useState("");
   const [userDeptFilter, setUserDeptFilter] = useState<string>("ALL");
-  const [userRoleFilter, setUserRoleFilter] =
-    useState<RoleKey | "ALL">("ALL");
+  const [userRoleFilter, setUserRoleFilter] = useState<RoleKey | "ALL">("ALL");
 
   // 세부 로그 탭 필터 상태
   const [logDomainFilter, setLogDomainFilter] = useState<string>("ALL");
@@ -298,21 +350,57 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [logHasPiiOnly, setLogHasPiiOnly] = useState<boolean>(false);
   const [showRagGapView, setShowRagGapView] = useState<boolean>(false);
 
+  // 로그 탭이 아닌 곳으로 이동하면 RAG 갭 뷰는 자동 해제(탭 상태 혼선 방지)
+  useEffect(() => {
+    if (activeTab !== "logs" && showRagGapView) {
+      setShowRagGapView(false);
+    }
+  }, [activeTab, showRagGapView]);
+
   /**
    * === 패널 크기 + 위치 (EduPanel / QuizPanel 과 동일 패턴) ===
+   * - 초기 size 계산을 1회만 수행
+   * - 드래그/리사이즈 중에도 viewport constraint를 일관되게 적용
    */
-  const [size, setSize] = useState<Size>(() => createInitialSize());
-  const [panelPos, setPanelPos] = useState(() =>
-    computePanelPosition(anchor ?? null, createInitialSize()),
+  const initialSize = useMemo<Size>(() => createInitialSize(), []);
+  const initialPos = useMemo(
+    () => computePanelPosition(anchor ?? null, initialSize),
+    // initialSize는 memo이므로 안전
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
+
+  const [{ width: initW, height: initH }, setSize] = useState<Size>(() => {
+    const { size } = clampPanelToViewport({ top: initialPos.top, left: initialPos.left }, initialSize);
+    return size;
+  });
+  const [panelPos, setPanelPos] = useState(() => {
+    const { pos } = clampPanelToViewport(
+      { top: initialPos.top, left: initialPos.left },
+      { width: initW, height: initH },
+    );
+    return pos;
+  });
+
+  // state refs (window 이벤트 핸들러에서 최신값 사용)
+  const sizeRef = useRef<Size>({ width: initW, height: initH });
+  const posRef = useRef<{ top: number; left: number }>(panelPos);
+
+  useEffect(() => {
+    sizeRef.current = { width: initW, height: initH };
+  }, [initW, initH]);
+
+  useEffect(() => {
+    posRef.current = panelPos;
+  }, [panelPos]);
 
   const resizeRef = useRef<ResizeState>({
     resizing: false,
     dir: null,
     startX: 0,
     startY: 0,
-    startWidth: size.width,
-    startHeight: size.height,
+    startWidth: initW,
+    startHeight: initH,
     startTop: panelPos.top,
     startLeft: panelPos.left,
   });
@@ -327,17 +415,19 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
   /**
    * 드래그 / 리사이즈 공통 이벤트
+   * - listeners는 1회만 등록
+   * - 내부에서 ref 기반으로 최신 size/pos를 읽고, viewport constraint 기반으로 클램프
    */
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
       const resizeState = resizeRef.current;
       const dragState = dragRef.current;
 
-      const margin = 16;
-      const padding = 32;
-
       // 1) 리사이즈 중일 때
       if (resizeState.resizing && resizeState.dir) {
+        const { minW, minH, maxW, maxH, margin, vw, vh } =
+          getViewportConstraints();
+
         const dx = event.clientX - resizeState.startX;
         const dy = event.clientY - resizeState.startY;
 
@@ -346,60 +436,79 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         let newTop = resizeState.startTop;
         let newLeft = resizeState.startLeft;
 
-        const maxWidth = Math.max(
-          MIN_WIDTH,
-          window.innerWidth - padding * 2,
-        );
-        const maxHeight = Math.max(
-          MIN_HEIGHT,
-          window.innerHeight - padding * 2,
-        );
-
+        // 동/서 (width, left)
         if (resizeState.dir.includes("e")) {
-          newWidth = resizeState.startWidth + dx;
+          newWidth = clamp(resizeState.startWidth + dx, minW, maxW);
         }
-        if (resizeState.dir.includes("s")) {
-          newHeight = resizeState.startHeight + dy;
+        if (resizeState.dir.includes("w")) {
+          const proposed = resizeState.startWidth - dx;
+          if (proposed < minW) {
+            newWidth = minW;
+            newLeft = resizeState.startLeft + (resizeState.startWidth - minW);
+          } else if (proposed > maxW) {
+            newWidth = maxW;
+            newLeft = resizeState.startLeft + (resizeState.startWidth - maxW);
+          } else {
+            newWidth = proposed;
+            newLeft = resizeState.startLeft + dx;
+          }
         }
 
-        if (resizeState.dir.includes("w")) {
-          newWidth = resizeState.startWidth - dx;
-          newLeft = resizeState.startLeft + dx;
+        // 남/북 (height, top)
+        if (resizeState.dir.includes("s")) {
+          newHeight = clamp(resizeState.startHeight + dy, minH, maxH);
         }
         if (resizeState.dir.includes("n")) {
-          newHeight = resizeState.startHeight - dy;
-          newTop = resizeState.startTop + dy;
+          const proposed = resizeState.startHeight - dy;
+          if (proposed < minH) {
+            newHeight = minH;
+            newTop = resizeState.startTop + (resizeState.startHeight - minH);
+          } else if (proposed > maxH) {
+            newHeight = maxH;
+            newTop = resizeState.startTop + (resizeState.startHeight - maxH);
+          } else {
+            newHeight = proposed;
+            newTop = resizeState.startTop + dy;
+          }
         }
 
-        newWidth = Math.max(MIN_WIDTH, Math.min(maxWidth, newWidth));
-        newHeight = Math.max(MIN_HEIGHT, Math.min(maxHeight, newHeight));
+        // 최종 위치 클램프 (패널이 화면 밖으로 못 나가게)
+        const maxLeft = Math.max(margin, vw - margin - newWidth);
+        const maxTop = Math.max(margin, vh - margin - newHeight);
 
-        const maxLeft = window.innerWidth - margin - newWidth;
-        const maxTop = window.innerHeight - margin - newHeight;
+        newLeft = clamp(newLeft, margin, maxLeft);
+        newTop = clamp(newTop, margin, maxTop);
 
-        newLeft = Math.max(margin, Math.min(maxLeft, newLeft));
-        newTop = Math.max(margin, Math.min(maxTop, newTop));
+        const nextSize = { width: newWidth, height: newHeight };
+        const nextPos = { top: newTop, left: newLeft };
 
-        setSize({ width: newWidth, height: newHeight });
-        setPanelPos({ top: newTop, left: newLeft });
+        // ref를 즉시 갱신해서 “다음 move”에서 stale 값 사용 방지
+        sizeRef.current = nextSize;
+        posRef.current = nextPos;
+
+        setSize(nextSize);
+        setPanelPos(nextPos);
         return;
       }
 
       // 2) 드래그 중일 때
       if (dragState.dragging) {
+        const { margin, vw, vh } = getViewportConstraints();
+
         const dx = event.clientX - dragState.startX;
         const dy = event.clientY - dragState.startY;
 
-        let newTop = dragState.startTop + dy;
-        let newLeft = dragState.startLeft + dx;
+        const curSize = sizeRef.current;
 
-        const maxLeft = window.innerWidth - margin - size.width;
-        const maxTop = window.innerHeight - margin - size.height;
+        const maxLeft = Math.max(margin, vw - margin - curSize.width);
+        const maxTop = Math.max(margin, vh - margin - curSize.height);
 
-        newLeft = Math.max(margin, Math.min(maxLeft, newLeft));
-        newTop = Math.max(margin, Math.min(maxTop, newTop));
+        const newLeft = clamp(dragState.startLeft + dx, margin, maxLeft);
+        const newTop = clamp(dragState.startTop + dy, margin, maxTop);
 
-        setPanelPos({ top: newTop, left: newLeft });
+        const nextPos = { top: newTop, left: newLeft };
+        posRef.current = nextPos;
+        setPanelPos(nextPos);
       }
     };
 
@@ -420,30 +529,76 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [size.width, size.height]);
+  }, []);
+
+  /**
+   * 뷰포트 리사이즈 시: 현재 패널 size/pos를 즉시 클램프
+   * - “창을 키우거나 최대화했을 때 하단/우측이 막혀 이동 불가” 같은 케이스 방지
+   */
+  useEffect(() => {
+    const onResize = () => {
+      const curSize = sizeRef.current;
+      const curPos = posRef.current;
+
+      const { pos, size } = clampPanelToViewport(curPos, curSize);
+
+      // 변화가 없으면 state 업데이트하지 않음(불필요 리렌더 방지)
+      const sizeChanged = size.width !== curSize.width || size.height !== curSize.height;
+      const posChanged = pos.left !== curPos.left || pos.top !== curPos.top;
+
+      if (sizeChanged) {
+        sizeRef.current = size;
+        setSize(size);
+      }
+      if (posChanged) {
+        posRef.current = pos;
+        setPanelPos(pos);
+      }
+    };
+
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  /**
+   * anchor가 바뀌어 재오픈/재배치가 필요한 경우:
+   * - 드래그/리사이즈 중이 아닐 때만 위치를 재계산
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (dragRef.current.dragging || resizeRef.current.resizing) return;
+
+    const curSize = sizeRef.current;
+    const nextRaw = computePanelPosition(anchor ?? null, curSize);
+    const { pos } = clampPanelToViewport({ top: nextRaw.top, left: nextRaw.left }, curSize);
+
+    posRef.current = pos;
+    setPanelPos(pos);
+
+  }, [anchor]);
 
   /**
    * 리사이즈 핸들 down
    */
   const handleResizeMouseDown =
     (dir: ResizeDirection) =>
-      (event: React.MouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onRequestFocus?.();
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onRequestFocus?.();
 
-        resizeRef.current = {
-          resizing: true,
-          dir,
-          startX: event.clientX,
-          startY: event.clientY,
-          startWidth: size.width,
-          startHeight: size.height,
-          startTop: panelPos.top,
-          startLeft: panelPos.left,
-        };
-        dragRef.current.dragging = false;
+      resizeRef.current = {
+        resizing: true,
+        dir,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: sizeRef.current.width,
+        startHeight: sizeRef.current.height,
+        startTop: posRef.current.top,
+        startLeft: posRef.current.left,
       };
+      dragRef.current.dragging = false;
+    };
 
   /**
    * 상단 드래그 바 down
@@ -456,8 +611,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       dragging: true,
       startX: event.clientX,
       startY: event.clientY,
-      startTop: panelPos.top,
-      startLeft: panelPos.left,
+      startTop: posRef.current.top,
+      startLeft: posRef.current.left,
     };
     resizeRef.current.resizing = false;
     resizeRef.current.dir = null;
@@ -536,7 +691,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setCreatorType(next);
 
     if (!next) {
-      // 타입 해제 시: 사용자 소속 부서 하나만 기본값으로
       setCreatorDeptScope([currentUser.deptCode]);
       return;
     }
@@ -557,7 +711,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setCreatorDeptScope((prev) => {
       const exists = prev.includes(deptId);
       if (exists) {
-        // 최소 1개는 남도록 보호
         if (prev.length === 1) return prev;
         return prev.filter((id) => id !== deptId);
       }
@@ -611,11 +764,11 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     const nextUserList = userList.map((user) =>
       user.id === selectedUserId
         ? {
-          ...user,
-          roles: selectedRoles,
-          creatorType,
-          creatorDeptScope,
-        }
+            ...user,
+            roles: selectedRoles,
+            creatorType,
+            creatorDeptScope,
+          }
         : user,
     );
 
@@ -691,10 +844,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     );
     const avgErrorRatio =
       hasErrorRatio && volumeData.length > 0
-        ? volumeData.reduce(
-          (sum, p) => sum + (p.errorRatio ?? 0),
-          0,
-        ) / volumeData.length
+        ? volumeData.reduce((sum, p) => sum + (p.errorRatio ?? 0), 0) /
+          volumeData.length
         : null;
 
     return (
@@ -707,7 +858,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           onRefresh={handleRefreshClick}
         />
 
-        {/* 필수 KPI / 운영 KPI 2줄 분리 */}
         {renderKpiRow(primaryKpis)}
         {renderKpiRow(secondaryKpis)}
 
@@ -720,7 +870,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </span>
             </div>
 
-            {/* 기간 총 질문 / 평균 질문 / 평균 에러율 요약 칩 */}
             <div className="cb-admin-trend-summary">
               <div className="cb-admin-trend-pill">
                 <span className="cb-admin-trend-label">기간 총 질문 수</span>
@@ -746,7 +895,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
             <div className="cb-admin-bar-chart">
               {volumeData.map((point) => {
-                // 최소 40% ~ 최대 100% 사이로 표시
                 const ratio = point.count / max;
                 const widthPercent = 40 + ratio * 60; // 40% ~ 100%
                 const width = `${Math.round(widthPercent)}%`;
@@ -759,10 +907,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   <div key={point.label} className="cb-admin-bar-row">
                     <span className="cb-admin-bar-label">{point.label}</span>
                     <div className="cb-admin-bar-track">
-                      <div
-                        className="cb-admin-bar-fill"
-                        style={{ width }}
-                      />
+                      <div className="cb-admin-bar-fill" style={{ width }} />
                     </div>
                     <span className="cb-admin-bar-value">
                       {point.count.toLocaleString()}건
@@ -793,9 +938,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     <span className="cb-admin-domain-label">
                       {item.domainLabel}
                     </span>
-                    <span className="cb-admin-domain-ratio">
-                      {item.ratio}%
-                    </span>
+                    <span className="cb-admin-domain-ratio">{item.ratio}%</span>
                   </div>
                   <div className="cb-admin-domain-track">
                     <div
@@ -809,7 +952,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           </section>
         </div>
 
-        {/* 라우트별 비율 카드 */}
         <section className="cb-admin-section">
           <div className="cb-admin-section-header">
             <h3 className="cb-admin-section-title">라우트별 질문 비율</h3>
@@ -824,9 +966,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   <span className="cb-admin-domain-label">
                     {item.routeLabel}
                   </span>
-                  <span className="cb-admin-domain-ratio">
-                    {item.ratio}%
-                  </span>
+                  <span className="cb-admin-domain-ratio">{item.ratio}%</span>
                 </div>
                 <div className="cb-admin-domain-track">
                   <div
@@ -848,9 +988,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           <ul className="cb-admin-keyword-list">
             {keywordData.map((item) => (
               <li key={item.keyword} className="cb-admin-keyword-item">
-                <span className="cb-admin-keyword-label">
-                  {item.keyword}
-                </span>
+                <span className="cb-admin-keyword-label">{item.keyword}</span>
                 <span className="cb-admin-keyword-count">
                   {item.count.toLocaleString()}회
                 </span>
@@ -877,13 +1015,10 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       }
     };
 
-    // 스펙 적용: 부서 필터가 선택된 경우, 부서별 이수율 테이블은 해당 부서만 표시
     const visibleDeptRows =
       selectedDept === "ALL"
         ? deptEducationRowsMock
-        : deptEducationRowsMock.filter(
-          (row) => row.deptName === selectedDeptLabel,
-        );
+        : deptEducationRowsMock.filter((row) => row.deptName === selectedDeptLabel);
 
     return (
       <div className="cb-admin-tab-panel">
@@ -927,12 +1062,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               {jobCoursesMock.map((course) => (
                 <li key={course.id} className="cb-admin-course-item">
                   <div className="cb-admin-course-main">
-                    <span className="cb-admin-course-title">
-                      {course.title}
-                    </span>
-                    <span
-                      className={`cb-admin-course-status is-${course.status}`}
-                    >
+                    <span className="cb-admin-course-title">{course.title}</span>
+                    <span className={`cb-admin-course-status is-${course.status}`}>
                       {course.status === "in-progress" && "진행 중"}
                       {course.status === "completed" && "이수 완료"}
                       {course.status === "not-started" && "미시작"}
@@ -995,13 +1126,10 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       }
     };
 
-    // 스펙 적용: 부서 필터가 선택된 경우, 부서별 평균 점수 그래프는 해당 부서만 표시
     const visibleDeptQuizRows =
       selectedDept === "ALL"
         ? deptQuizRowsMock
-        : deptQuizRowsMock.filter(
-          (row) => row.deptName === selectedDeptLabel,
-        );
+        : deptQuizRowsMock.filter((row) => row.deptName === selectedDeptLabel);
 
     return (
       <div className="cb-admin-tab-panel">
@@ -1028,10 +1156,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div key={row.id} className="cb-admin-bar-row">
                   <span className="cb-admin-bar-label">{row.deptName}</span>
                   <div className="cb-admin-bar-track">
-                    <div
-                      className="cb-admin-bar-fill"
-                      style={{ width }}
-                    />
+                    <div className="cb-admin-bar-fill" style={{ width }} />
                   </div>
                   <span className="cb-admin-bar-value">
                     {row.avgScore}점 / {row.participantCount}명
@@ -1112,16 +1237,12 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     const latencyBuckets = LATENCY_BUCKET_BY_PERIOD[period];
     const modelLatency = MODEL_LATENCY_BY_PERIOD[period];
 
-    // PII 막대 너비 계산용 최대값
     const maxPiiRatio = Math.max(
       ...piiTrend.map((row) => Math.max(row.inputRatio, row.outputRatio)),
       1,
     );
 
-    const maxLatencyCount = Math.max(
-      ...latencyBuckets.map((b) => b.count),
-      1,
-    );
+    const maxLatencyCount = Math.max(...latencyBuckets.map((b) => b.count), 1);
 
     const periodLabel =
       PERIOD_OPTIONS.find((p) => p.id === period)?.label ?? "";
@@ -1137,7 +1258,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         />
 
         <div className="cb-admin-section-row">
-          {/* 보안 · PII 블록 */}
           <section className="cb-admin-section cb-admin-section--metric">
             <div className="cb-admin-section-header">
               <h3 className="cb-admin-section-title">보안 · PII 지표</h3>
@@ -1154,20 +1274,15 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     <span className="cb-admin-metric-value">{m.value}</span>
                   </div>
                   {m.description && (
-                    <div className="cb-admin-metric-desc">
-                      {m.description}
-                    </div>
+                    <div className="cb-admin-metric-desc">{m.description}</div>
                   )}
                 </li>
               ))}
             </ul>
 
-            {/* PII 감지 추이 */}
             <div className="cb-admin-metric-chart">
               <div className="cb-admin-metric-chart-header">
-                <div className="cb-admin-metric-chart-title">
-                  PII 감지 추이
-                </div>
+                <div className="cb-admin-metric-chart-title">PII 감지 추이</div>
                 <div className="cb-admin-metric-chart-legend">
                   <span className="cb-admin-metric-legend-dot cb-admin-metric-legend-dot--input" />
                   <span>입력 PII 비율</span>
@@ -1187,10 +1302,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   )}%`;
 
                   return (
-                    <div
-                      key={point.label}
-                      className="cb-admin-metric-chart-row"
-                    >
+                    <div key={point.label} className="cb-admin-metric-chart-row">
                       <div className="cb-admin-metric-chart-row-label">
                         {point.label}
                       </div>
@@ -1225,7 +1337,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             </div>
           </section>
 
-          {/* 성능 · 장애 블록 */}
           <section className="cb-admin-section cb-admin-section--metric">
             <div className="cb-admin-section-header">
               <h3 className="cb-admin-section-title">성능 · 장애 지표</h3>
@@ -1242,20 +1353,15 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     <span className="cb-admin-metric-value">{m.value}</span>
                   </div>
                   {m.description && (
-                    <div className="cb-admin-metric-desc">
-                      {m.description}
-                    </div>
+                    <div className="cb-admin-metric-desc">{m.description}</div>
                   )}
                 </li>
               ))}
             </ul>
 
-            {/* 응답 시간 분포 + 모델별 평균 응답 시간 */}
             <div className="cb-admin-metric-chart">
               <div className="cb-admin-metric-chart-header">
-                <div className="cb-admin-metric-chart-title">
-                  응답 시간 분포
-                </div>
+                <div className="cb-admin-metric-chart-title">응답 시간 분포</div>
                 <div className="cb-admin-metric-chart-caption">
                   {periodLabel} 기준
                 </div>
@@ -1267,10 +1373,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     (bucket.count / maxLatencyCount) * 100,
                   )}%`;
                   return (
-                    <div
-                      key={bucket.label}
-                      className="cb-admin-metric-chart-row"
-                    >
+                    <div key={bucket.label} className="cb-admin-metric-chart-row">
                       <div className="cb-admin-metric-chart-row-label">
                         {bucket.label}
                       </div>
@@ -1294,10 +1397,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 </span>
                 <div className="cb-admin-metric-pill-row">
                   {modelLatency.map((model) => (
-                    <span
-                      key={model.id}
-                      className="cb-admin-metric-pill"
-                    >
+                    <span key={model.id} className="cb-admin-metric-pill">
                       {model.modelLabel}
                       <span className="cb-admin-metric-pill-value">
                         {model.avgMs}ms
@@ -1323,9 +1423,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
     const availableScopeOptions =
       creatorType === "GLOBAL_CREATOR"
-        // 전사 담당 제작자 → 전사 공통만 노출
         ? DEPT_SCOPE_OPTIONS.filter((d) => d.id === "ALL_ORG")
-        // 부서 한정 제작자 → 실제 부서만 노출 (전사 공통 제외)
         : DEPT_SCOPE_OPTIONS.filter((d) => d.id !== "ALL_ORG");
 
     const selectedRoleLabels =
@@ -1333,7 +1431,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         ? "선택된 역할 없음"
         : selectedRoles.map((r) => ROLE_LABELS[r]).join(", ");
 
-    // 좌측 사용자 리스트 필터링
     const filteredUsers = userList.filter((user) => {
       if (userDeptFilter !== "ALL" && user.deptCode !== userDeptFilter) {
         return false;
@@ -1370,7 +1467,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     return (
       <div className="cb-admin-tab-panel">
         <div className="cb-admin-account-layout">
-          {/* ===== 좌측: 사용자 검색 / 선택 ===== */}
           <section className="cb-admin-account-card cb-admin-account-card--left">
             <h3 className="cb-admin-account-title">사용자 검색 / 선택</h3>
             <p className="cb-admin-hint">
@@ -1429,8 +1525,9 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     return (
                       <li
                         key={user.id}
-                        className={`cb-admin-account-user-item ${isActive ? "is-active" : ""
-                          }`}
+                        className={`cb-admin-account-user-item ${
+                          isActive ? "is-active" : ""
+                        }`}
                         onClick={() => handleSelectUser(user)}
                       >
                         <div className="cb-admin-account-user-main">
@@ -1443,10 +1540,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         </div>
                         <div className="cb-admin-account-user-roles">
                           {user.roles.map((role) => (
-                            <span
-                              key={role}
-                              className="cb-admin-role-chip"
-                            >
+                            <span key={role} className="cb-admin-role-chip">
                               {role}
                             </span>
                           ))}
@@ -1459,17 +1553,11 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             </div>
           </section>
 
-          {/* ===== 우측: 선택 사용자 권한 편집 ===== */}
           <section className="cb-admin-account-card cb-admin-account-card--right">
-            <h3 className="cb-admin-account-title">
-              선택한 사용자 권한 편집
-            </h3>
+            <h3 className="cb-admin-account-title">선택한 사용자 권한 편집</h3>
 
-            {/* 계정/롤 탭 안내 토스트 */}
             {accountMessage && (
-              <div
-                className={`cb-admin-toast cb-admin-toast--${accountMessage.type}`}
-              >
+              <div className={`cb-admin-toast cb-admin-toast--${accountMessage.type}`}>
                 {accountMessage.text}
               </div>
             )}
@@ -1501,11 +1589,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   </div>
                 </div>
 
-                {/* 역할(Role) 설정 블록 */}
                 <div className="cb-admin-account-subcard">
-                  <h4 className="cb-admin-account-subtitle">
-                    역할(Role) 설정
-                  </h4>
+                  <h4 className="cb-admin-account-subtitle">역할(Role) 설정</h4>
                   <div className="cb-admin-role-checkboxes">
                     <label>
                       <input
@@ -1527,9 +1612,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       <input
                         type="checkbox"
                         checked={isRoleChecked("CONTENTS_REVIEWER")}
-                        onChange={() =>
-                          handleToggleRole("CONTENTS_REVIEWER")
-                        }
+                        onChange={() => handleToggleRole("CONTENTS_REVIEWER")}
                       />
                       <span>CONTENTS_REVIEWER (콘텐츠 검토자)</span>
                     </label>
@@ -1537,9 +1620,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       <input
                         type="checkbox"
                         checked={isRoleChecked("COMPLAINT_MANAGER")}
-                        onChange={() =>
-                          handleToggleRole("COMPLAINT_MANAGER")
-                        }
+                        onChange={() => handleToggleRole("COMPLAINT_MANAGER")}
                       />
                       <span>COMPLAINT_MANAGER (신고 관리자)</span>
                     </label>
@@ -1558,11 +1639,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   </p>
                 </div>
 
-                {/* 영상 제작 권한 설정 블록 */}
                 <div className="cb-admin-account-subcard">
-                  <h4 className="cb-admin-account-subtitle">
-                    영상 제작 권한 설정
-                  </h4>
+                  <h4 className="cb-admin-account-subtitle">영상 제작 권한 설정</h4>
 
                   <fieldset className="cb-admin-fieldset">
                     <legend>영상 제작자 유형</legend>
@@ -1574,9 +1652,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                           value="DEPT_CREATOR"
                           disabled={!isVideoCreatorChecked}
                           checked={creatorType === "DEPT_CREATOR"}
-                          onChange={() =>
-                            handleCreatorTypeChange("DEPT_CREATOR")
-                          }
+                          onChange={() => handleCreatorTypeChange("DEPT_CREATOR")}
                         />
                         <span>부서 한정 제작자 (DEPT_CREATOR)</span>
                       </label>
@@ -1601,25 +1677,20 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
                     {!isVideoCreatorChecked && (
                       <p className="cb-admin-hint">
-                        VIDEO_CREATOR 역할을 선택하면 제작 가능 부서를 설정할
-                        수 있습니다.
+                        VIDEO_CREATOR 역할을 선택하면 제작 가능 부서를 설정할 수 있습니다.
                       </p>
                     )}
 
                     {isVideoCreatorChecked && !creatorType && (
                       <p className="cb-admin-hint cb-admin-hint--warning">
-                        먼저 영상 제작자 유형(DEPT_CREATOR / GLOBAL_CREATOR)을
-                        선택해 주세요.
+                        먼저 영상 제작자 유형(DEPT_CREATOR / GLOBAL_CREATOR)을 선택해 주세요.
                       </p>
                     )}
 
                     {isVideoCreatorChecked && creatorType && (
                       <div className="cb-admin-scope-grid">
                         {availableScopeOptions.map((dept) => (
-                          <label
-                            key={dept.id}
-                            className="cb-admin-scope-item"
-                          >
+                          <label key={dept.id} className="cb-admin-scope-item">
                             <input
                               type="checkbox"
                               value={dept.id}
@@ -1634,13 +1705,11 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   </fieldset>
                 </div>
 
-                {/* 저장 / 되돌리기 */}
                 <div className="cb-admin-account-actions">
                   <button
                     type="button"
                     className="cb-admin-secondary-btn"
                     onClick={() => {
-                      // 현재 선택된 사용자 기준으로 편집 버퍼 되돌리기
                       setSelectedRoles(currentUser.roles);
                       setCreatorType(currentUser.creatorType ?? null);
                       setCreatorDeptScope(
@@ -1708,7 +1777,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       }
     };
 
-    // 스펙 적용: 부서 필터도 실제로 로그에 반영
     const selectedDeptNameForLogs =
       selectedDept === "ALL" ? null : selectedDeptLabel;
 
@@ -1737,45 +1805,32 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     const totalCount = filteredItems.length;
     const errorCount = filteredItems.filter((i) => i.errorCode).length;
 
-    // 입력/출력 PII를 각각 분리 집계
     const piiInputCount = filteredItems.filter((i) => i.hasPiiInput).length;
     const piiOutputCount = filteredItems.filter((i) => i.hasPiiOutput).length;
     const piiCount = filteredItems.filter(
       (i) => i.hasPiiInput || i.hasPiiOutput,
     ).length;
 
-    const errorRatioInLogs =
-      totalCount > 0 ? (errorCount / totalCount) * 100 : 0;
-    const piiRatioInLogs =
-      totalCount > 0 ? (piiCount / totalCount) * 100 : 0;
+    const errorRatioInLogs = totalCount > 0 ? (errorCount / totalCount) * 100 : 0;
+    const piiRatioInLogs = totalCount > 0 ? (piiCount / totalCount) * 100 : 0;
 
-    // 전체 로그 대비 "입력/출력 PII 비율" 계산
-    const inputRatioInLogs =
-      totalCount > 0 ? (piiInputCount / totalCount) * 100 : 0;
-    const outputRatioInLogs =
-      totalCount > 0 ? (piiOutputCount / totalCount) * 100 : 0;
+    const inputRatioInLogs = totalCount > 0 ? (piiInputCount / totalCount) * 100 : 0;
+    const outputRatioInLogs = totalCount > 0 ? (piiOutputCount / totalCount) * 100 : 0;
 
-    // PII 리스크 레벨 산정 로직 (입력/출력 PII 비율까지 고려)
     let riskLevel: PiiRiskLevel = "none";
     if (totalCount > 0 && piiCount > 0) {
-      // 1) 출력 PII가 일정 비율 이상이면 고위험
       if (outputRatioInLogs >= 5 || piiOutputCount >= 3) {
         riskLevel = "high";
-      }
-      // 2) 출력 PII는 없지만, 입력 PII 비율/건수가 과도하게 높으면 고위험
-      else if (
+      } else if (
         outputRatioInLogs === 0 &&
         (inputRatioInLogs >= 20 || piiInputCount >= 15)
       ) {
         riskLevel = "high";
-      }
-      // 3) 그 외에는 경고 수준
-      else {
+      } else {
         riskLevel = "warning";
       }
     }
 
-    // 리스크 레벨에 따라 카드 시나리오 선택
     let activePiiReport: PiiReport;
     switch (riskLevel) {
       case "none":
@@ -1790,7 +1845,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         break;
     }
 
-    // PII 리포트 카드 상단에 표시할 컨텍스트 문장 구성
     const periodLabel =
       PERIOD_OPTIONS.find((p) => p.id === period)?.label ?? "전체 기간";
     const logDomainLabel =
@@ -1811,12 +1865,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       `모델 ${logModelLabel}`,
     ];
 
-    if (logOnlyError) {
-      contextParts.push("에러 로그만");
-    }
-    if (logHasPiiOnly) {
-      contextParts.push("PII 포함 로그만");
-    }
+    if (logOnlyError) contextParts.push("에러 로그만");
+    if (logHasPiiOnly) contextParts.push("PII 포함 로그만");
 
     const piiContextSummary = contextParts.join(" · ");
 
@@ -1834,7 +1884,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         />
 
         <section className="cb-admin-section cb-admin-section--logs-drilldown">
-          {/* Logs 헤더 + RAG 갭 분석 고스트 버튼 */}
           <div className="cb-admin-section-header cb-admin-section-header--logs">
             <div className="cb-admin-section-header-main">
               <h3 className="cb-admin-section-title">
@@ -1856,18 +1905,11 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           </div>
 
           {showRagGapView ? (
-            // RAG 갭 분석 뷰
             <AdminRagGapView filterValue={filterValue} />
           ) : (
-            // 세부 로그 Drilldown + PII 점검 리포트 카드
             <>
-              {/* PII 점검 리포트 카드 */}
-              <PiiReportCard
-                report={activePiiReport}
-                contextSummary={piiContextSummary}
-              />
+              <PiiReportCard report={activePiiReport} contextSummary={piiContextSummary} />
 
-              {/* 선택된 필터 기준 로그 요약 배지 */}
               <div className="cb-admin-trend-summary">
                 <div className="cb-admin-trend-pill">
                   <span className="cb-admin-trend-label">총 로그</span>
@@ -1879,16 +1921,14 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   <span className="cb-admin-trend-label">에러 로그</span>
                   <span className="cb-admin-trend-value">
                     {errorCount.toLocaleString()}건
-                    {totalCount > 0 &&
-                      ` (${errorRatioInLogs.toFixed(1)}%)`}
+                    {totalCount > 0 && ` (${errorRatioInLogs.toFixed(1)}%)`}
                   </span>
                 </div>
                 <div className="cb-admin-trend-pill">
                   <span className="cb-admin-trend-label">PII 포함</span>
                   <span className="cb-admin-trend-value">
                     {piiCount.toLocaleString()}건
-                    {totalCount > 0 &&
-                      ` (${piiRatioInLogs.toFixed(1)}%)`}
+                    {totalCount > 0 && ` (${piiRatioInLogs.toFixed(1)}%)`}
                   </span>
                 </div>
               </div>
@@ -1919,15 +1959,12 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     )}
                     {filteredItems.map((item) => {
                       const hasError = !!item.errorCode;
-                      const hasPii =
-                        item.hasPiiInput || item.hasPiiOutput;
+                      const hasPii = item.hasPiiInput || item.hasPiiOutput;
 
                       return (
                         <tr
                           key={item.id}
-                          className={
-                            hasError ? "cb-admin-log-row--error" : ""
-                          }
+                          className={hasError ? "cb-admin-log-row--error" : ""}
                         >
                           <td>{item.createdAt}</td>
                           <td>{item.userId}</td>
@@ -1940,9 +1977,7 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                             {hasPii ? (
                               <span className="cb-admin-badge cb-admin-badge--pii">
                                 {item.hasPiiInput && "입력"}
-                                {item.hasPiiInput &&
-                                  item.hasPiiOutput &&
-                                  " / "}
+                                {item.hasPiiInput && item.hasPiiOutput && " / "}
                                 {item.hasPiiOutput && "출력"}
                               </span>
                             ) : (
@@ -1979,8 +2014,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     position: "fixed",
     top: panelPos.top,
     left: panelPos.left,
-    width: size.width,
-    height: size.height,
+    width: sizeRef.current.width,
+    height: sizeRef.current.height,
     zIndex: 9999,
     pointerEvents: "auto",
   };
@@ -1994,7 +2029,6 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       onMouseDownCapture={() => onRequestFocus?.()}
     >
       <div className="cb-admin-root" style={{ position: "relative" }}>
-        {/* 드래그 바 + 리사이즈 핸들 */}
         <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />
 
         <div
@@ -2072,61 +2106,66 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         <nav className="cb-admin-tabs" aria-label="관리자 대시보드 탭">
           <button
             type="button"
-            className={`cb-admin-tab-btn ${activeTab === "chatbot" ? "is-active" : ""
-              }`}
+            className={`cb-admin-tab-btn ${activeTab === "chatbot" ? "is-active" : ""}`}
             onClick={() => setActiveTab("chatbot")}
           >
             <span className="cb-admin-tab-label">챗봇</span>
           </button>
           <button
             type="button"
-            className={`cb-admin-tab-btn ${activeTab === "education" ? "is-active" : ""
-              }`}
+            className={`cb-admin-tab-btn ${activeTab === "education" ? "is-active" : ""}`}
             onClick={() => setActiveTab("education")}
           >
             <span className="cb-admin-tab-label">교육</span>
           </button>
           <button
             type="button"
-            className={`cb-admin-tab-btn ${activeTab === "quiz" ? "is-active" : ""
-              }`}
+            className={`cb-admin-tab-btn ${activeTab === "quiz" ? "is-active" : ""}`}
             onClick={() => setActiveTab("quiz")}
           >
             <span className="cb-admin-tab-label">퀴즈</span>
           </button>
           <button
             type="button"
-            className={`cb-admin-tab-btn ${activeTab === "metrics" ? "is-active" : ""
-              }`}
+            className={`cb-admin-tab-btn ${activeTab === "metrics" ? "is-active" : ""}`}
             onClick={() => setActiveTab("metrics")}
           >
             <span className="cb-admin-tab-label">지표</span>
           </button>
           <button
             type="button"
-            className={`cb-admin-tab-btn ${activeTab === "logs" ? "is-active" : ""
-              }`}
+            className={`cb-admin-tab-btn ${activeTab === "logs" ? "is-active" : ""}`}
             onClick={() => setActiveTab("logs")}
           >
             <span className="cb-admin-tab-label">로그</span>
           </button>
           <button
             type="button"
-            className={`cb-admin-tab-btn ${activeTab === "accounts" ? "is-active" : ""
-              }`}
+            className={`cb-admin-tab-btn ${activeTab === "accounts" ? "is-active" : ""}`}
             onClick={() => setActiveTab("accounts")}
           >
             <span className="cb-admin-tab-label">계정/롤 관리</span>
           </button>
+          <button
+            type="button"
+            className={`cb-admin-tab-btn ${activeTab === "policy" ? "is-active" : ""}`}
+            onClick={() => setActiveTab("policy")}
+          >
+            <span className="cb-admin-tab-label">사규 관리</span>
+          </button>
         </nav>
 
-        {/* 다른 패널처럼: 여기만 스크롤, 바디는 안 흔들리게 */}
         <div className="cb-admin-content">
           {activeTab === "chatbot" && renderChatbotTab()}
           {activeTab === "education" && renderEducationTab()}
           {activeTab === "quiz" && renderQuizTab()}
           {activeTab === "metrics" && renderMetricsTab()}
           {activeTab === "logs" && renderLogsTab()}
+          {activeTab === "policy" && (
+            <div className="cb-admin-tab-panel cb-admin-tab-panel--policy">
+              <AdminPolicyView />
+            </div>
+          )}
           {activeTab === "accounts" && renderAccountsTab()}
         </div>
       </div>

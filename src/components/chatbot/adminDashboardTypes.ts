@@ -10,7 +10,8 @@ export type AdminTabId =
   | "quiz"
   | "metrics"
   | "accounts"
-  | "logs";
+  | "logs"
+  | "policy";
 
 // adminFilterTypes 의 PeriodPreset 을 그대로 사용
 export type PeriodFilter = PeriodPreset;

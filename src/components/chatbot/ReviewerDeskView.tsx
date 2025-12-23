@@ -1,5 +1,11 @@
 // src/components/chatbot/ReviewerDeskView.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import "./chatbot.css";
 import { computePanelPosition, type Anchor, type PanelSize } from "../../utils/chat";
 
@@ -8,6 +14,15 @@ import ReviewerQueue from "./ReviewerQueue";
 import ReviewerDetail from "./ReviewerDetail";
 import ReviewerActionBar from "./ReviewerActionBar";
 import ReviewerOverlays from "./ReviewerOverlays";
+
+import {
+  listPolicyVersionsSnapshot,
+  subscribePolicyStore,
+  retryIndexing,
+  onReviewerRollback,
+  getPolicyVersionSnapshot,
+  PolicyStoreError,
+} from "./policyStore";
 
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
@@ -103,6 +118,114 @@ function clampPanelSize(size: PanelSize) {
   };
 }
 
+type ToastTone = "neutral" | "warn" | "danger";
+type ToastState = { open: boolean; tone: ToastTone; message: string };
+
+type PolicyModalState =
+  | { open: false }
+  | {
+      open: true;
+      kind: "retryIndexing";
+      /** 사용자가 선택한 "검토 아이템" 기준 식별자(기존 인터페이스 유지) */
+      reviewItemId: string;
+      /** 표준: 가능하면 "버전ID"를 우선 사용 (없으면 reviewItemId로 폴백) */
+      versionId?: string;
+      versionLabel?: string;
+      error?: string;
+    }
+  | {
+      open: true;
+      kind: "rollback";
+      documentId: string;
+      targetVersionId: string;
+      targetVersionLabel: string;
+      reason: string;
+      error?: string;
+    };
+
+function readStringField(obj: unknown, key: string): string | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function resolvePolicyVersionIdForRetry(inputId: string, selectedItem: unknown): string | undefined {
+  // 1) inputId 자체가 policy versionId 인지(스토어에 존재하면) 우선 판단
+  const snapByInput = getPolicyVersionSnapshot(inputId);
+  if (snapByInput) return inputId;
+
+  // 2) selectedItem에 version id가 별도 필드로 있는 경우(런타임 필드명 변화 대비)
+  const candidate =
+    readStringField(selectedItem, "policyVersionId") ??
+    readStringField(selectedItem, "versionId") ??
+    readStringField(selectedItem, "targetVersionId");
+
+  if (candidate) {
+    const snap = getPolicyVersionSnapshot(candidate);
+    if (snap) return candidate;
+    // 스토어에 없더라도 "버전ID 우선" 정책 상 candidate를 사용해도 되는 경우가 있어 반환
+    return candidate;
+  }
+
+  // 3) 마지막 폴백: 검토 아이템 id 사용
+  return undefined;
+}
+
+function formatPolicyVersionLabel(snapshot: unknown, fallback: string) {
+  const label =
+    readStringField(snapshot, "versionLabel") ??
+    readStringField(snapshot, "label") ??
+    readStringField(snapshot, "versionName") ??
+    readStringField(snapshot, "version");
+  return label ? label : fallback;
+}
+
+function normalizePolicyErrorP1(err: unknown): { tone: ToastTone; message: string } {
+  // P1 표준: 상태코드/충돌은 warn, 그 외는 danger 중심. 메시지는 사용자 액션을 유도.
+  if (err instanceof PolicyStoreError) {
+    const status = (err as PolicyStoreError).status;
+    const raw = (err as PolicyStoreError).message || "";
+
+    if (status === 403) {
+      return { tone: "danger", message: "권한이 없습니다. 권한 부여 후 다시 시도하세요." };
+    }
+    if (status === 404) {
+      return {
+        tone: "danger",
+        message: "대상 문서/버전을 찾을 수 없습니다. 새로고침 후 다시 시도하세요.",
+      };
+    }
+    if (status === 409) {
+      return {
+        tone: "warn",
+        message: raw || "충돌이 발생했습니다. 최신 상태로 갱신 후 다시 시도하세요.",
+      };
+    }
+    if (status === 400 || status === 422) {
+      return {
+        tone: "warn",
+        message: raw || "요청 값이 올바르지 않습니다. 입력을 확인하세요.",
+      };
+    }
+    return {
+      tone: "danger",
+      message: raw || "처리에 실패했습니다. 다시 시도하거나 관리자에게 문의하세요.",
+    };
+  }
+
+  if (err instanceof Error) {
+    return {
+      tone: "danger",
+      message: err.message || "처리에 실패했습니다. 다시 시도하거나 관리자에게 문의하세요.",
+    };
+  }
+
+  return {
+    tone: "danger",
+    message: "처리에 실패했습니다. 다시 시도하거나 관리자에게 문의하세요.",
+  };
+}
+
 const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
   anchor,
   onClose,
@@ -116,7 +239,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
 
   const uid = React.useId();
 
-  // 드래그/리사이즈 stale closure 방지
   const sizeRef = useRef<PanelSize>(size);
   const posRef = useRef(panelPos);
 
@@ -128,7 +250,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     posRef.current = panelPos;
   }, [panelPos]);
 
-  // anchor 변경 시 위치 재계산
   useEffect(() => {
     const next = computePanelPosition(anchor ?? null, sizeRef.current);
     const clamped = clampPanelPos(next, sizeRef.current);
@@ -136,7 +257,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     posRef.current = clamped;
   }, [anchor]);
 
-  // window resize 시 화면 밖으로 나가지 않게 clamp
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -183,7 +303,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     startLeft: 0,
   });
 
-  // ===== 도메인 컨트롤러 훅(연동 준비형) =====
   const desk = useReviewerDeskController({
     reviewerName,
   });
@@ -224,8 +343,8 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     approveProcessing,
     rejectProcessing,
     busyText,
-    isBusy,
-    isOverlayOpen,
+    isBusy: baseBusy,
+    isOverlayOpen: baseOverlayOpen,
     toast,
     closeToast,
     handleRefresh,
@@ -247,8 +366,53 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     stageCounts,
   } = desk;
 
-  // selectedItem 선언(구조분해) 이후에 계산해야 TS/ESLint 경고 없음
-  const approvalCtx = React.useMemo(() => {
+  // 정책 store snapshot (렌더 동기화 목적)
+  useSyncExternalStore(subscribePolicyStore, listPolicyVersionsSnapshot);
+
+  // 정책 액션(인덱싱 재시도/롤백)은 desk busy와 별개로 "P1 처리중 상태"를 갖는다.
+  const [policyProcessing, setPolicyProcessing] = useState(false);
+  const isBusy = baseBusy || policyProcessing;
+
+  const [localToast, setLocalToast] = useState<ToastState>({
+    open: false,
+    tone: "neutral",
+    message: "",
+  });
+  const localToastTimerRef = useRef<number | null>(null);
+
+  const showLocalToast = (tone: ToastTone, message: string) => {
+    if (typeof window === "undefined") return;
+    if (localToastTimerRef.current) window.clearTimeout(localToastTimerRef.current);
+    setLocalToast({ open: true, tone, message });
+    localToastTimerRef.current = window.setTimeout(() => {
+      setLocalToast((prev) => ({ ...prev, open: false }));
+    }, 2600);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (typeof window === "undefined") return;
+      if (localToastTimerRef.current) window.clearTimeout(localToastTimerRef.current);
+    };
+  }, []);
+
+  // P1 표준: 한 화면에서 토스트는 단일 슬롯(우선순위: 로컬(정책) > 컨트롤러)
+  const effectiveToast: ToastState = localToast.open ? localToast : (toast as ToastState);
+  const closeEffectiveToast = () => {
+    if (localToast.open) setLocalToast((prev) => ({ ...prev, open: false }));
+    else closeToast();
+  };
+
+  const [policyModal, setPolicyModal] = useState<PolicyModalState>({ open: false });
+
+  useEffect(() => {
+    if (policyModal.open) setPolicyModal({ open: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  const isOverlayOpen = baseOverlayOpen || policyModal.open;
+
+  const approvalCtx = useMemo(() => {
     if (!selectedItem) {
       return { stage: null as 1 | 2 | null, publishOnApprove: false, label: "승인" };
     }
@@ -262,7 +426,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
       };
     }
 
-    // VIDEO가 아닌 문서/정책은 ‘최종 승인 = 즉시 공개’로 보는 게 자연스러움
     return { stage: null as 1 | 2 | null, publishOnApprove: true, label: "승인" };
   }, [selectedItem]);
 
@@ -304,12 +467,11 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     if (e.key === "Enter") {
       if (!selectedItem) return;
       e.preventDefault();
-      openPreview(); // “Enter 미리보기” 문구와 동작 일치
+      openPreview();
       return;
     }
   };
 
-  // 드래그/리사이즈: window 리스너 1회 + ref 기반
   useEffect(() => {
     if (typeof window === "undefined") return;
     const margin = 16;
@@ -448,6 +610,164 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     resizeRef.current.dir = null;
   };
 
+  const requestPolicyRetryIndexing = (reviewItemId: string) => {
+    if (isBusy || isOverlayOpen) return;
+
+    const versionId = resolvePolicyVersionIdForRetry(reviewItemId, selectedItem);
+    const snap = versionId ? getPolicyVersionSnapshot(versionId) : null;
+    const versionLabel = versionId
+      ? formatPolicyVersionLabel(snap, versionId)
+      : undefined;
+
+    setPolicyModal({
+      open: true,
+      kind: "retryIndexing",
+      reviewItemId,
+      versionId,
+      versionLabel,
+    });
+  };
+
+  const requestPolicyRollback = (input: {
+    documentId: string;
+    targetVersionId: string;
+    targetVersionLabel: string;
+  }) => {
+    if (isBusy || isOverlayOpen) return;
+    setPolicyModal({
+      open: true,
+      kind: "rollback",
+      documentId: input.documentId,
+      targetVersionId: input.targetVersionId,
+      targetVersionLabel: input.targetVersionLabel,
+      reason: "",
+    });
+  };
+
+  const closePolicyModal = () => setPolicyModal({ open: false });
+
+  const confirmPolicyRetryIndexing = async () => {
+    if (!policyModal.open || policyModal.kind !== "retryIndexing") return;
+    if (policyProcessing) return;
+
+    // 표준: 버전ID 우선 (없으면 reviewItemId)
+    const effectiveId = policyModal.versionId || policyModal.reviewItemId;
+
+    // 선검증(있으면): 이미 INDEXING 상태면 warn 토스트 + 모달 유지
+    const snap = getPolicyVersionSnapshot(effectiveId);
+    const indexingStatus =
+      readStringField(snap, "indexingStatus") ??
+      readStringField(snap, "indexStatus") ??
+      readStringField(snap, "status");
+
+    if (indexingStatus === "INDEXING") {
+      const msg = "이미 인덱싱 진행 중입니다. 잠시 후 상태를 다시 확인하세요.";
+      showLocalToast("warn", msg);
+      setPolicyModal((prev) =>
+        prev.open && prev.kind === "retryIndexing" ? { ...prev, error: msg } : prev
+      );
+      return;
+    }
+
+    setPolicyProcessing(true);
+    setPolicyModal((prev) =>
+      prev.open && prev.kind === "retryIndexing" ? { ...prev, error: undefined } : prev
+    );
+
+    try {
+      await Promise.resolve(retryIndexing(effectiveId, effectiveReviewerName));
+
+      const label = policyModal.versionLabel
+        ? `(${policyModal.versionLabel}) `
+        : "";
+      showLocalToast("neutral", `${label}인덱싱 재시도 요청이 접수되었습니다.`);
+      closePolicyModal();
+    } catch (err) {
+      const { tone, message } = normalizePolicyErrorP1(err);
+      showLocalToast(tone, message);
+      setPolicyModal((prev) =>
+        prev.open && prev.kind === "retryIndexing" ? { ...prev, error: message } : prev
+      );
+    } finally {
+      setPolicyProcessing(false);
+    }
+  };
+
+  const confirmPolicyRollback = async () => {
+    if (!policyModal.open || policyModal.kind !== "rollback") return;
+    if (policyProcessing) return;
+
+    const reason = policyModal.reason.trim();
+    if (!reason) {
+      const msg = "롤백 사유를 입력하세요.";
+      showLocalToast("warn", msg);
+      setPolicyModal((prev) =>
+        prev.open && prev.kind === "rollback" ? { ...prev, error: msg } : prev
+      );
+      return;
+    }
+
+    // 선검증: 대상 버전이 존재하지 않으면 즉시 에러
+    const targetSnap = getPolicyVersionSnapshot(policyModal.targetVersionId);
+    if (!targetSnap) {
+      const msg = "대상 버전을 찾을 수 없습니다. 목록을 새로고침 후 다시 시도하세요.";
+      showLocalToast("danger", msg);
+      setPolicyModal((prev) =>
+        prev.open && prev.kind === "rollback" ? { ...prev, error: msg } : prev
+      );
+      return;
+    }
+
+    // 선검증(있으면): 이미 ACTIVE라면 warn (롤백 불필요)
+    const lifecycle =
+      readStringField(targetSnap, "lifecycle") ??
+      readStringField(targetSnap, "state") ??
+      readStringField(targetSnap, "status");
+
+    if (lifecycle === "ACTIVE") {
+      const msg = "이미 해당 버전이 적용(ACTIVE) 상태입니다.";
+      showLocalToast("warn", msg);
+      setPolicyModal((prev) =>
+        prev.open && prev.kind === "rollback" ? { ...prev, error: msg } : prev
+      );
+      return;
+    }
+
+    setPolicyProcessing(true);
+    setPolicyModal((prev) =>
+      prev.open && prev.kind === "rollback" ? { ...prev, error: undefined } : prev
+    );
+
+    try {
+      await Promise.resolve(
+        onReviewerRollback({
+          documentId: policyModal.documentId,
+          targetVersionId: policyModal.targetVersionId,
+          actor: effectiveReviewerName,
+          reason,
+        })
+      );
+
+      showLocalToast("neutral", `롤백 완료 · ${policyModal.targetVersionLabel} 적용`);
+      closePolicyModal();
+    } catch (err) {
+      const { tone, message } = normalizePolicyErrorP1(err);
+      showLocalToast(tone, message);
+      setPolicyModal((prev) =>
+        prev.open && prev.kind === "rollback" ? { ...prev, error: message } : prev
+      );
+    } finally {
+      setPolicyProcessing(false);
+    }
+  };
+
+  const rollbackTarget = useMemo(() => {
+    if (!policyModal.open || policyModal.kind !== "rollback") return null;
+    return getPolicyVersionSnapshot(policyModal.targetVersionId) ?? null;
+  }, [policyModal]);
+
+  const headerBusyText = policyProcessing ? "정책 처리 중…" : busyText;
+
   return (
     <div className="cb-reviewer-wrapper">
       <div
@@ -501,19 +821,18 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
             onMouseDown={handleResizeMouseDown("e")}
           />
 
-          {/* Toast */}
-          {toast.open && (
+          {effectiveToast.open && (
             <div
-              className={cx("cb-reviewer-toast", `cb-reviewer-toast--${toast.tone}`)}
+              className={cx("cb-reviewer-toast", `cb-reviewer-toast--${effectiveToast.tone}`)}
               role="status"
               aria-live="polite"
               aria-atomic="true"
             >
-              <span>{toast.message}</span>
+              <span>{effectiveToast.message}</span>
               <button
                 type="button"
                 className="cb-reviewer-toast-close"
-                onClick={closeToast}
+                onClick={closeEffectiveToast}
                 aria-label="close toast"
               >
                 ✕
@@ -521,7 +840,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
             </div>
           )}
 
-          {/* Header */}
           <div className="cb-reviewer-header">
             <div className="cb-reviewer-header-main">
               <div className="cb-reviewer-title-row">
@@ -530,17 +848,21 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
                   콘텐츠 검토 데스크
                 </h2>
               </div>
+
               <p id={subtitleId} className="cb-reviewer-subtitle">
                 검토 대기 콘텐츠를 승인/반려하고 감사 이력을 남깁니다.
                 {selectedItem &&
-                  (approvalCtx.publishOnApprove
+                  (selectedItem.contentType === "POLICY_DOC"
+                    ? " (사규/정책은 승인 후 전처리/인덱싱 상태가 표시됩니다.)"
+                    : approvalCtx.publishOnApprove
                     ? " (승인 시 즉시 공개)"
                     : " (1차 승인은 공개되지 않으며, 제작자가 영상 제작을 진행합니다.)")}
               </p>
+
               <div className="cb-reviewer-context">
-                {busyText && (
+                {headerBusyText && (
                   <span className="cb-reviewer-context-chip" aria-live="polite">
-                    {busyText}
+                    {headerBusyText}
                   </span>
                 )}
                 <span className="cb-reviewer-context-chip">
@@ -598,7 +920,6 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
             </div>
           </div>
 
-          {/* Body */}
           <div className="cb-reviewer-body">
             <ReviewerQueue
               uid={uid}
@@ -643,6 +964,8 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
                 setNotesById={setNotesById}
                 onSaveNote={handleSaveNote}
                 onOpenPreview={openPreview}
+                onRequestPolicyRetryIndexing={requestPolicyRetryIndexing}
+                onRequestPolicyRollback={requestPolicyRollback}
               />
 
               <ReviewerActionBar
@@ -676,6 +999,114 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
             approveLabel={approvalCtx.label}
             approveProcessingLabel={`${approvalCtx.label} 처리 중…`}
           />
+
+          {policyModal.open && (
+            <div
+              className="cb-reviewer-modal-overlay"
+              role="dialog"
+              aria-modal="true"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) closePolicyModal();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") closePolicyModal();
+              }}
+            >
+              <div className="cb-reviewer-modal" onMouseDown={(e) => e.stopPropagation()}>
+                {policyModal.kind === "retryIndexing" && (
+                  <>
+                    <div className="cb-reviewer-modal-title">인덱싱 재시도</div>
+                    <div className="cb-reviewer-modal-desc">
+                      인덱싱 실패 상태를 재시도합니다. 상태가 INDEXING으로 변경되며 완료/실패 결과가 갱신됩니다.
+                      {policyModal.versionLabel ? (
+                        <>
+                          <br />
+                          대상 버전: <strong>{policyModal.versionLabel}</strong>
+                        </>
+                      ) : null}
+                    </div>
+
+                    {policyModal.error && <div className="cb-reviewer-error">{policyModal.error}</div>}
+
+                    <div className="cb-reviewer-modal-actions">
+                      <button
+                        type="button"
+                        className="cb-reviewer-ghost-btn"
+                        onClick={closePolicyModal}
+                        disabled={policyProcessing}
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        className="cb-reviewer-primary-btn"
+                        onClick={confirmPolicyRetryIndexing}
+                        disabled={isBusy}
+                      >
+                        재시도
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {policyModal.kind === "rollback" && (
+                  <>
+                    <div className="cb-reviewer-modal-title">롤백 확인</div>
+                    <div className="cb-reviewer-modal-desc">
+                      문서 <strong>{policyModal.documentId}</strong>를{" "}
+                      <strong>{policyModal.targetVersionLabel}</strong>로 되돌립니다.
+                      <br />
+                      현재 ACTIVE 버전은 ARCHIVED로 전환됩니다. (사유 필수)
+                      {rollbackTarget && readStringField(rollbackTarget, "changeSummary") ? (
+                        <>
+                          <br />
+                          선택 버전 변경 요약:{" "}
+                          <strong>{readStringField(rollbackTarget, "changeSummary")}</strong>
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div style={{ marginTop: 10 }}>
+                      <textarea
+                        className="cb-reviewer-textarea"
+                        value={policyModal.reason}
+                        onChange={(e) =>
+                          setPolicyModal((prev) =>
+                            prev.open && prev.kind === "rollback"
+                              ? { ...prev, reason: e.target.value, error: undefined }
+                              : prev
+                          )
+                        }
+                        placeholder="롤백 사유를 입력하세요. (필수)"
+                        disabled={isBusy}
+                      />
+                    </div>
+
+                    {policyModal.error && <div className="cb-reviewer-error">{policyModal.error}</div>}
+
+                    <div className="cb-reviewer-modal-actions">
+                      <button
+                        type="button"
+                        className="cb-reviewer-ghost-btn"
+                        onClick={closePolicyModal}
+                        disabled={policyProcessing}
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        className="cb-reviewer-danger-btn"
+                        onClick={confirmPolicyRollback}
+                        disabled={isBusy || !policyModal.reason.trim()}
+                      >
+                        롤백 실행
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

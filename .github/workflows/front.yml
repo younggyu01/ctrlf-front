@@ -31,11 +31,11 @@ jobs:
       - name: Docker 이미지 빌드 및 푸시
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: 858507113889.dkr.ecr.ap-northeast-2.amazonaws.com/argocd/front-service  # ECR 리포지토리명
+          ECR_REPOSITORY: argocd/frontend-service 
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # frontend 폴더 내에서 빌드 수행
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ./Dockerfile .
+          # 태그 생성 시 변수 사이에 슬래시(/)가 하나만 들어가도록 확인
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f Dockerfile .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
 

@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: frontend-service
+  name: front-service
   namespace: argocd
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: frontend-service
+      app: front-service
   template:
     metadata:
       labels:
         app: frontend-service
     spec:
       containers:
-      - name: frontend
+      - name: front
         image: <IMAGE_PLACEHOLDER> # CI에 의해 자동 교체됨
         ports:
         - containerPort: 80
@@ -23,7 +23,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: frontend-service
+  name: front-service
   namespace: argocd
   annotations:
     # AWS Load Balancer Controller를 사용하는 경우 (필요 시 수정)
@@ -31,7 +31,7 @@ metadata:
 spec:
   type: LoadBalancer
   selector:
-    app: frontend-service
+    app: front-service
   ports:
     - protocol: TCP
       port: 80

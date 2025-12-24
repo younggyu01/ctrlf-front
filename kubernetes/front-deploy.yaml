@@ -14,8 +14,8 @@ spec:
         app: frontend-service
     spec:
       containers:
-      - name: front
-        image: <IMAGE_PLACEHOLDER> # CI에 의해 자동 교체됨
+      - name: frontend
+        image: 858507113889.dkr.ecr.ap-northeast-2.amazonaws.com/argocd/front-service:c71a2965600f9277fb86718a41792ef812aec236
         ports:
         - containerPort: 80
 

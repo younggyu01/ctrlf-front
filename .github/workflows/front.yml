@@ -1,36 +1,56 @@
-name: Frontend React Deploy
+name: CI/CD Frontend (EKS)
 
 on:
   push:
-    branches: [ "main" ] # main 브랜치에 push될 때 실행
-    #paths: [ "ctrlf-front/**" ] # frontend 폴더 내 파일이 변경될 때만 실행
+    branches: [ "main" ]
+
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: AWS Credentials 설정
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          node-version: '18' # 프로젝트에 맞는 노드 버전
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
 
-      - name: Install dependencies
-        run: npm install
+      - name: Amazon ECR 로그인
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build project
-        run: npm run build
-
-      - name: Deploy to S3
-        uses: jakejarvis/s3-sync-action@master
-        with:
-          args: --delete
+      - name: Install dependencies and Build
+        run: |
+          npm install
+          npm run build  # 실행 후 최상위에 dist/ 폴더가 생성됨
+          
+      - name: Docker 이미지 빌드 및 푸시
         env:
-          AWS_S3_BUCKET: "ctrl-s3"
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: 'ap-northeast-2' # 서울 리전
-          SOURCE_DIR: 'dist'
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: argocd/front-service 
+        run: |
+          # 태그 생성 시 변수 사이에 슬래시(/)가 하나만 들어가도록 확인
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -f Dockerfile .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # - name: K8s 매니페스트 이미지 태그 업데이트
+      #   run: |
+      #     # frontend 배포용 yaml 파일 경로를 입력하세요
+      #     sed -i "s|image:.*|image: ${{ env.IMAGE }}|g" kubernetes/front-deploy.yaml
+
+      # - name: 변경사항 커밋 및 푸시
+      #   run: |
+      #     git config --global user.email "github-actions@github.com"
+      #     git config --global user.name "github-actions"
+      #     git add kubernetes/front-deploy.yaml
+      #     if [ -z "$(git status --porcelain)" ]; then
+      #       echo "No changes"
+      #     else
+      #       git commit -m "Update frontend image [skip ci]"
+      #       git pull --rebase origin main
+      #       git push origin main
+      #     fi

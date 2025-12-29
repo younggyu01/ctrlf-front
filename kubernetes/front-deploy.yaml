@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front-service
+  namespace: argocd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: front-service
+  template:
+    metadata:
+      labels:
+        app: front-service
+    spec:
+      containers:
+      - name: front
+        # 1. 태그를 latest로 고정합니다. (이제 이 파일은 수정할 일이 없습니다)
+        image: 858507113889.dkr.ecr.ap-northeast-2.amazonaws.com/argocd/front-service:latest
+        # 2. 이 설정을 반드시 추가합니다. 태그가 같아도 ECR에서 새 이미지를 항상 가져옵니다.
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80

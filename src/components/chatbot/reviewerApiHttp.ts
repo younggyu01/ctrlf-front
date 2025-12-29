@@ -47,7 +47,6 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
         "content-type": "application/json",
         ...(init?.headers ?? {}),
       },
-      credentials: "include",
     });
   } catch (err: unknown) {
     throw new ReviewerApiError("네트워크 오류로 요청에 실패했습니다.", {

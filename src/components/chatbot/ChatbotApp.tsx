@@ -1,18 +1,34 @@
 // src/components/chatbot/ChatbotApp.tsx
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "./chatbot.css";
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
-import { sendChatToAI, sendFeedbackToAI } from "./chatApi";
+import {
+  sendChatToAI,
+  sendChatToAIStream,
+  sendFeedbackToAI,
+  retryMessage,
+  fetchFaqHome,
+  fetchFaqList,
+  submitReportToServer,
+} from "./chatApi";
+import keycloak from "../../keycloak";
 import {
   type ChatDomain,
   type ChatMessage,
+  type ChatRole,
   type ChatSession,
   type SidebarSessionSummary,
   type ChatRequest,
   type FeedbackValue,
   type ReportPayload,
+  type ChatServiceDomain,
+  type FaqHomeItem,
+  type FaqItem,
+  type ChatSendResult,
+  fromChatServiceDomain,
+  normalizeServiceDomain,
 } from "../../types/chat";
 import {
   computePanelPosition,
@@ -21,7 +37,6 @@ import {
   type Anchor,
   type PanelSize,
 } from "../../utils/chat";
-import { FAQ_ITEMS } from "./faqData";
 import { can, type UserRole } from "../../auth/roles";
 
 interface ChatbotAppProps {
@@ -32,7 +47,6 @@ interface ChatbotAppProps {
   onOpenEduPanel?: () => void;
   onOpenQuizPanel?: (quizId?: string) => void;
   onOpenAdminPanel?: () => void;
-  // Layout → FloatingChatbotRoot → 여기까지 전달되는 사용자 Role
   userRole: UserRole;
   onRequestFocus?: () => void;
   onOpenReviewerPanel?: () => void;
@@ -71,21 +85,431 @@ const INITIAL_SIZE: Size = { width: 550, height: 550 };
 // 최대 세션 개수 (FIFO 기준)
 const MAX_SESSIONS = 30;
 
-// 초기 세션 한 개 ("새 채팅")
-const initialSessions: ChatSession[] = [
-  {
-    id: "session-1",
-    title: "새 채팅",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    domain: "general",
-    messages: [],
-  },
-];
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : String(v ?? "");
+}
 
-// "신고하고싶어", "괴롭힘을 신고하고 싶어요" 같은 문장을 잡아주는 간단한 헬퍼
+function trimStr(v: unknown): string {
+  return asString(v).trim();
+}
+
+function makeLocalId(prefix: string) {
+  try {
+    const uuid =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}`;
+    return `${prefix}-${uuid}`;
+  } catch {
+    return `${prefix}-${Date.now()}`;
+  }
+}
+
+function isUuidLike(v: string): boolean {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+    v
+  );
+}
+
+function toEpochMs(v: unknown, fallback: number): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = Date.parse(v);
+    if (Number.isFinite(t)) return t;
+  }
+  return fallback;
+}
+
+/**
+ * ChatRole은 보통 "user" | "assistant"만 허용.
+ * 서버가 system/other를 보내도 프론트 모델에선 "assistant"로 흡수.
+ */
+function normalizeRole(v: unknown): ChatRole {
+  const s = asString(v).toLowerCase();
+  if (s === "user" || s === "human") return "user";
+  return "assistant";
+}
+
+function mergeHeaders(
+  base: Record<string, string>,
+  extra?: HeadersInit
+): Record<string, string> {
+  const out: Record<string, string> = { ...base };
+
+  if (!extra) return out;
+
+  if (extra instanceof Headers) {
+    extra.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+
+  if (Array.isArray(extra)) {
+    for (const [k, v] of extra) out[k] = v;
+    return out;
+  }
+
+  for (const [k, v] of Object.entries(extra)) out[k] = String(v);
+  return out;
+}
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const target = name.toLowerCase();
+  return Object.keys(headers).some((k) => k.toLowerCase() === target);
+}
+
+/**
+ * (핵심 FIX) token race 흡수: Sidebar/History 호출이 토큰 준비 전에 스킵/401 나서
+ * “첫 클릭은 로딩만 → 두 번째 클릭에 열림”이 발생하므로, 여기서 짧게 기다렸다가 진행.
+ */
+async function waitForAuthToken(opts?: {
+  timeoutMs?: number;
+  pollMs?: number;
+  minUpdateIntervalMs?: number;
+}): Promise<string | null> {
+  const timeoutMs = opts?.timeoutMs ?? 6_000;
+  const pollMs = opts?.pollMs ?? 200;
+  const minUpdateIntervalMs = opts?.minUpdateIntervalMs ?? 900;
+
+  const start = Date.now();
+  let lastUpdateAttempt = 0;
+
+  const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+  while (Date.now() - start < timeoutMs) {
+    if (!keycloak?.authenticated) {
+      await sleep(pollMs);
+      continue;
+    }
+
+    if (keycloak.token) {
+      // 한 번 갱신 시도(너무 자주 치지 않게 제한)
+      const now = Date.now();
+      if (
+        typeof keycloak.updateToken === "function" &&
+        now - lastUpdateAttempt >= minUpdateIntervalMs
+      ) {
+        lastUpdateAttempt = now;
+        try {
+          await keycloak.updateToken(30);
+        } catch {
+          // ignore
+        }
+      }
+      return keycloak.token ?? null;
+    }
+
+    // authenticated인데 token이 아직 없으면 updateToken(0)로 채우기 시도
+    const now = Date.now();
+    if (
+      typeof keycloak.updateToken === "function" &&
+      now - lastUpdateAttempt >= minUpdateIntervalMs
+    ) {
+      lastUpdateAttempt = now;
+      try {
+        await keycloak.updateToken(0);
+        if (keycloak.token) return keycloak.token;
+      } catch {
+        // ignore
+      }
+    }
+
+    await sleep(pollMs);
+  }
+
+  // 마지막 best-effort
+  try {
+    if (keycloak?.authenticated && typeof keycloak.updateToken === "function") {
+      await keycloak.updateToken(30);
+    }
+  } catch {
+    // ignore
+  }
+
+  return keycloak?.token ?? null;
+}
+
+async function buildAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+
+  const token = await waitForAuthToken({ timeoutMs: 6_000, pollMs: 200 });
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  return headers;
+}
+
+async function apiFetchJson<T>(
+  url: string,
+  init?: RequestInit
+): Promise<{ ok: true; data: T } | { ok: false; status: number; text: string }> {
+  const authHeaders = await buildAuthHeaders();
+  const mergedHeaders = mergeHeaders(authHeaders, init?.headers);
+
+  const hasBody = init?.body != null;
+  if (hasBody && !hasHeader(mergedHeaders, "Content-Type")) {
+    mergedHeaders["Content-Type"] = "application/json";
+  }
+
+  try {
+    const res = await fetch(url, { ...init, headers: mergedHeaders });
+    const text = await res.text();
+    if (!res.ok) return { ok: false, status: res.status, text };
+
+    try {
+      const data = (text ? (JSON.parse(text) as unknown) : null) as T;
+      return { ok: true, data };
+    } catch {
+      return { ok: false, status: res.status, text };
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, status: 0, text: msg || "network error" };
+  }
+}
+
+/* =========================
+   Server history (messages) - 방어/페이징
+========================= */
+
+type ServerHistoryMessage = {
+  id?: string;
+  messageId?: string;
+  role?: string;
+  sender?: string;
+  content?: string;
+  text?: string;
+  createdAt?: number | string;
+  created_at?: number | string;
+  timestamp?: number | string;
+};
+
+type ServerMessagesPage = {
+  messages?: ServerHistoryMessage[];
+  items?: ServerHistoryMessage[];
+  history?: ServerHistoryMessage[];
+  nextCursor?: string | null;
+  cursor?: string | null;
+  hasNext?: boolean;
+  has_next?: boolean;
+};
+
+type ServerSessionListItem = {
+  id?: string;
+  title?: string;
+  domain?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  userUuid?: string;
+};
+
+type ServerSessionListResponse = {
+  sessions?: ServerSessionListItem[];
+  items?: ServerSessionListItem[];
+  nextCursor?: string | null;
+  hasNext?: boolean;
+};
+
+function pickMessagesArray(page: ServerMessagesPage): ServerHistoryMessage[] {
+  return page.messages ?? page.items ?? page.history ?? [];
+}
+
+async function fetchServerSessionMeta(serverSessionId: string): Promise<{
+  title: string;
+  domain: ChatDomain;
+  createdAt: number;
+  updatedAt: number;
+} | null> {
+  const directCandidates = [`/api/chat/sessions/${encodeURIComponent(serverSessionId)}`];
+
+  for (const url of directCandidates) {
+    const r = await apiFetchJson<ServerSessionListItem>(url, { method: "GET" });
+    if (!r.ok) continue;
+    const it = r.data ?? {};
+    const title = trimStr(it.title) || "서버 대화";
+    const domain = fromChatServiceDomain(it.domain, "general");
+    const now = Date.now();
+    return {
+      title,
+      domain,
+      createdAt: toEpochMs(it.createdAt, now),
+      updatedAt: toEpochMs(it.updatedAt, now),
+    };
+  }
+
+  const listUrl = `/api/chat/sessions?size=100`;
+  const lr = await apiFetchJson<ServerSessionListResponse>(listUrl, { method: "GET" });
+  if (!lr.ok) return null;
+
+  const list = lr.data?.sessions ?? lr.data?.items ?? [];
+  const found = list.find((s) => s?.id === serverSessionId) ?? null;
+  if (!found) return null;
+
+  const title = trimStr(found.title) || "서버 대화";
+  const domain = fromChatServiceDomain(found.domain, "general");
+  const now = Date.now();
+  return {
+    title,
+    domain,
+    createdAt: toEpochMs(found.createdAt, now),
+    updatedAt: toEpochMs(found.updatedAt, now),
+  };
+}
+
+async function fetchServerSessionHistory(serverSessionId: string): Promise<{
+  serverSessionId: string;
+  title: string;
+  domain: ChatDomain;
+  createdAt: number;
+  updatedAt: number;
+  messages: Array<{
+    role: ChatRole;
+    content: string;
+    createdAt: number;
+    serverMessageId?: string;
+  }>;
+} | null> {
+  const meta =
+    (await fetchServerSessionMeta(serverSessionId)) ?? {
+      title: "서버 대화",
+      domain: "general" as ChatDomain,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+  const pageSize = 100;
+  let cursor: string | null = null;
+  let hasNext = true;
+
+  const all: ServerHistoryMessage[] = [];
+  let guard = 0;
+
+  while (hasNext && guard < 20) {
+    guard += 1;
+
+    const url =
+      cursor && trimStr(cursor)
+        ? `/chat/sessions/${encodeURIComponent(serverSessionId)}/messages?size=${pageSize}&cursor=${encodeURIComponent(
+          cursor
+        )}`
+        : `/chat/sessions/${encodeURIComponent(serverSessionId)}/messages?size=${pageSize}`;
+
+    const r = await apiFetchJson<ServerMessagesPage>(url, { method: "GET" });
+    if (!r.ok) {
+      console.warn("[ChatbotApp] fetchServerSessionHistory failed:", {
+        serverSessionId,
+        status: r.status,
+        text: r.text,
+      });
+      return null;
+    }
+
+    const page = r.data ?? {};
+    const chunk = pickMessagesArray(page);
+    all.push(...chunk);
+
+    const nextCursor = (page.nextCursor ?? page.cursor ?? null) as string | null;
+    const hn = (page.hasNext ?? page.has_next ?? false) as boolean;
+
+    cursor = nextCursor && trimStr(nextCursor) ? asString(nextCursor) : null;
+    hasNext = Boolean(hn && cursor);
+  }
+
+  const now = Date.now();
+
+  const normalized = all
+    .filter((m) => trimStr((m.content ?? m.text)?.toString()).length > 0)
+    .map((m, idx) => {
+      const role = normalizeRole(m.role ?? m.sender);
+      const content = trimStr(m.content ?? m.text ?? "");
+      const created = toEpochMs(m.createdAt ?? m.created_at ?? m.timestamp, now + idx);
+
+      return {
+        role,
+        content,
+        createdAt: created,
+        serverMessageId: (m.id ?? m.messageId) as string | undefined,
+      };
+    });
+
+  const updatedAt =
+    normalized.length > 0 ? normalized[normalized.length - 1].createdAt : meta.updatedAt;
+
+  return {
+    serverSessionId,
+    title: meta.title,
+    domain: meta.domain,
+    createdAt: meta.createdAt,
+    updatedAt,
+    messages: normalized,
+  };
+}
+
+async function deleteServerSession(serverSessionId: string): Promise<boolean> {
+  const candidates = [
+    `/api/chat/sessions/${encodeURIComponent(serverSessionId)}`,
+    `/chat/sessions/${encodeURIComponent(serverSessionId)}`,
+  ];
+
+  let lastErr: { status: number; text: string } | null = null;
+
+  for (const url of candidates) {
+    const r = await apiFetchJson<unknown>(url, { method: "DELETE" });
+    if (r.ok) return true;
+    lastErr = { status: r.status, text: r.text };
+  }
+
+  console.warn("[ChatbotApp] deleteServerSession failed:", {
+    serverSessionId,
+    lastErr,
+  });
+  return false;
+}
+
+/* =========================
+   default domain from token (no-any)
+========================= */
+
+function getTokenParsedDomain(tokenParsed: unknown): unknown {
+  if (!tokenParsed || typeof tokenParsed !== "object") return undefined;
+  if (!("domain" in tokenParsed)) return undefined;
+  return (tokenParsed as { domain?: unknown }).domain;
+}
+
+function getDefaultUiDomainFromToken(): ChatDomain {
+  const parsed = keycloak?.tokenParsed as unknown;
+  const d = getTokenParsedDomain(parsed);
+  const sd = normalizeServiceDomain(d);
+  return fromChatServiceDomain(sd, "general");
+}
+
+/* =========================
+   initial sessions
+========================= */
+
+function createInitialSession(): ChatSession {
+  const now = Date.now();
+  return {
+    id: makeLocalId("local-session"),
+    title: "새 채팅",
+    createdAt: now,
+    updatedAt: now,
+    domain: getDefaultUiDomainFromToken(),
+    messages: [],
+    serverId: undefined,
+  };
+}
+
+const initialSessions: ChatSession[] = [createInitialSession()];
+
+/* =========================
+   신고 의도 간단 감지
+========================= */
+
 function shouldSuggestReport(raw: string): boolean {
-  const compact = raw.replace(/\s+/g, ""); // 공백 제거
+  const compact = raw.replace(/\s+/g, "");
 
   const keywords = [
     "신고하고싶어",
@@ -98,12 +522,19 @@ function shouldSuggestReport(raw: string): boolean {
   ];
 
   if (keywords.some((k) => compact.includes(k))) return true;
-
-  // "괴롭힘 ... 신고", "성희롱 ... 신고" 패턴도 허용
   if (compact.includes("괴롭힘") && compact.includes("신고")) return true;
   if (compact.includes("성희롱") && compact.includes("신고")) return true;
 
   return false;
+}
+
+/* =========================
+   FAQ
+========================= */
+
+function isLikelyUuid(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  return isUuidLike(v);
 }
 
 const ChatbotApp: React.FC<ChatbotAppProps> = ({
@@ -134,6 +565,12 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     initialSessions[0]?.id ?? null
   );
 
+  // 최신 sessions 참조(stale 방지)
+  const sessionsRef = useRef<ChatSession[]>(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
   // 검색어
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -159,7 +596,6 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     startLeft: panelPos.left,
   });
 
-  // 애니메이션용 래퍼
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   // transform-origin (아이콘 위치 기준)
@@ -172,7 +608,6 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     transformOrigin = `${originX}% ${originY}%`;
   }
 
-  // 세션은 있는데 activeSessionId 가 null 이면 자동으로 첫 세션을 활성화
   useEffect(() => {
     if (!activeSessionId && sessions.length > 0) {
       setActiveSessionId(sessions[0].id);
@@ -188,7 +623,6 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       const margin = 16;
       const padding = 32;
 
-      // 1) 리사이즈 중이면 리사이즈 우선 처리
       if (resizeState.resizing && resizeState.dir) {
         const dx = event.clientX - resizeState.startX;
         const dy = event.clientY - resizeState.startY;
@@ -196,28 +630,16 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - padding * 2);
         const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - padding * 2);
 
-        const {
-          startWidth,
-          startHeight,
-          startTop,
-          startLeft,
-          dir,
-        } = resizeState;
+        const { startWidth, startHeight, startTop, startLeft, dir } = resizeState;
 
         let width = startWidth;
         let height = startHeight;
         let top = startTop;
         let left = startLeft;
 
-        // 오른쪽/아래
-        if (dir.includes("e")) {
-          width = startWidth + dx;
-        }
-        if (dir.includes("s")) {
-          height = startHeight + dy;
-        }
+        if (dir.includes("e")) width = startWidth + dx;
+        if (dir.includes("s")) height = startHeight + dy;
 
-        // 왼쪽/위쪽
         if (dir.includes("w")) {
           width = startWidth - dx;
           left = startLeft + dx;
@@ -227,11 +649,9 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
           top = startTop + dy;
         }
 
-        // 크기 클램프
         width = Math.max(MIN_WIDTH, Math.min(maxWidth, width));
         height = Math.max(MIN_HEIGHT, Math.min(maxHeight, height));
 
-        // 위치 클램프
         const maxLeft = window.innerWidth - margin - width;
         const maxTop = window.innerHeight - margin - height;
 
@@ -243,7 +663,6 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         return;
       }
 
-      // 2) 리사이즈가 아니면 드래그 처리
       if (dragState.dragging) {
         const dx = event.clientX - dragState.startX;
         const dy = event.clientY - dragState.startY;
@@ -251,11 +670,12 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         let top = dragState.startTop + dy;
         let left = dragState.startLeft + dx;
 
-        const maxLeft = window.innerWidth - margin - size.width;
-        const maxTop = window.innerHeight - margin - size.height;
+        const margin2 = 16;
+        const maxLeft = window.innerWidth - margin2 - size.width;
+        const maxTop = window.innerHeight - margin2 - size.height;
 
-        left = Math.max(margin, Math.min(maxLeft, left));
-        top = Math.max(margin, Math.min(maxTop, top));
+        left = Math.max(margin2, Math.min(maxLeft, left));
+        top = Math.max(margin2, Math.min(maxTop, top));
 
         setPanelPos({ top, left });
       }
@@ -318,31 +738,27 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     };
   }, []);
 
-  // 리사이즈 시작
   const handleResizeMouseDown =
-    (dir: ResizeDirection) =>
-      (event: React.MouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
+    (dir: ResizeDirection) => (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
 
-        resizeRef.current = {
-          resizing: true,
-          dir,
-          startX: event.clientX,
-          startY: event.clientY,
-          startWidth: size.width,
-          startHeight: size.height,
-          startTop: panelPos.top,
-          startLeft: panelPos.left,
-        };
-        // 드래그 중이던 것도 끊어주기
-        dragRef.current.dragging = false;
+      resizeRef.current = {
+        resizing: true,
+        dir,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: size.width,
+        startHeight: size.height,
+        startTop: panelPos.top,
+        startLeft: panelPos.left,
       };
+      dragRef.current.dragging = false;
+    };
 
-  // 드래그 시작 (상단 드래그 바)
   const handleDragMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
-    // 닫기 버튼/리사이즈 핸들 클릭일 경우는 각자 onMouseDown에서 stopPropagation 했으니 여기 안 들어옴
+
     dragRef.current = {
       dragging: true,
       startX: event.clientX,
@@ -350,89 +766,239 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       startTop: panelPos.top,
       startLeft: panelPos.left,
     };
-    // 리사이즈 중이던 것도 끊기
     resizeRef.current.resizing = false;
     resizeRef.current.dir = null;
   };
 
-  // 새 채팅 (최대 30개, FIFO 삭제)
-  const handleNewChat = () => {
-    const now = Date.now();
-
-    const newSession: ChatSession = {
-      id: `session-${now}`,
+  function createLocalSession(now: number): ChatSession {
+    return {
+      id: makeLocalId("local-session"),
       title: "새 채팅",
       createdAt: now,
       updatedAt: now,
-      domain: "general",
+      domain: getDefaultUiDomainFromToken(),
       messages: [],
+      serverId: undefined,
     };
+  }
 
-    setSessions((prev) => {
-      const nextSessions = [...prev];
+  // ====== 서버 세션 ↔ 로컬 세션 동기화 핵심 ======
 
-      // 최대 개수(30개)에 도달한 경우 → 가장 오래된 세션 삭제 (FIFO, createdAt 기준)
-      if (nextSessions.length >= MAX_SESSIONS) {
-        let oldestIndex = 0;
-        for (let i = 1; i < nextSessions.length; i += 1) {
-          if (nextSessions[i].createdAt < nextSessions[oldestIndex].createdAt) {
-            oldestIndex = i;
-          }
+  const findLocalSessionByServerId = useCallback(
+    (serverSessionId: string, list: ChatSession[]) =>
+      list.find((s) => s.serverId === serverSessionId) ?? null,
+    []
+  );
+
+  const upsertSessionWithFifo = useCallback((_prev: ChatSession[], next: ChatSession[]) => {
+    if (next.length <= MAX_SESSIONS) return next;
+
+    let oldestIndex = 0;
+    for (let i = 1; i < next.length; i += 1) {
+      if (next[i].createdAt < next[oldestIndex].createdAt) {
+        oldestIndex = i;
+      }
+    }
+
+    const pruned = [...next];
+    pruned.splice(oldestIndex, 1);
+    return pruned;
+  }, []);
+
+  const handleHydrateServerSession = useCallback(
+    (payload: {
+      serverSessionId: string;
+      title: string;
+      domain: ChatDomain;
+      createdAt: number;
+      updatedAt: number;
+      messages: Array<{
+        role: ChatRole;
+        content: string;
+        createdAt: number;
+        serverMessageId?: string;
+      }>;
+      raw?: unknown;
+    }) => {
+      if (!payload?.serverSessionId || !isUuidLike(payload.serverSessionId)) return;
+
+      setSessions((prev) => {
+        const byServer = prev.find((s) => s.serverId === payload.serverSessionId);
+        const byIdFallback = prev.find((s) => s.id === payload.serverSessionId);
+        const target = byServer ?? byIdFallback ?? null;
+
+        // (핵심) target이 없으면 id를 serverSessionId로 고정
+        const targetId = target?.id ?? payload.serverSessionId;
+
+        const normalizedMessages: ChatMessage[] = payload.messages
+          .filter((m) => trimStr(m.content).length > 0)
+          .map((m) => ({
+            id: makeLocalId("local-msg"),
+            role: m.role,
+            content: m.content,
+            createdAt: m.createdAt,
+            serverId: m.serverMessageId,
+          }));
+
+        const hydrated: ChatSession = {
+          id: targetId,
+          title: payload.title || "새 채팅",
+          createdAt: payload.createdAt || Date.now(),
+          updatedAt: payload.updatedAt || Date.now(),
+          domain: payload.domain || "general",
+          messages: normalizedMessages,
+          serverId: payload.serverSessionId,
+        };
+
+        const next: ChatSession[] = target
+          ? prev.map((s) => (s.id === targetId ? hydrated : s))
+          : [hydrated, ...prev];
+
+        return upsertSessionWithFifo(prev, next);
+      });
+    },
+    [upsertSessionWithFifo]
+  );
+
+  const getServerSessionIdForLocalSession = useCallback((localSessionId: string) => {
+    const s = sessionsRef.current.find((x) => x.id === localSessionId);
+    return s?.serverId;
+  }, []);
+
+  const ensureHydratedByServerId = useCallback(
+    async (serverSessionId: string) => {
+      const res = await fetchServerSessionHistory(serverSessionId);
+      if (!res) return;
+
+      handleHydrateServerSession({
+        serverSessionId: res.serverSessionId,
+        title: res.title,
+        domain: res.domain,
+        createdAt: res.createdAt,
+        updatedAt: res.updatedAt,
+        messages: res.messages,
+        raw: res,
+      });
+    },
+    [handleHydrateServerSession]
+  );
+
+  const handleSelectServerSession = useCallback(
+    (serverSessionId: string) => {
+      if (!serverSessionId || !isUuidLike(serverSessionId)) return;
+
+      // (핵심) 이미 로컬에 있으면 그대로 사용
+      const existing =
+        findLocalSessionByServerId(serverSessionId, sessionsRef.current) ??
+        (sessionsRef.current.find((s) => s.id === serverSessionId) ?? null);
+
+      if (existing) {
+        setActiveSessionId(existing.id);
+        if (existing.serverId && existing.messages.length === 0) {
+          void ensureHydratedByServerId(existing.serverId);
+        } else if (!existing.serverId) {
+          // id 자체가 serverSessionId인 케이스
+          void ensureHydratedByServerId(serverSessionId);
         }
-        nextSessions.splice(oldestIndex, 1);
+        return;
       }
 
-      // 새 세션을 목록 맨 앞에 추가
-      return [newSession, ...nextSessions];
+      const now = Date.now();
+
+      // (핵심 FIX) placeholder id를 serverSessionId로 고정 → hydrate 후에도 activeSessionId 안정
+      const placeholderId = serverSessionId;
+
+      const placeholder: ChatSession = {
+        id: placeholderId,
+        title: "불러오는 중…",
+        createdAt: now,
+        updatedAt: now,
+        domain: getDefaultUiDomainFromToken(),
+        messages: [],
+        serverId: serverSessionId,
+      };
+
+      setSessions((prev) => upsertSessionWithFifo(prev, [placeholder, ...prev]));
+      setActiveSessionId(placeholderId);
+
+      void ensureHydratedByServerId(serverSessionId);
+    },
+    [ensureHydratedByServerId, findLocalSessionByServerId, upsertSessionWithFifo]
+  );
+
+  // ====== 로컬 세션 관리 ======
+
+  const handleNewChat = () => {
+    const now = Date.now();
+    const newSession = createLocalSession(now);
+
+    setSessions((prev) => {
+      const next = [newSession, ...prev];
+      return upsertSessionWithFifo(prev, next);
     });
 
-    // 새 세션 활성화
     setActiveSessionId(newSession.id);
   };
 
-  // 세션 선택
   const handleSelectSession = (sessionId: string) => {
+    const exists = sessionsRef.current.some((s) => s.id === sessionId);
+    if (!exists && isUuidLike(sessionId)) {
+      handleSelectServerSession(sessionId);
+      return;
+    }
+
     setActiveSessionId(sessionId);
+
+    const s = sessionsRef.current.find((x) => x.id === sessionId);
+    if (s?.serverId && s.messages.length === 0) {
+      void ensureHydratedByServerId(s.serverId);
+    }
   };
 
-  // 세션 이름 변경
   const handleRenameSession = (sessionId: string, newTitle: string) => {
-    const trimmed = newTitle.trim();
+    const trimmed = trimStr(newTitle);
     if (!trimmed) return;
 
     setSessions((prev) =>
       prev.map((s) =>
-        s.id === sessionId
-          ? { ...s, title: trimmed, updatedAt: Date.now() }
-          : s
+        s.id === sessionId ? { ...s, title: trimmed, updatedAt: Date.now() } : s
       )
     );
   };
 
-  // 세션 삭제
   const handleDeleteSession = (sessionId: string) => {
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== sessionId);
+    const byLocal = sessionsRef.current.find((s) => s.id === sessionId) ?? null;
+    const byServer = sessionsRef.current.find((s) => s.serverId === sessionId) ?? null;
 
-      // 현재 보고 있던 세션을 삭제했다면 첫 번째 세션으로 포커스 이동
-      if (activeSessionId === sessionId) {
-        setActiveSessionId(next[0]?.id ?? null);
+    const target = byLocal ?? byServer;
+    const serverSessionId = target?.serverId ?? (isUuidLike(sessionId) ? sessionId : undefined);
+
+    void (async () => {
+      if (serverSessionId) {
+        const ok = await deleteServerSession(serverSessionId);
+        if (!ok) return;
       }
 
-      return next;
-    });
+      setSessions((prev) => {
+        const next = prev.filter(
+          (s) => s.id !== (target?.id ?? sessionId) && s.serverId !== sessionId
+        );
+
+        if (activeSessionId === (target?.id ?? sessionId)) {
+          setActiveSessionId(next[0]?.id ?? null);
+        }
+
+        return next;
+      });
+    })();
   };
 
-  // 검색어 변경
   const handleSearchTermChange = (value: string) => {
     setSearchTerm(value);
   };
 
-  // 현재 활성 세션
-  const activeSession =
-    sessions.find((s) => s.id === activeSessionId) ?? null;
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
-  // 현재 활성 세션의 도메인 변경 (카드에서 호출)
   const handleChangeSessionDomain = (nextDomain: ChatDomain) => {
     if (!activeSessionId) return;
     const now = Date.now();
@@ -446,7 +1012,6 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     );
   };
 
-  // 사이드바용 요약 데이터
   const sidebarSessions: SidebarSessionSummary[] = sessions.map((session) => {
     const last = session.messages[session.messages.length - 1];
     const lastMessage = last ? buildLastMessagePreview(last.content) : "";
@@ -461,54 +1026,224 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     };
   });
 
-  // ====== FAQ 빠른 질문: 질문 + 답변 한 번에 추가 (AI 호출 없음) ======
-  const handleFaqQuickSend = (faqId: number) => {
-    if (!activeSessionId) return;
+  /* =========================
+     FAQ state (API 연동)
+  ========================= */
 
-    const faqItem = FAQ_ITEMS.find((item) => item.id === faqId);
-    if (!faqItem) return;
+  const [faqHome, setFaqHome] = useState<FaqHomeItem[]>([]);
+  const [faqHomeLoading, setFaqHomeLoading] = useState(false);
 
-    const now = Date.now();
+  const faqHomeRef = useRef<FaqHomeItem[]>([]);
+  const faqIndexByIdRef = useRef<Map<string, FaqItem>>(new Map());
+  const faqHomeByIndexRef = useRef<Map<number, { faqId: string; domain: ChatServiceDomain }>>(
+    new Map()
+  );
+  const faqListCacheRef = useRef<Map<string, FaqItem[]>>(new Map());
 
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== activeSessionId) return session;
+  // 토큰 준비 레이스를 잡기 위한 auth-ready 트리거
+  const [authReadyTick, setAuthReadyTick] = useState(0);
+  const hadAuthTokenRef = useRef(false);
 
-        const hasUserMessage = session.messages.some(
-          (m) => m.role === "user"
+  useEffect(() => {
+    const check = () => {
+      const authed = Boolean(keycloak?.authenticated);
+      const token = keycloak?.token ?? null;
+
+      if (authed && token) {
+        if (!hadAuthTokenRef.current) {
+          hadAuthTokenRef.current = true;
+          setAuthReadyTick((x) => x + 1);
+        }
+      } else {
+        hadAuthTokenRef.current = false;
+      }
+    };
+
+    check();
+    const id = window.setInterval(check, 500);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // FAQ Home 로딩: mount + (토큰 준비 후) 재시도
+  useEffect(() => {
+    let alive = true;
+
+    void (async () => {
+      setFaqHomeLoading(true);
+      try {
+        const items = await fetchFaqHome();
+        const safe = Array.isArray(items) ? items : [];
+
+        if (!alive) return;
+
+        setFaqHome(safe);
+        faqHomeRef.current = safe;
+
+        const map = new Map<number, { faqId: string; domain: ChatServiceDomain }>();
+        safe.forEach((it, idx) => {
+          map.set(idx, { faqId: it.faqId, domain: it.domain });
+        });
+        faqHomeByIndexRef.current = map;
+      } catch (e) {
+        if (!alive) return;
+        console.warn("[ChatbotApp] fetchFaqHome failed:", e);
+        setFaqHome([]);
+        faqHomeRef.current = [];
+        faqHomeByIndexRef.current = new Map();
+      } finally {
+        if (alive) setFaqHomeLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [authReadyTick]);
+
+  // FAQ list 캐싱: “빈 배열 고착” 방지
+  const ensureFaqListCached = useCallback(async (domain: ChatServiceDomain) => {
+    const key = String(domain).toUpperCase();
+    const cached = faqListCacheRef.current.get(key);
+    if (cached && cached.length > 0) return cached;
+
+    const list = await fetchFaqList(domain);
+    const safe = Array.isArray(list) ? list : [];
+
+    if (safe.length > 0) {
+      faqListCacheRef.current.set(key, safe);
+      for (const item of safe) {
+        faqIndexByIdRef.current.set(item.id, item);
+      }
+    } else {
+      faqListCacheRef.current.delete(key);
+    }
+
+    return safe;
+  }, []);
+
+  // ====== FAQ 빠른 질문: API 기반으로 Q/A 추가 (AI 호출 없음) ======
+  const handleFaqQuickSend = useCallback(
+    (faqKey: number | string) => {
+      void (async () => {
+        if (!activeSessionId) return;
+
+        const now = Date.now();
+
+        // faqId/domain 추론
+        let faqId: string | null = null;
+        let domain: ChatServiceDomain | null = null;
+
+        if (typeof faqKey === "string" && isLikelyUuid(faqKey)) {
+          faqId = faqKey;
+        } else if (typeof faqKey === "number") {
+          const hit = faqHomeByIndexRef.current.get(faqKey);
+          if (hit) {
+            faqId = hit.faqId;
+            domain = hit.domain;
+          }
+        } else if (typeof faqKey === "string") {
+          faqId = trimStr(faqKey) || null;
+        }
+
+        if (!faqId) {
+          const msg: ChatMessage = {
+            id: makeLocalId("local-msg"),
+            role: "assistant",
+            content: "FAQ 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            createdAt: now,
+          };
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === activeSessionId
+                ? { ...s, messages: [...s.messages, msg], updatedAt: now }
+                : s
+            )
+          );
+          return;
+        }
+
+        // 1) 캐시에서 바로 찾기
+        let item = faqIndexByIdRef.current.get(faqId) ?? null;
+
+        // 2) domain을 아는 경우 해당 domain list 캐시/로딩 후 찾기
+        if (!item && domain) {
+          const list = await ensureFaqListCached(domain);
+          item = list.find((x) => x.id === faqId) ?? null;
+        }
+
+        // 3) domain을 모르면 home의 도메인들을 순회하며 찾기
+        if (!item) {
+          const home = faqHomeRef.current ?? [];
+          const domains = Array.from(new Set(home.map((h) => String(h.domain).toUpperCase())));
+          for (const d of domains) {
+            const list = await ensureFaqListCached(d as ChatServiceDomain);
+            const found = list.find((x) => x.id === faqId);
+            if (found) {
+              item = found;
+              domain = found.domain;
+              break;
+            }
+          }
+        }
+
+        if (!item) {
+          const msg: ChatMessage = {
+            id: makeLocalId("local-msg"),
+            role: "assistant",
+            content: "FAQ 항목을 찾지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            createdAt: now,
+          };
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === activeSessionId
+                ? { ...s, messages: [...s.messages, msg], updatedAt: now }
+                : s
+            )
+          );
+          return;
+        }
+
+        const targetDomain: ChatDomain = fromChatServiceDomain(item.domain, "general");
+
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (session.id !== activeSessionId) return session;
+
+            const hasUserMessage = session.messages.some((m) => m.role === "user");
+            const isDefaultTitle = session.title.startsWith("새 채팅");
+
+            const nextTitle =
+              !hasUserMessage && isDefaultTitle
+                ? buildSessionTitleFromMessage(item.question)
+                : session.title;
+
+            const userMessage: ChatMessage = {
+              id: makeLocalId("local-msg"),
+              role: "user",
+              content: item.question,
+              createdAt: now,
+            };
+
+            const assistantMessage: ChatMessage = {
+              id: makeLocalId("local-msg"),
+              role: "assistant",
+              content: item.answer,
+              createdAt: now + 1,
+            };
+
+            return {
+              ...session,
+              title: nextTitle,
+              domain: targetDomain,
+              messages: [...session.messages, userMessage, assistantMessage],
+              updatedAt: now + 1,
+            };
+          })
         );
-        const isDefaultTitle = session.title.startsWith("새 채팅");
-
-        const nextTitle =
-          !hasUserMessage && isDefaultTitle
-            ? buildSessionTitleFromMessage(faqItem.question)
-            : session.title;
-
-        const userMessage: ChatMessage = {
-          id: `${activeSessionId}-faq-${faqId}-user-${now}`,
-          role: "user",
-          content: faqItem.question,
-          createdAt: now,
-        };
-
-        const assistantMessage: ChatMessage = {
-          id: `${activeSessionId}-faq-${faqId}-assistant-${now + 1}`,
-          role: "assistant",
-          content: faqItem.answer,
-          createdAt: now + 1,
-        };
-
-        return {
-          ...session,
-          title: nextTitle,
-          // FAQ 카드를 누른 세션은 FAQ 도메인으로 전환
-          domain: "faq",
-          messages: [...session.messages, userMessage, assistantMessage],
-          updatedAt: now + 1,
-        };
-      })
-    );
-  };
+      })();
+    },
+    [activeSessionId, ensureFaqListCached]
+  );
 
   // ====== 메시지 전송 전체 플로우 (일반 채팅: AI 호출) ======
   const handleSendMessage = (text: string) => {
@@ -516,62 +1251,50 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   };
 
   const processSendMessage = async (text: string) => {
-    const trimmed = text.trim();
+    const trimmed = trimStr(text);
     if (!trimmed) return;
 
+    const currentSessions = sessionsRef.current;
     const sessionIdForSend =
-      activeSessionId ?? (sessions.length > 0 ? sessions[0].id : null);
-
-    if (!sessionIdForSend) {
-      return;
-    }
+      activeSessionId ?? (currentSessions.length > 0 ? currentSessions[0].id : null);
+    if (!sessionIdForSend) return;
 
     const now = Date.now();
-
-    const currentSession = sessions.find((s) => s.id === sessionIdForSend);
+    const currentSession = currentSessions.find((s) => s.id === sessionIdForSend);
     if (!currentSession) return;
 
     const userMessage: ChatMessage = {
-      id: `${sessionIdForSend}-${now}`,
+      id: makeLocalId("local-msg"),
       role: "user",
       content: trimmed,
       createdAt: now,
     };
 
-    const hasUserMessage = currentSession.messages.some(
-      (m) => m.role === "user"
-    );
+    const hasUserMessage = currentSession.messages.some((m) => m.role === "user");
     const isDefaultTitle = currentSession.title.startsWith("새 채팅");
 
     const nextTitle =
-      !hasUserMessage && isDefaultTitle
-        ? buildSessionTitleFromMessage(trimmed)
-        : currentSession.title;
+      !hasUserMessage && isDefaultTitle ? buildSessionTitleFromMessage(trimmed) : currentSession.title;
 
-    const userAppendedMessages = [...currentSession.messages, userMessage];
-
-    // 1) 우선 user 메시지만 바로 상태에 반영
     setSessions((prev) =>
       prev.map((session) =>
         session.id === sessionIdForSend
           ? {
             ...session,
             title: nextTitle,
-            messages: userAppendedMessages,
+            messages: [...session.messages, userMessage],
             updatedAt: now,
           }
           : session
       )
     );
 
-    // 2) 신고 의도인 경우: AI 호출 대신 신고 안내 말풍선 + 신고 버튼 제공
     if (shouldSuggestReport(trimmed)) {
       const suggestionTime = now + 1;
       const suggestionMessage: ChatMessage = {
-        id: `${sessionIdForSend}-report-suggestion-${suggestionTime}`,
+        id: makeLocalId("local-msg"),
         role: "assistant",
-        content:
-          "신고 절차를 알려드릴게요! 부적절한 상황이라면 지금 바로 신고할 수 있어요.",
+        content: "신고 절차를 알려드릴게요! 부적절한 상황이라면 지금 바로 신고할 수 있어요.",
         createdAt: suggestionTime,
         kind: "reportSuggestion",
       };
@@ -581,7 +1304,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
           session.id === sessionIdForSend
             ? {
               ...session,
-              messages: [...userAppendedMessages, suggestionMessage],
+              messages: [...session.messages, suggestionMessage],
               updatedAt: suggestionTime,
             }
             : session
@@ -591,11 +1314,11 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       return;
     }
 
-    // 3) 일반 메시지: AI 요청 payload
     const requestPayload: ChatRequest = {
       sessionId: sessionIdForSend,
+      serverSessionId: currentSession.serverId,
       domain: currentSession.domain,
-      messages: userAppendedMessages.map((m) => ({
+      messages: [...currentSession.messages, userMessage].map((m) => ({
         role: m.role,
         content: m.content,
       })),
@@ -603,36 +1326,139 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
     try {
       setIsSending(true);
-      const replyText = await sendChatToAI(requestPayload);
 
-      const replyTime = Date.now();
-      const assistantMessage: ChatMessage = {
-        id: `${sessionIdForSend}-assistant-${replyTime}`,
-        role: "assistant",
-        content: replyText,
-        createdAt: replyTime,
-      };
+      const ENABLE_CHAT_STREAMING =
+        String(import.meta.env.VITE_CHAT_STREAMING ?? "").toLowerCase() === "true";
+      try {
+        setIsSending(true);
 
-      // 응답 도착 후 assistant 메시지 추가
-      setSessions((prev) =>
-        prev.map((session) =>
-          session.id === sessionIdForSend
-            ? {
-              ...session,
-              messages: [...session.messages, assistantMessage],
-              updatedAt: replyTime,
-            }
-            : session
-        )
-      );
+        if (ENABLE_CHAT_STREAMING) {
+          // 1) placeholder assistant 메시지 생성
+          const placeholderId = makeLocalId("local-msg");
+          const placeholderTime = Date.now();
+
+          const placeholder: ChatMessage = {
+            id: placeholderId,
+            role: "assistant",
+            content: "",
+            createdAt: placeholderTime,
+          };
+
+          setSessions((prev) =>
+            prev.map((session) =>
+              session.id === sessionIdForSend
+                ? {
+                  ...session,
+                  messages: [...session.messages, placeholder],
+                  updatedAt: placeholderTime,
+                }
+                : session
+            )
+          );
+
+          let acc = "";
+
+          const final = await sendChatToAIStream(requestPayload, {
+            onDelta: (delta: string) => {
+              acc += delta;
+
+              // placeholder content 업데이트
+              setSessions((prev) =>
+                prev.map((session) => {
+                  if (session.id !== sessionIdForSend) return session;
+
+                  const nextMessages = session.messages.map((m) =>
+                    m.id === placeholderId ? { ...m, content: acc } : m
+                  );
+
+                  return { ...session, messages: nextMessages, updatedAt: Date.now() };
+                })
+              );
+            },
+            onFinal: (f: ChatSendResult) => {
+              // 최종 serverId / sessionId 확정
+              setSessions((prev) =>
+                prev.map((session) => {
+                  if (session.id !== sessionIdForSend) return session;
+
+                  const nextMessages = session.messages.map((m) =>
+                    m.id === placeholderId
+                      ? { ...m, content: f.content || acc, serverId: f.messageId }
+                      : m
+                  );
+
+                  return {
+                    ...session,
+                    serverId: session.serverId ?? f.sessionId,
+                    messages: nextMessages,
+                    updatedAt: Date.now(),
+                  };
+                })
+              );
+            },
+          });
+
+          // sendChatToAIStream 내부에서 UI 업데이트를 끝내지만,
+          // 여기서 final을 안 쓰면 lint가 불편할 수 있어 유지
+          void final;
+        } else {
+          // 기존 non-stream
+          const reply = await sendChatToAI(requestPayload);
+          const replyTime = Date.now();
+
+          const assistantMessage: ChatMessage = {
+            id: makeLocalId("local-msg"),
+            role: "assistant",
+            content: reply.content,
+            createdAt: replyTime,
+            serverId: reply.messageId,
+          };
+
+          setSessions((prev) =>
+            prev.map((session) => {
+              if (session.id !== sessionIdForSend) return session;
+              return {
+                ...session,
+                serverId: session.serverId ?? reply.sessionId,
+                messages: [...session.messages, assistantMessage],
+                updatedAt: replyTime,
+              };
+            })
+          );
+        }
+      } catch (error) {
+        console.error("sendChatToAI error:", error);
+
+        const replyTime = Date.now();
+        const errorMessage: ChatMessage = {
+          id: makeLocalId("local-msg"),
+          role: "assistant",
+          content: "죄송합니다. 서버와 통신 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.",
+          createdAt: replyTime,
+        };
+
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === sessionIdForSend
+              ? {
+                ...session,
+                messages: [...session.messages, errorMessage],
+                updatedAt: replyTime,
+              }
+              : session
+          )
+        );
+      } finally {
+        setIsSending(false);
+      }
     } catch (error) {
       console.error("sendChatToAI error:", error);
+
       const replyTime = Date.now();
       const errorMessage: ChatMessage = {
-        id: `${sessionIdForSend}-assistant-error-${replyTime}`,
+        id: makeLocalId("local-msg"),
         role: "assistant",
-        content:
-          "죄송합니다. 서버와 통신 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.",
+        content: "죄송합니다. 서버와 통신 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.",
         createdAt: replyTime,
       };
 
@@ -652,33 +1478,74 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     }
   };
 
-  // 특정 답변 기준으로 "다시 시도 / 다른 답변" 요청
   const handleRetryFromMessage = (sourceQuestion: string, mode: RetryMode) => {
-    const base = sourceQuestion.trim();
+    const base = trimStr(sourceQuestion);
     if (!base || isSending) return;
 
-    let question = base;
+    const current = activeSessionId
+      ? sessionsRef.current.find((s) => s.id === activeSessionId) ?? null
+      : null;
 
-    if (mode === "variant") {
-      // 다른 답변 모드: 같은 질문이지만, 다른 방식으로 설명 요청
-      question = `${base}\n\n같은 내용이지만 다른 방식으로도 한 번 더 설명해줘.`;
+    if (mode === "retry" && current?.serverId) {
+      const idx = current.messages.findIndex((m) => m.role === "user" && trimStr(m.content) === base);
+
+      if (idx >= 0) {
+        const nextAssistant = current.messages.slice(idx + 1).find((m) => m.role === "assistant");
+        const targetMessageId = nextAssistant?.serverId;
+
+        if (targetMessageId && isUuidLike(targetMessageId)) {
+          void (async () => {
+            try {
+              setIsSending(true);
+              const res = await retryMessage(current.serverId as string, targetMessageId);
+              const t = Date.now();
+
+              const assistantMessage: ChatMessage = {
+                id: makeLocalId("local-msg"),
+                role: "assistant",
+                content: res.content,
+                createdAt: t,
+                serverId: res.messageId,
+              };
+
+              setSessions((prev) =>
+                prev.map((s) =>
+                  s.id === current.id ? { ...s, messages: [...s.messages, assistantMessage], updatedAt: t } : s
+                )
+              );
+            } catch (e) {
+              console.warn("[ChatbotApp] retryMessage failed, fallback to resend:", e);
+              await processSendMessage(base);
+            } finally {
+              setIsSending(false);
+            }
+          })();
+          return;
+        }
+      }
     }
 
+    let question = base;
+    if (mode === "variant") {
+      question = `${base}\n\n같은 내용이지만 다른 방식으로도 한 번 더 설명해줘.`;
+    }
     void processSendMessage(question);
   };
 
-  // ====== 피드백 업데이트 (좋아요 / 별로예요) ======
-  const handleFeedbackChange = (messageId: string, value: FeedbackValue) => {
+  const handleFeedbackChange = (localMessageId: string, value: FeedbackValue) => {
     if (!activeSessionId) return;
     const now = Date.now();
 
-    // 1) 프론트 상태에 반영
+    const s = sessionsRef.current.find((x) => x.id === activeSessionId) ?? null;
+    const serverSessionId = s?.serverId;
+    const serverMessageId = s?.messages.find((x) => x.id === localMessageId)?.serverId;
+
     setSessions((prev) =>
       prev.map((session) => {
         if (session.id !== activeSessionId) return session;
 
         const updatedMessages = session.messages.map((m) =>
-          m.id === messageId ? { ...m, feedback: value } : m
+          m.id === localMessageId ? { ...m, feedback: value } : m
         );
 
         return {
@@ -689,28 +1556,35 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       })
     );
 
-    // 2) (선택) 백엔드로도 피드백 전달 - 지금은 Mock
+    if (!serverSessionId) {
+      console.warn("[ChatbotApp] feedback skipped: server sessionId is missing");
+      return;
+    }
+    if (!serverMessageId) {
+      console.warn("[ChatbotApp] feedback skipped: server messageId is missing");
+      return;
+    }
+
     void sendFeedbackToAI({
-      sessionId: activeSessionId,
-      messageId,
+      sessionId: serverSessionId,
+      messageId: serverMessageId,
       feedback: value,
     });
   };
 
-  // ====== 신고 모달에서 제출된 신고 처리 ======
   const handleSubmitReport = (payload: ReportPayload) => {
     const sessionId = payload.sessionId || activeSessionId;
     if (!sessionId) return;
 
     const now = Date.now();
+    const pendingId = makeLocalId("local-msg");
 
-    const receiptMessage: ChatMessage = {
-      id: `${sessionId}-report-receipt-${now}`,
+    // 1) 즉시 “접수 중” 메시지 표시 (UX)
+    const pendingMessage: ChatMessage = {
+      id: pendingId,
       role: "assistant",
-      content:
-        "신고가 접수되었습니다. 담당자가 내용을 확인한 후 필요한 경우 별도로 연락드리겠습니다.",
+      content: "신고를 접수 중입니다…",
       createdAt: now,
-      kind: "reportReceipt",
     };
 
     setSessions((prev) =>
@@ -718,60 +1592,79 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         session.id === sessionId
           ? {
             ...session,
-            messages: [...session.messages, receiptMessage],
+            messages: [...session.messages, pendingMessage],
             updatedAt: now,
           }
           : session
       )
     );
 
-    // TODO: 실제 신고 저장 API 연동 시 payload 전송
-    console.log("[신고 접수] payload:", payload);
+    // 2) 서버 제출
+    void (async () => {
+      const res = await submitReportToServer({
+        ...payload,
+        sessionId,
+      });
+
+      const t = Date.now();
+
+      const okText =
+        "신고가 접수되었습니다. 담당자가 내용을 확인한 후 필요한 경우 별도로 연락드리겠습니다.";
+      const failText =
+        "신고 접수에 실패했습니다. 잠시 후 다시 시도해 주세요. (계속 실패하면 관리자에게 문의)";
+
+      setSessions((prev) =>
+        prev.map((session) => {
+          if (session.id !== sessionId) return session;
+
+          const nextMessages = session.messages.map((m) => {
+            if (m.id !== pendingId) return m;
+            return {
+              ...m,
+              content: res.ok ? okText : failText,
+              createdAt: t,
+              kind: res.ok ? "reportReceipt" : m.kind,
+            };
+          });
+
+          return { ...session, messages: nextMessages, updatedAt: t };
+        })
+      );
+
+      if (!res.ok) {
+        console.warn("[ChatbotApp] report submit failed:", res.status, res.message);
+      }
+    })();
   };
 
-  // === 교육/퀴즈 패널 열기 핸들러 (챗봇 자동 닫기) ===
   const handleOpenEduPanelFromChat = () => {
-    if (onOpenEduPanel) {
-      onOpenEduPanel();
-    }
-    onClose(); // 교육 패널이 열릴 때 챗봇 패널은 닫기
+    onOpenEduPanel?.();
+    onClose();
   };
 
   const handleOpenQuizPanelFromChat = () => {
-    if (onOpenQuizPanel) {
-      onOpenQuizPanel(); // quizId는 아직 사용하지 않음
-    }
-    onClose(); // 퀴즈 패널이 열릴 때 챗봇 패널 닫기
+    onOpenQuizPanel?.();
+    onClose();
   };
 
   const handleOpenAdminPanelFromChat = () => {
     if (!can(userRole, "OPEN_ADMIN_DASHBOARD")) return;
-
-    if (onOpenAdminPanel) {
-      onOpenAdminPanel();
-    }
+    onOpenAdminPanel?.();
     onClose();
   };
 
   const handleOpenReviewerPanelFromChat = () => {
     if (!can(userRole, "OPEN_REVIEWER_DESK")) return;
-
-    if (onOpenReviewerPanel) {
-      onOpenReviewerPanel();
-    }
+    onOpenReviewerPanel?.();
     onClose();
   };
 
   const handleOpenCreatorPanelFromChat = () => {
     if (!can(userRole, "OPEN_CREATOR_STUDIO")) return;
-
-    if (onOpenCreatorPanel) {
-      onOpenCreatorPanel();
-    }
+    onOpenCreatorPanel?.();
     onClose();
   };
 
-  // 지니 애니메이션 종료 이벤트
   useEffect(() => {
     if (!wrapperRef.current || !onAnimationEnd) return;
 
@@ -807,14 +1700,9 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
         }}
         onMouseDown={onRequestFocus}
       >
-        <div
-          className="cb-chatbot-panel"
-          style={{ width: size.width, height: size.height }}
-        >
-          {/* 상단 드래그 바 (투명, 위치 이동용) */}
+        <div className="cb-chatbot-panel" style={{ width: size.width, height: size.height }}>
           <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />
 
-          {/* 리사이즈 핸들: 모서리 4개 + 변 4개 (투명) */}
           <div
             className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-nw"
             onMouseDown={handleResizeMouseDown("nw")}
@@ -849,7 +1737,6 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
             onMouseDown={handleResizeMouseDown("e")}
           />
 
-          {/* 닫기 버튼 */}
           <button
             type="button"
             className="cb-panel-close-btn"
@@ -862,9 +1749,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
           <div className="cb-chatbot-layout">
             <Sidebar
               collapsed={isSidebarCollapsed}
-              onToggleCollapse={() =>
-                setIsSidebarCollapsed((prev) => !prev)
-              }
+              onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
               sessions={sidebarSessions}
               activeSessionId={activeSessionId}
               searchTerm={searchTerm}
@@ -873,24 +1758,32 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               onSelectSession={handleSelectSession}
               onRenameSession={handleRenameSession}
               onDeleteSession={handleDeleteSession}
+              enableServerSync={true}
+              // 핵심: 폴링 OFF (요청 계속 오는 문제 차단)
+              serverSyncIntervalMs={0}
+              getServerSessionIdForLocalSession={getServerSessionIdForLocalSession}
+              onSelectServerSession={handleSelectServerSession}
+              onHydrateServerSession={handleHydrateServerSession}
             />
+
             <ChatWindow
               key={activeSession?.id ?? "no-session"}
               activeSession={activeSession}
               onSendMessage={handleSendMessage}
               isSending={isSending}
               onChangeDomain={handleChangeSessionDomain}
-              // 교육/퀴즈 카드 클릭 시: 새 패널 열고 챗봇 닫기
               onOpenEduPanel={handleOpenEduPanelFromChat}
               onOpenQuizPanel={handleOpenQuizPanelFromChat}
               onOpenAdminPanel={handleOpenAdminPanelFromChat}
               onOpenReviewerPanel={handleOpenReviewerPanelFromChat}
               onOpenCreatorPanel={handleOpenCreatorPanelFromChat}
+              faqHomeItems={faqHome}
+              isFaqHomeLoading={faqHomeLoading}
+              onRequestFaqTop10={ensureFaqListCached}
               onFaqQuickSend={handleFaqQuickSend}
               onRetryFromMessage={handleRetryFromMessage}
               onFeedbackChange={handleFeedbackChange}
               onReportSubmit={handleSubmitReport}
-              // SYSTEM_ADMIN / EMPLOYEE 정보 전달
               userRole={userRole}
             />
           </div>

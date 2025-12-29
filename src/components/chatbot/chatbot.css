@@ -589,6 +589,133 @@
   cursor: default;
 }
 
+.cb-main-chip-role {
+  border-color: #111827;
+  background-color: #111827;
+  color: #ffffff;
+}
+
+.cb-main-chip-admin {
+  box-shadow: 0 0 0 1px #111827;
+}
+
+.cb-main-chip-reviewer {
+  background-color: #0f172a;
+  border-color: #0f172a;
+}
+
+.cb-main-chip-creator {
+  background-color: #111827;
+  border-color: #111827;
+}
+
+.cb-main-chip-faq,
+.cb-main-chip-edu,
+.cb-main-chip-quiz,
+.cb-main-chip-general {
+  border-color: #d4d4d8;
+  background-color: #ffffff;
+  color: #111827;
+}
+
+.cb-main-chip-faq:hover:not(:disabled),
+.cb-main-chip-edu:hover:not(:disabled),
+.cb-main-chip-quiz:hover:not(:disabled),
+.cb-main-chip-general:hover:not(:disabled) {
+  background-color: #f3f4f6;
+  color: #111827;
+}
+
+.cb-faq-thread-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e5e7eb;
+}
+
+/* =========================
+   Streaming UX (마지막 답변 스트리밍 표시)
+   ========================= */
+
+.cb-chat-bubble-streaming {
+  position: relative;
+}
+
+.cb-streaming-caret {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  margin-left: 2px;
+  border-radius: 2px;
+  background: #6b7280;
+  vertical-align: -3px;
+  animation: cb-caret-blink 1s infinite ease-in-out;
+}
+
+@keyframes cb-caret-blink {
+  0%,
+  45% {
+    opacity: 0.15;
+  }
+  55%,
+  100% {
+    opacity: 0.9;
+  }
+}
+
+/* =========================
+   Report Modal – Validation
+   ========================= */
+
+.cb-report-error-text {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.cb-report-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* =========================
+   Receipt Bubble (reportReceipt kind)
+   ========================= */
+
+.cb-chat-bubble-receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background-color: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  color: #065f46;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cb-chat-bubble-receipt-icon {
+  font-size: 14px;
+}
+
+.cb-chat-bubble-receipt-text {
+  white-space: nowrap;
+}
+
+/* =========================
+   A11y polish (focus-visible)
+   ========================= */
+
+.cb-main-chip-btn:focus-visible,
+.cb-faq-category-chip:focus-visible,
+.cb-faq-suggestion-btn:focus-visible,
+.cb-chat-bubble-icon-btn:focus-visible,
+.cb-report-btn:focus-visible,
+.cb-report-close-btn:focus-visible {
+  outline: 2px solid rgba(17, 24, 39, 0.35);
+  outline-offset: 2px;
+}
+
 .cb-main-title {
   margin: 0;
   font-size: 18px;
@@ -762,7 +889,7 @@
 
 /* 말풍선 컨테이너 (말풍선 + 액션들 세로 정렬) */
 .cb-chat-bubble-container {
-  max-width: 72%;
+  max-width: min(72%, 640px);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1006,9 +1133,10 @@
 /* 기능 카드 컨테이너 */
 .cb-feature-container {
   box-sizing: border-box;
-  width: clamp(640px, 78%, 900px);
+  width: 100%;
+  max-width: 900px;
   margin: 32px auto 0;
-  padding: 0 clamp(12px, 3vw, 32px) 24px;
+  padding: 0 24px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2597,12 +2725,12 @@
 
 .cb-report-textarea-wrapper {
   margin-top: 10px;
-  padding: 8px 14px;
-  border-radius: 999px;
+  padding: 10px 12px;
+  border-radius: 16px;
   border: 1px solid #e5e7eb;
   background-color: #f9fafb;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   box-sizing: border-box;
 }
 
@@ -2619,9 +2747,10 @@
   font-size: 12px;
   color: #111827;
   line-height: 1.5;
-  max-height: 19px;
+  min-height: 110px;
+  max-height: 200px;
   overflow-y: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
 }
 
 .cb-report-textarea::-webkit-scrollbar {

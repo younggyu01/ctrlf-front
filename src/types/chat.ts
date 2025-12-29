@@ -3,13 +3,34 @@
 // 공통 역할 타입
 export type ChatRole = "user" | "assistant";
 
-// 세션 도메인 타입
+/**
+ * 프론트(UI) 세션 도메인 타입
+ *
+ * - Chat Service의 실제 domain(SECURITY/POLICY/EDUCATION/HR...)과는 별개로,
+ *   UI에서는 "칩/카드/탭" 관점의 도메인을 유지합니다.
+ *
+ * - 기존 코드 호환을 위해 "faq", "quiz"는 유지하되,
+ *   실제 Chat Service 요청 domain은 매핑(toChatServiceDomain)으로 정규화됩니다.
+ */
 export type ChatDomain =
   | "general"
   | "faq"
   | "quiz"
   | "edu"
-  | "security";
+  | "security"
+  | "policy";
+
+/**
+ * Chat Service(9005)에서 사용하는 domain (대문자)
+ * - 스펙 문서 기준 예: SECURITY, POLICY, EDUCATION, HR
+ * - 배포/조직별로 추가될 수 있어 string 확장 허용
+ */
+export type ChatServiceDomain =
+  | "SECURITY"
+  | "POLICY"
+  | "EDUCATION"
+  | "HR"
+  | (string & {});
 
 // 피드백 값 타입 (좋아요 / 별로예요 / 없음)
 export type FeedbackValue = "up" | "down" | null;
@@ -18,8 +39,8 @@ export type FeedbackValue = "up" | "down" | null;
  * 메시지 용도 구분
  * - normal           : 일반 Q/A
  * - system           : 시스템 안내(필요하면 확장용)
- * - reportSuggestion : "신고 절차를 알려드릴게요!" 같이 신고 유도 말풍선
- * - reportReceipt    : "신고가 접수되었습니다" 같은 접수 안내 말풍선
+ * - reportSuggestion : 신고 유도 말풍선
+ * - reportReceipt    : 신고 접수 안내 말풍선
  */
 export type ChatMessageKind =
   | "normal"
@@ -27,9 +48,11 @@ export type ChatMessageKind =
   | "reportSuggestion"
   | "reportReceipt";
 
-// 개별 메시지 엔티티
+/** 개별 메시지 엔티티 */
 export interface ChatMessage {
+  /** 프론트 로컬 메시지 id */
   id: string;
+
   role: ChatRole;
   content: string;
   createdAt: number;
@@ -37,23 +60,40 @@ export interface ChatMessage {
   /** 메시지 용도 (없으면 normal 취급) */
   kind?: ChatMessageKind;
 
-  /**
-   * 사용자가 남긴 피드백
-   * - "up"  : 좋은 응답
-   * - "down": 별로인 응답
-   * - null / undefined: 피드백 없음
-   */
+  /** 사용자가 남긴 피드백 */
   feedback?: FeedbackValue;
+
+  /**
+   * 서버 메시지 UUID
+   * - 피드백/재시도 등 서버 API 호출에 사용
+   * - user 메시지는 서버에 저장/리턴되지 않을 수 있어 undefined일 수 있음
+   */
+  serverId?: string;
 }
 
-// 세션 엔티티
+/** 세션 엔티티 */
 export interface ChatSession {
+  /** 프론트 로컬 세션 키 */
   id: string;
+
   title: string;
   createdAt: number;
   updatedAt: number;
+
+  /**
+   * UI 관점 도메인
+   * - 서버 요청 도메인은 chatApi에서 toChatServiceDomain으로 변환하여 사용
+   */
   domain: ChatDomain;
+
   messages: ChatMessage[];
+
+  /**
+   * 서버 세션 UUID
+   * - 첫 메시지 전송 후 sendChatToAI 응답을 통해 채워짐
+   * - 이후 피드백/재시도 등에서 사용
+   */
+  serverId?: string;
 }
 
 // 사이드바에서 사용하는 요약용 세션 타입
@@ -66,17 +106,31 @@ export interface SidebarSessionSummary {
   lastMessage: string;
 }
 
-// 백엔드로 보내는 메시지 페이로드
+// 백엔드로 보내는 메시지 페이로드(프론트에서 유지)
 export interface ChatMessagePayload {
   role: ChatRole;
   content: string;
 }
 
-// 백엔드로 보내는 채팅 요청 포맷
+// 백엔드로 보내는 채팅 요청 포맷(프론트 내부 포맷)
+// - sessionId는 "클라이언트 로컬 세션 키"로 사용 가능
+// - serverSessionId는 이미 서버 UUID를 알고 있는 경우 함께 전달
 export interface ChatRequest {
   sessionId: string;
   domain: ChatDomain;
   messages: ChatMessagePayload[];
+
+  /** 서버 세션 UUID(알고 있으면 전달) */
+  serverSessionId?: string;
+}
+
+/** sendChatToAI 결과(서버 UUID 포함) */
+export interface ChatSendResult {
+  sessionId: string; // server session uuid
+  messageId: string; // server message uuid
+  role: ChatRole;
+  content: string;
+  createdAt?: string;
 }
 
 // 신고 모달에서 넘어가는 신고 데이터
@@ -102,11 +156,11 @@ export const DOMAIN_META: Record<ChatDomain, DomainMeta> = {
   },
   faq: {
     label: "FAQ",
-    description: "자주 묻는 질문과 반복되는 문의를 빠르게 안내하는 영역입니다.",
+    description: "자주 묻는 질문을 빠르게 확인하는 영역입니다.",
   },
   quiz: {
     label: "퀴즈",
-    description: "교육 관련 퀴즈를 풀면서 이해도를 점검하는 도메인입니다.",
+    description: "교육 관련 퀴즈를 통해 이해도를 점검하는 도메인입니다.",
   },
   edu: {
     label: "교육",
@@ -114,7 +168,110 @@ export const DOMAIN_META: Record<ChatDomain, DomainMeta> = {
   },
   security: {
     label: "보안",
-    description:
-      "정보보안, 계정/접근 권한, 보안 사고 대응과 관련된 질문입니다.",
+    description: "정보보안, 계정/접근 권한, 보안 사고 대응 관련 질문입니다.",
+  },
+  policy: {
+    label: "정책",
+    description: "사규/정책/규정/준법 등 정책 관련 질문입니다.",
   },
 };
+
+/** UI 도메인 → Chat Service 도메인 매핑 */
+const UI_TO_SERVICE_DOMAIN: Record<ChatDomain, ChatServiceDomain> = {
+  security: "SECURITY",
+  policy: "POLICY",
+  edu: "EDUCATION",
+
+  // legacy/UX 도메인: 서버 도메인은 교육/정책으로 수렴
+  quiz: "EDUCATION",
+  faq: "POLICY",
+  general: "POLICY",
+};
+
+/** Chat Service 도메인 → UI 도메인 매핑(알 수 없는 값은 fallback) */
+const SERVICE_TO_UI_DOMAIN: Record<string, ChatDomain> = {
+  SECURITY: "security",
+  POLICY: "policy",
+  EDUCATION: "edu",
+  HR: "general",
+};
+
+export function normalizeServiceDomain(raw: unknown): ChatServiceDomain | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (!t) return null;
+  return t.toUpperCase() as ChatServiceDomain;
+}
+
+export function normalizeChatDomain(raw: unknown): ChatDomain | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim().toLowerCase();
+  if (!t) return null;
+
+  const allowed: ChatDomain[] = [
+    "general",
+    "faq",
+    "quiz",
+    "edu",
+    "security",
+    "policy",
+  ];
+  return (allowed as string[]).includes(t) ? (t as ChatDomain) : null;
+}
+
+/**
+ * UI 도메인을 Chat Service 도메인으로 변환
+ * - tokenParsed.domain 같은 “조직 고정 도메인”이 있으면 fallback으로 넣는 것을 권장
+ */
+export function toChatServiceDomain(
+  ui: ChatDomain,
+  fallback?: ChatServiceDomain
+): ChatServiceDomain {
+  if (fallback && typeof fallback === "string" && fallback.trim()) {
+    // UI가 general/faq 같이 애매한 경우 fallback(조직 도메인) 우선
+    if (ui === "general" || ui === "faq") return fallback;
+  }
+  return UI_TO_SERVICE_DOMAIN[ui] ?? (fallback ?? "POLICY");
+}
+
+/** Chat Service 도메인을 UI 도메인으로 변환 */
+export function fromChatServiceDomain(
+  service: unknown,
+  fallback: ChatDomain = "general"
+): ChatDomain {
+  const s = normalizeServiceDomain(service);
+  if (!s) return fallback;
+  return SERVICE_TO_UI_DOMAIN[String(s)] ?? fallback;
+}
+
+/** UI 도메인 라벨 */
+export function chatDomainLabel(domain: ChatDomain): string {
+  return DOMAIN_META[domain]?.label ?? domain;
+}
+
+/** Chat Service 도메인 라벨(표시용; 미지 값은 그대로) */
+export function chatServiceDomainLabel(domain: ChatServiceDomain): string {
+  const d = String(domain).toUpperCase();
+  if (d === "SECURITY") return "보안";
+  if (d === "POLICY") return "정책";
+  if (d === "EDUCATION") return "교육";
+  if (d === "HR") return "인사";
+  return d;
+}
+
+/** FAQ(Home) 응답 모델 */
+export interface FaqHomeItem {
+  domain: ChatServiceDomain;
+  title: string;
+  faqId: string; // uuid
+}
+
+/** FAQ 리스트(Top 10) 응답 모델 */
+export interface FaqItem {
+  id: string; // uuid
+  domain: ChatServiceDomain;
+  question: string;
+  answer: string;
+  createdAt?: string;
+  updatedAt?: string;
+}

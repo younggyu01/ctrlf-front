@@ -12,7 +12,7 @@ export default defineConfig({
        * 교육 도메인(기존 유지)
        */
       "/api-edu": {
-        target: "http://education-service:9002",
+        target: "http://localhost:9002",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-edu/, ""),
       },
@@ -25,7 +25,7 @@ export default defineConfig({
        * - /chat/sessions/.../feedback ...
        */
       "/api/chat": {
-        target: "http://chat-service:9005",
+        target: "http://localhost:9005",
         changeOrigin: true,
         secure: false,
       },

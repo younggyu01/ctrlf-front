@@ -30,7 +30,7 @@ export default defineConfig({
         secure: false,
       },
       "/chat": {
-        target: "http://chat-service:9005",
+        target: "http://localhost:9005",
         changeOrigin: true,
         secure: false,
         ws: true,
@@ -47,7 +47,7 @@ export default defineConfig({
        * - FE:  GET /api/faq/dashboard/... -> BE: GET /faq/dashboard/...
        */
       "/api/faq": {
-        target: "http://chat-service:9005",
+        target: "http://localhost:9005",
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api\/faq/, "/faq"),
@@ -58,17 +58,17 @@ export default defineConfig({
        * 프론트가 /faq/* 를 직접 호출하면 아래 규칙이 탄다.
        */
       "/faq": {
-        target: "http://chat-service:9005",
+        target: "http://localhost:9005",
         changeOrigin: true,
         secure: false,
       },
       "/admin/faq": {
-        target: "http://chat-service:9005",
+        target: "http://localhost:9005",
         changeOrigin: true,
         secure: false,
       },
       "/admin/faqs": {
-        target: "http://chat-service:9005",
+        target: "http://localhost:9005",
         changeOrigin: true,
         secure: false,
       },

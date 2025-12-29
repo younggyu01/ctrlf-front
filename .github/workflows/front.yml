@@ -2,7 +2,7 @@ name: CI/CD Frontend (EKS)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "infra" ]
 
 
 jobs:

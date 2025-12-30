@@ -8,7 +8,7 @@ metadata:
     # AWS Load Balancer Controller를 사용하는 경우 (필요 시 수정)
     # service.beta.kubernetes.io/aws-load-balancer-type: "alb"
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app: front-service
   ports:

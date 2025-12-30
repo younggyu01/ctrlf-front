@@ -1327,8 +1327,10 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     try {
       setIsSending(true);
 
+      // 기본값을 true로: env 미설정이어도 스트리밍 경로(sendChatToAIStream)를 반드시 탄다.
+      // 서버가 스트림을 못 주면 chatApi.ts에서 자동 fallback 처리한다.
       const ENABLE_CHAT_STREAMING =
-        String(import.meta.env.VITE_CHAT_STREAMING ?? "").toLowerCase() === "true";
+        String(import.meta.env.VITE_CHAT_STREAMING ?? "true").toLowerCase() === "true";
       try {
         setIsSending(true);
 

@@ -113,8 +113,8 @@ function getUserUuidFromKeycloak(): string | null {
 }
 
 /**
- * (핵심 FIX) Sidebar도 token race 흡수:
- * - 처음 열 때 token이 아직 없으면 sync 자체가 스킵되어 “체크리스트 1번(/api/chat/sessions) 안 뜸”
+ * Sidebar도 token race 흡수:
+ * - 처음 열 때 token이 아직 없으면 sync 자체가 스킵되어 “/api/chat/sessions” 안 뜨는 문제 방지
  */
 async function waitForAuthToken(opts?: {
   timeoutMs?: number;
@@ -367,7 +367,6 @@ type SidebarRow = SidebarSessionSummary & {
 
 const DEFAULT_SESSIONS_ENDPOINT = "/api/chat/sessions";
 const DEFAULT_UPDATE_ENDPOINT = (id: string) => `/api/chat/sessions/${id}`;
-const DEFAULT_DELETE_ENDPOINT = (id: string) => `/api/chat/sessions/${id}`;
 
 const DEFAULT_SYNC_INTERVAL_MS = 0;
 
@@ -390,60 +389,32 @@ function pruneTombstones(map: TombstoneMap, now: number): TombstoneMap {
   return changed ? next : map;
 }
 
-async function updateServerSessionTitle(
-  title: string,
-  token: string,
-  endpoint: string
-): Promise<void> {
+/**
+ * (FIX) PATCH 제거 → PUT 단일화
+ * - 백엔드가 PATCH 미지원이면 rename 시 500/405 로그가 1번 찍히고 PUT으로 재시도하는 “노이즈”가 발생
+ * - 여기서 PUT만 사용하면 로그/네트워크가 깔끔해짐
+ */
+async function updateServerSessionTitle(title: string, token: string, endpoint: string): Promise<void> {
   const payload = JSON.stringify({ title });
 
-  const tries: Array<"PATCH" | "PUT"> = ["PATCH", "PUT"];
-
-  let lastErr: unknown = null;
-  for (const method of tries) {
-    try {
-      const res = await fetchWithTimeout(
-        endpoint,
-        {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: payload,
-        },
-        12_000
-      );
-
-      if (res.ok) return;
-
-      const text = await res.text().catch(() => "");
-      lastErr = new Error(`${method} ${endpoint} failed: ${res.status} ${text}`);
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-
-  throw lastErr instanceof Error ? lastErr : new Error("updateServerSessionTitle failed");
-}
-
-async function deleteServerSession(token: string, endpoint: string): Promise<void> {
   const res = await fetchWithTimeout(
     endpoint,
     {
-      method: "DELETE",
+      method: "PUT",
       headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
+      body: payload,
     },
     12_000
   );
 
   if (res.ok) return;
-  if (res.status === 404 || res.status === 410) return;
 
   const text = await res.text().catch(() => "");
-  throw new Error(`DELETE ${endpoint} failed: ${res.status} ${text}`);
+  throw new Error(`PUT ${endpoint} failed: ${res.status} ${text}`);
 }
 
 const Sidebar: React.FC<SidebarProps> = (props) => {
@@ -467,7 +438,6 @@ const Sidebar: React.FC<SidebarProps> = (props) => {
   const enableServerSync = props.enableServerSync ?? true;
   const serverSessionsEndpoint = props.serverSessionsEndpoint ?? DEFAULT_SESSIONS_ENDPOINT;
   const serverSessionUpdateEndpoint = props.serverSessionUpdateEndpoint ?? DEFAULT_UPDATE_ENDPOINT;
-  const serverSessionDeleteEndpoint = props.serverSessionDeleteEndpoint ?? DEFAULT_DELETE_ENDPOINT;
   const serverSyncIntervalMs = props.serverSyncIntervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -615,12 +585,7 @@ const Sidebar: React.FC<SidebarProps> = (props) => {
         hydratingRef.current.delete(serverSessionId);
       }
     },
-    [
-      onHydrateServerSession,
-      onSelectSession,
-      serverMetas,
-      getServerSessionMessagesEndpoint,
-    ]
+    [onHydrateServerSession, onSelectSession, serverMetas, getServerSessionMessagesEndpoint]
   );
 
   const scheduleResync = useCallback(
@@ -824,10 +789,14 @@ const Sidebar: React.FC<SidebarProps> = (props) => {
 
   const handleDeleteClick = useCallback(
     (sessionId: string) => {
+      // 진행 중 sync 취소/무효화
       syncSeqRef.current += 1;
 
       const row = mergedRows.find((r) => r.id === sessionId) ?? null;
 
+      // Sidebar에서 서버 목록을 “즉시 숨김” 처리(tombstone)
+      // 실제 서버 DELETE 호출은 상위(onDeleteSession) 단일 책임으로 위임
+      // (현재 구조에서 Sidebar도 DELETE를 쏘고, 상위에서도 DELETE를 쏴서 중복 호출이 발생했음)
       let serverId: string | null = null;
 
       if (row?.source === "server") {
@@ -840,25 +809,10 @@ const Sidebar: React.FC<SidebarProps> = (props) => {
 
       if (serverId && isUuidLike(serverId)) {
         markTombstone(serverId);
-
         setServerMetas((prev) => prev.filter((m) => m.serverSessionId !== serverId));
-
-        void (async () => {
-          const token = await waitForAuthToken({ timeoutMs: 6_000, pollMs: 200 });
-          if (!token) return;
-
-          const endpoint = serverSessionDeleteEndpoint(serverId as string);
-
-          try {
-            await deleteServerSession(token, endpoint);
-            scheduleResync([600, 2200]);
-          } catch (e) {
-            console.warn("[Sidebar] delete server session failed:", e);
-            scheduleResync([900, 2600]);
-          }
-        })();
       }
 
+      // 로컬/상위 상태 갱신(및 서버 삭제는 상위에서 수행)
       if (row?.source === "server" && row.serverSessionId) {
         onDeleteSession(row.serverSessionId);
       } else {
@@ -868,6 +822,7 @@ const Sidebar: React.FC<SidebarProps> = (props) => {
       setOpenMenuId(null);
       if (editingId === sessionId) cancelEdit();
 
+      // 서버 목록은 곧바로 재동기화(삭제 반영 확인)
       scheduleResync([600, 2500]);
     },
     [
@@ -876,7 +831,6 @@ const Sidebar: React.FC<SidebarProps> = (props) => {
       markTombstone,
       onDeleteSession,
       editingId,
-      serverSessionDeleteEndpoint,
       scheduleResync,
     ]
   );

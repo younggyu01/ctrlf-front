@@ -9,12 +9,25 @@ export default defineConfig({
     open: true,
     proxy: {
       /**
-       * 교육 도메인(기존 유지)
+       * 교육 도메인 (education-service: 9002)
+       * FE는 /api-edu/* 로 호출 → BE는 /* 로 받도록 rewrite
+       * (주의) /education 을 API prefix로 쓰면 SPA 라우트(/education 페이지)와 충돌 가능
        */
       "/api-edu": {
         target: "http://localhost:9002",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-edu/, ""),
+      },
+
+      /**
+       * 인프라 도메인 (infra-service: 9003)
+       * - S3 presigned
+       * - RAG upload 등
+       */
+      "/api-infra": {
+        target: "http://localhost:9003",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-infra/, ""),
       },
 
       /**
@@ -38,13 +51,7 @@ export default defineConfig({
 
       /**
        * FAQ (중요)
-       * 프론트에서 /api/faq/* 로 호출 중인데,
-       * 백엔드 명세는 /faq/* 이므로 rewrite로 맞춰준다.
-       *
-       * 예)
-       * - FE:  GET /api/faq/home          -> BE: GET /faq/home
-       * - FE:  GET /api/faq?domain=SEC... -> BE: GET /faq?domain=SEC...
-       * - FE:  GET /api/faq/dashboard/... -> BE: GET /faq/dashboard/...
+       * FE: /api/faq/* → BE: /faq/*
        */
       "/api/faq": {
         target: "http://localhost:9005",
@@ -55,7 +62,6 @@ export default defineConfig({
 
       /**
        * (선택) FAQ/ADMIN FAQ를 프론트에서 직접 호출할 경우를 대비한 프록시
-       * 프론트가 /faq/* 를 직접 호출하면 아래 규칙이 탄다.
        */
       "/faq": {
         target: "http://localhost:9005",

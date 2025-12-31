@@ -1,5 +1,9 @@
 import Keycloak from "keycloak-js";
 
+const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL ?? "http://localhost:8090";
+const KEYCLOAK_REALM = import.meta.env.VITE_KEYCLOAK_REALM ?? "ctrlf";
+const KEYCLOAK_CLIENT_ID = import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? "web-app";
+
 const keycloak = new Keycloak({
   url: "http://k8s-argocd-keycloak-446de99eb5-6274bddb4987261a.elb.ap-northeast-2.amazonaws.com:8090",
   realm: "ctrlf",

@@ -8,11 +8,7 @@ import type { KeycloakTokenParsed } from "keycloak-js";
 import "../pages/Dashboard.css";
 import FloatingChatbotRoot from "./chatbot/FloatingChatbotRoot";
 
-import {
-  normalizeRoles,
-  pickPrimaryRole,
-  type UserRole,
-} from "../auth/roles";
+import { normalizeRoles, pickPrimaryRole, type UserRole } from "../auth/roles";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -55,17 +51,23 @@ const Layout: React.FC<LayoutProps> = ({ children, pageClassName }) => {
   const isActive = (path: string) => location.pathname === path;
 
   // Keycloak 로그인 여부
-  const isAuthenticated = !!keycloak.authenticated;
+  const isAuthenticated = keycloak.authenticated === true;
 
   /**
    * Keycloak Role 기반 사용자 Role 계산
    *
    * - realm 레벨 Role: keycloak.realmAccess?.roles
-   * - client 레벨 Role: keycloak.resourceAccess?.["ctrlf-frontend"]?.roles
+   * - client 레벨 Role: keycloak.resourceAccess?.[clientId]?.roles
+   *
+   * (주의) 환경에 따라 clientId가 web-app / ctrlf-frontend 등으로 다를 수 있으니 둘 다 탐색
    */
   const realmRoles = keycloak.realmAccess?.roles ?? [];
-  const clientRoles =
-    keycloak.resourceAccess?.["ctrlf-frontend"]?.roles ?? [];
+
+  const candidateClientIds = ["web-app", "ctrlf-frontend"];
+  const clientRoles = candidateClientIds.flatMap(
+    (cid) => keycloak.resourceAccess?.[cid]?.roles ?? []
+  );
+
   const rawRoles = Array.from(new Set([...realmRoles, ...clientRoles]));
 
   const roleSet = normalizeRoles(rawRoles);

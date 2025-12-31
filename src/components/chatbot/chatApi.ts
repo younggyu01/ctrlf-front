@@ -21,7 +21,8 @@ import {
  * - 프론트에서는 상대경로로 호출하고, Vite proxy가 9005로 라우팅한다.
  */
 const CHAT_SESSIONS_ENDPOINT =
-  import.meta.env.VITE_CHAT_SESSIONS_ENDPOINT?.toString() ?? "/api/chat/sessions";
+  import.meta.env.VITE_CHAT_SESSIONS_ENDPOINT?.toString() ??
+  "/api/chat/sessions";
 
 const CHAT_MESSAGES_ENDPOINT =
   import.meta.env.VITE_CHAT_MESSAGES_ENDPOINT?.toString() ?? "/chat/messages";
@@ -37,30 +38,58 @@ const CHAT_SESSIONS_BASE =
   import.meta.env.VITE_CHAT_SESSIONS_BASE?.toString() ?? "/chat/sessions";
 
 /**
- * (선택) Streaming endpoint
- * - env 미설정/빈 값인 경우에도 스트리밍 시도를 위해 기본값을 CHAT_MESSAGES_ENDPOINT로 둔다.
+ * (Swagger 기준) messageId 기반 SSE 스트림 템플릿
+ * - 기본: /chat/messages/{messageId}/stream
+ * - env로 교체 가능:
+ *   - VITE_CHAT_MESSAGE_STREAM_TEMPLATE=/chat/messages/{messageId}/stream
+ *   - (호환) VITE_CHAT_MESSAGES_STREAM_ENDPOINT 도 템플릿으로 사용 가능
  */
-const CHAT_MESSAGES_STREAM_ENDPOINT =
+const CHAT_MESSAGE_STREAM_TEMPLATE =
+  import.meta.env.VITE_CHAT_MESSAGE_STREAM_TEMPLATE?.toString() ??
   import.meta.env.VITE_CHAT_MESSAGES_STREAM_ENDPOINT?.toString() ??
-  CHAT_MESSAGES_ENDPOINT;
+  "/chat/messages/{messageId}/stream";
+
+/** SSE는 응답이 길어질 수 있어 타임아웃을 별도로 둔다 */
+const SSE_TIMEOUT_MS = 120_000;
+
+function buildMessageStreamUrl(messageId: string): string {
+  const enc = encodeURIComponent(messageId);
+  const tpl = (CHAT_MESSAGE_STREAM_TEMPLATE || "").trim();
+
+  // 템플릿 형태 지원
+  if (tpl.includes("{messageId}")) return tpl.split("{messageId}").join(enc);
+  if (tpl.includes(":messageId")) return tpl.replace(":messageId", enc);
+
+  // 만약 누군가 /chat/messages 만 넣어둔 경우를 방어
+  const base = tpl.endsWith("/") ? tpl.slice(0, -1) : tpl;
+  if (base.endsWith("/chat/messages")) return `${base}/${enc}/stream`;
+
+  // 최후 fallback
+  const msgBase = (CHAT_MESSAGES_ENDPOINT || "").trim() || "/chat/messages";
+  return `${msgBase.replace(/\/$/, "")}/${enc}/stream`;
+}
 
 /** (선택) 신고 endpoint 후보 (서버 스펙 확정 전까지 env로 제어) */
-const REPORT_ENDPOINTS_RAW: string = String(import.meta.env.VITE_REPORT_ENDPOINTS ?? "");
-const REPORT_ENDPOINTS: string[] = (REPORT_ENDPOINTS_RAW ? REPORT_ENDPOINTS_RAW.split(",") : [])
+const REPORT_ENDPOINTS_RAW: string = String(
+  import.meta.env.VITE_REPORT_ENDPOINTS ?? ""
+);
+const REPORT_ENDPOINTS: string[] = (
+  REPORT_ENDPOINTS_RAW ? REPORT_ENDPOINTS_RAW.split(",") : []
+)
   .map((s: string) => s.trim())
   .filter((s: string) => s.length > 0);
 
 /** 메시지 피드백 URL */
 const CHAT_MESSAGE_FEEDBACK_URL = (sessionId: string, messageId: string) =>
-  `${CHAT_SESSIONS_BASE}/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(
-    messageId
-  )}/feedback`;
+  `${CHAT_SESSIONS_BASE}/${encodeURIComponent(
+    sessionId
+  )}/messages/${encodeURIComponent(messageId)}/feedback`;
 
 /** (선택) 재시도 API */
 const CHAT_MESSAGE_RETRY_URL = (sessionId: string, messageId: string) =>
-  `${CHAT_SESSIONS_BASE}/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(
-    messageId
-  )}/retry`;
+  `${CHAT_SESSIONS_BASE}/${encodeURIComponent(
+    sessionId
+  )}/messages/${encodeURIComponent(messageId)}/retry`;
 
 /** (히스토리) */
 export const CHAT_SESSION_MESSAGES_URL = (sessionId: string) =>
@@ -146,7 +175,9 @@ function setSessionMap(userUuid: string, clientKey: string, serverUuid: string) 
 /**
  * 외부(상위/Sidebar) 연동용: 로컬 세션 id -> 서버 세션 UUID 조회
  */
-export function getServerSessionIdForLocalSession(localSessionId: string): string | undefined {
+export function getServerSessionIdForLocalSession(
+  localSessionId: string
+): string | undefined {
   const userUuid = getUserUuidFromKeycloak();
   if (!userUuid) return undefined;
 
@@ -173,7 +204,9 @@ export function bindServerSessionIdToLocalSession(
   setSessionMap(userUuid, localSessionId, serverSessionId);
 }
 
-export function getMappedServerSessionId(localSessionId: string): string | undefined {
+export function getMappedServerSessionId(
+  localSessionId: string
+): string | undefined {
   const userUuid = getUserUuidFromKeycloak();
   if (!userUuid) return undefined;
   hydrateUserMapOnce(userUuid);
@@ -181,7 +214,10 @@ export function getMappedServerSessionId(localSessionId: string): string | undef
   return map?.get(localSessionId);
 }
 
-export function setMappedServerSessionId(localSessionId: string, serverSessionId: string): void {
+export function setMappedServerSessionId(
+  localSessionId: string,
+  serverSessionId: string
+): void {
   const userUuid = getUserUuidFromKeycloak();
   if (!userUuid) return;
   setSessionMap(userUuid, localSessionId, serverSessionId);
@@ -203,7 +239,8 @@ async function waitForAuthToken(opts?: {
   const start = Date.now();
   let lastUpdateAttempt = 0;
 
-  const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+  const sleep = (ms: number) =>
+    new Promise<void>((r) => window.setTimeout(r, ms));
 
   while (Date.now() - start < timeoutMs) {
     if (!keycloak?.authenticated) {
@@ -258,7 +295,11 @@ async function waitForAuthToken(opts?: {
  * Keycloak 토큰 갱신 후 최신 토큰 확보 (토큰 레이스 포함 흡수)
  */
 async function ensureFreshToken(): Promise<string | null> {
-  return await waitForAuthToken({ timeoutMs: 8_000, pollMs: 250, minUpdateIntervalMs: 1_000 });
+  return await waitForAuthToken({
+    timeoutMs: 8_000,
+    pollMs: 250,
+    minUpdateIntervalMs: 1_000,
+  });
 }
 
 /**
@@ -294,6 +335,79 @@ async function fetchWithTimeout(
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+/**
+ * =========================
+ * (추가) 세션 rename / delete 유틸
+ * =========================
+ * - 백엔드가 PATCH 미지원인 케이스가 확인되었으므로 PUT/DELETE로 고정
+ */
+const CHAT_SESSION_ENDPOINT = (sessionId: string) =>
+  `${CHAT_SESSIONS_ENDPOINT}/${encodeURIComponent(sessionId)}`;
+
+export async function renameChatSession(
+  sessionId: string,
+  title: string
+): Promise<void> {
+  const token = await ensureFreshToken();
+  if (!token) throw new Error("Not authenticated: Keycloak token is missing.");
+
+  if (!isUuidLike(sessionId))
+    throw new Error("renameChatSession: sessionId must be UUID.");
+
+  const res = await fetchWithTimeout(
+    CHAT_SESSION_ENDPOINT(sessionId),
+    {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ title }),
+    },
+    12_000
+  );
+
+  if (res.ok) return;
+
+  const text = await res.text().catch(() => "");
+  throw new Error(
+    `renameChatSession failed: ${res.status} ${res.statusText}${
+      text ? ` - ${text}` : ""
+    }`
+  );
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const token = await ensureFreshToken();
+  if (!token) throw new Error("Not authenticated: Keycloak token is missing.");
+
+  if (!isUuidLike(sessionId))
+    throw new Error("deleteChatSession: sessionId must be UUID.");
+
+  const res = await fetchWithTimeout(
+    CHAT_SESSION_ENDPOINT(sessionId),
+    {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    12_000
+  );
+
+  if (res.ok) return;
+  if (res.status === 404 || res.status === 410) return;
+
+  const text = await res.text().catch(() => "");
+  throw new Error(
+    `deleteChatSession failed: ${res.status} ${res.statusText}${
+      text ? ` - ${text}` : ""
+    }`
+  );
 }
 
 /**
@@ -345,7 +459,9 @@ function pickUiDomain(req: ChatRequest): ChatDomain | null {
   const candidates: unknown[] = [
     anyReq["domain"],
     anyReq["chatDomain"],
-    isRecord(anyReq["session"]) ? (anyReq["session"] as JsonRecord)["domain"] : null,
+    isRecord(anyReq["session"])
+      ? (anyReq["session"] as JsonRecord)["domain"]
+      : null,
   ];
 
   for (const c of candidates) {
@@ -429,7 +545,9 @@ async function createChatSession(
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
     throw new Error(
-      `Create session failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
+      `Create session failed: ${res.status} ${res.statusText}${
+        bodyText ? ` - ${bodyText}` : ""
+      }`
     );
   }
 
@@ -462,16 +580,34 @@ async function sendChatMessage(
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
     throw new Error(
-      `Send message failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
+      `Send message failed: ${res.status} ${res.statusText}${
+        bodyText ? ` - ${bodyText}` : ""
+      }`
     );
   }
 
   const data: unknown = await res.json().catch(() => null);
-  if (!isRecord(data) || !nonEmptyString(data["content"]) || !nonEmptyString(data["messageId"])) {
+
+  const messageId = isRecord(data) ? nonEmptyString(data["messageId"]) : null;
+  if (!messageId) {
     throw new Error("Send message failed: invalid response shape");
   }
 
-  return data as ChatMessageSendResponse;
+  const role =
+    isRecord(data) && typeof data["role"] === "string"
+      ? data["role"]
+      : "assistant";
+
+  // (중요) content는 비어있을 수 있음: stream(JSON/SSE)에서 최종이 내려오는 구조 방어
+  const content =
+    isRecord(data) && typeof data["content"] === "string" ? data["content"] : "";
+
+  const createdAt =
+    isRecord(data) && typeof data["createdAt"] === "string"
+      ? data["createdAt"]
+      : new Date().toISOString();
+
+  return { messageId, role, content, createdAt };
 }
 
 /**
@@ -570,7 +706,10 @@ export async function sendFeedbackToAI(req: ChatFeedbackRequest): Promise<void> 
   }
 
   if (!isUuidLike(req.sessionId) || !isUuidLike(req.messageId)) {
-    console.warn("[chatApi] feedback skipped: sessionId/messageId must be UUID", req);
+    console.warn(
+      "[chatApi] feedback skipped: sessionId/messageId must be UUID",
+      req
+    );
     return;
   }
 
@@ -598,11 +737,17 @@ export async function sendFeedbackToAI(req: ChatFeedbackRequest): Promise<void> 
 
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
-    console.warn(`[chatApi] feedback failed: ${res.status} ${res.statusText}`, bodyText);
+    console.warn(
+      `[chatApi] feedback failed: ${res.status} ${res.statusText}`,
+      bodyText
+    );
   }
 }
 
-export async function retryMessage(sessionId: string, messageId: string): Promise<ChatSendResult> {
+export async function retryMessage(
+  sessionId: string,
+  messageId: string
+): Promise<ChatSendResult> {
   const token = await ensureFreshToken();
   if (!token) {
     throw new Error("Not authenticated: Keycloak token is missing.");
@@ -627,12 +772,18 @@ export async function retryMessage(sessionId: string, messageId: string): Promis
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
     throw new Error(
-      `Retry failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
+      `Retry failed: ${res.status} ${res.statusText}${
+        bodyText ? ` - ${bodyText}` : ""
+      }`
     );
   }
 
   const data: unknown = await res.json().catch(() => null);
-  if (isRecord(data) && nonEmptyString(data["content"]) && nonEmptyString(data["messageId"])) {
+  if (
+    isRecord(data) &&
+    nonEmptyString(data["content"]) &&
+    nonEmptyString(data["messageId"])
+  ) {
     return {
       sessionId,
       messageId: String(data["messageId"]),
@@ -749,9 +900,13 @@ function normalizeFaqItems(raw: unknown): FaqItem[] {
     if (!question || !answer) continue;
 
     const createdAt =
-      nonEmptyString(it["createdAt"]) ?? nonEmptyString(it["created_at"]) ?? undefined;
+      nonEmptyString(it["createdAt"]) ??
+      nonEmptyString(it["created_at"]) ??
+      undefined;
     const updatedAt =
-      nonEmptyString(it["updatedAt"]) ?? nonEmptyString(it["updated_at"]) ?? undefined;
+      nonEmptyString(it["updatedAt"]) ??
+      nonEmptyString(it["updated_at"]) ??
+      undefined;
 
     out.push({ id, domain, question, answer, createdAt, updatedAt });
   }
@@ -759,7 +914,11 @@ function normalizeFaqItems(raw: unknown): FaqItem[] {
   return out;
 }
 
-async function fetchFaqJson(url: string, token: string, timeoutMs = 15_000): Promise<unknown> {
+async function fetchFaqJson(
+  url: string,
+  token: string,
+  timeoutMs = 15_000
+): Promise<unknown> {
   const res = await fetchWithTimeout(
     url,
     {
@@ -775,7 +934,9 @@ async function fetchFaqJson(url: string, token: string, timeoutMs = 15_000): Pro
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
     throw new Error(
-      `GET ${url} failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
+      `GET ${url} failed: ${res.status} ${res.statusText}${
+        bodyText ? ` - ${bodyText}` : ""
+      }`
     );
   }
 
@@ -787,7 +948,10 @@ async function fetchFaqJson(url: string, token: string, timeoutMs = 15_000): Pro
 /** FAQ Home */
 export async function fetchFaqHome(): Promise<FaqHomeItem[]> {
   const now = nowMs();
-  if (faqHomeCache.items.length > 0 && now - faqHomeCache.fetchedAt < FAQ_CACHE_TTL_MS) {
+  if (
+    faqHomeCache.items.length > 0 &&
+    now - faqHomeCache.fetchedAt < FAQ_CACHE_TTL_MS
+  ) {
     return faqHomeCache.items;
   }
 
@@ -815,14 +979,20 @@ export async function fetchFaqList(domain: ChatServiceDomain): Promise<FaqItem[]
   const now = nowMs();
 
   const cached = faqListCache.get(key);
-  if (cached && cached.items.length > 0 && now - cached.fetchedAt < FAQ_CACHE_TTL_MS) {
+  if (
+    cached &&
+    cached.items.length > 0 &&
+    now - cached.fetchedAt < FAQ_CACHE_TTL_MS
+  ) {
     return cached.items;
   }
 
   const token = await ensureFreshToken();
   if (!token) throw new Error("Not authenticated: Keycloak token is missing.");
 
-  const url = `${FAQ_LIST_ENDPOINT}?domain=${encodeURIComponent(String(domain).toUpperCase())}`;
+  const url = `${FAQ_LIST_ENDPOINT}?domain=${encodeURIComponent(
+    String(domain).toUpperCase()
+  )}`;
   const raw = await fetchFaqJson(url, token, 15_000);
   const items = normalizeFaqItems(raw);
 
@@ -878,7 +1048,8 @@ export async function submitReportToServer(
     return {
       ok: false,
       status: 0,
-      message: "Report endpoint is not configured. Set VITE_REPORT_ENDPOINTS in env.",
+      message:
+        "Report endpoint is not configured. Set VITE_REPORT_ENDPOINTS in env.",
     };
   }
 
@@ -906,8 +1077,284 @@ export type ChatStreamHandlers = {
   onFinal?: (final: ChatSendResult) => void; // 최종 결과
 };
 
+function extractTextLikeContent(raw: unknown): string | null {
+  if (typeof raw === "string") return raw;
+  if (!isRecord(raw)) return null;
+
+  // 1) 1차 후보 키
+  const directCandidates = [
+    "content",
+    "text",
+    "message",
+    "answer",
+    "data",
+    "result",
+    "response",
+    "payload",
+    "output",
+  ] as const;
+
+  for (const k of directCandidates) {
+    const v = raw[k];
+    if (typeof v === "string") return v;
+
+    if (isRecord(v)) {
+      const nested =
+        v["content"] ?? v["text"] ?? v["message"] ?? v["answer"] ?? v["output"];
+      if (typeof nested === "string") return nested;
+    }
+  }
+
+  // 2) OpenAI/LLM 스타일 방어: choices[0].message.content / choices[0].delta.content
+  const choices = raw["choices"];
+  if (Array.isArray(choices) && choices.length > 0 && isRecord(choices[0])) {
+    const c0 = choices[0] as Record<string, unknown>;
+    const msg = c0["message"];
+    if (isRecord(msg) && typeof msg["content"] === "string") return msg["content"];
+    const delta = c0["delta"];
+    if (isRecord(delta) && typeof delta["content"] === "string")
+      return delta["content"];
+  }
+
+  return null;
+}
+
+async function streamMessageByIdSSE(
+  messageId: string,
+  token: string,
+  onDelta: (delta: string) => void
+): Promise<{ content: string }> {
+  const url = buildMessageStreamUrl(messageId);
+
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${token}`,
+        "Cache-Control": "no-cache",
+      },
+    },
+    SSE_TIMEOUT_MS
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `SSE GET ${url} failed: ${res.status} ${res.statusText}${
+        body ? ` - ${body}` : ""
+      }`
+    );
+  }
+
+  // 서버가 스트림 대신 JSON/텍스트로 한 방에 주는 케이스 방어
+  const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (!contentType.includes("text/event-stream")) {
+    if (contentType.includes("application/json")) {
+      const j: unknown = await res.json().catch(() => null);
+      const txt = extractTextLikeContent(j);
+      const out = txt ?? "";
+      if (out) onDelta(out);
+      return { content: out };
+    }
+
+    const t = await res.text().catch(() => "");
+    if (t) onDelta(t);
+    return { content: t };
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("SSE response has no body reader");
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let acc = "";
+  let done = false;
+
+  const normalizeNewlines = (s: string) =>
+    s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  const tryParseDeltaFromJson = (raw: string): string | null => {
+    // JSON 파싱 용도: 앞뒤 공백만 제거(데이터 자체의 공백/개행은 JSON 문자열로 들어오면 보존됨)
+    const t = raw.trim();
+    if (!t.startsWith("{") || !t.endsWith("}")) return null;
+
+    try {
+      const obj = JSON.parse(t) as unknown;
+      if (!isRecord(obj)) return null;
+      const v =
+        obj["delta"] ??
+        obj["token"] ??
+        obj["content"] ??
+        obj["text"] ??
+        obj["message"];
+      return typeof v === "string" ? v : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // --- (핵심) data: 뒤의 "관례적 1공백" 존재 여부를 자동 판별 ---
+  // prefix가 "data: "인 서버: 모든 data payload가 항상 공백으로 시작(토큰이 공백 없어도)
+  // prefix가 "data:"인 서버: payload가 공백/비공백이 섞여 나옴(토큰 선행 공백이 실제 띄어쓰기)
+  type PrefixMode = "unknown" | "stripOneLeadingSpace" | "keepAsIs";
+  let prefixMode: PrefixMode = "unknown";
+  const prebuffer: string[] = [];
+  const PREBUFFER_LIMIT = 20;
+
+  const applyPrefixMode = (d: string) => {
+    if (prefixMode === "stripOneLeadingSpace" && d.startsWith(" "))
+      return d.slice(1);
+    return d;
+  };
+
+  const flushPrebuffer = () => {
+    for (const b of prebuffer) {
+      const out = applyPrefixMode(b);
+      if (!out) continue;
+      acc += out;
+      onDelta(out);
+    }
+    prebuffer.length = 0;
+  };
+
+  const emitDelta = (rawDelta: string) => {
+    if (!rawDelta) return;
+
+    if (prefixMode === "unknown") {
+      prebuffer.push(rawDelta);
+
+      // 하나라도 "공백으로 시작하지 않는 delta"가 나오면 → data:(공백 없음) 스타일로 판단
+      if (!rawDelta.startsWith(" ")) {
+        prefixMode = "keepAsIs";
+        flushPrebuffer();
+        return;
+      }
+
+      // 일정 샘플 동안 계속 공백으로 시작하면 → data: (관례적 1공백) 스타일로 판단
+      if (prebuffer.length >= PREBUFFER_LIMIT) {
+        prefixMode = "stripOneLeadingSpace";
+        flushPrebuffer();
+      }
+      return;
+    }
+
+    const out = applyPrefixMode(rawDelta);
+    if (!out) return;
+    acc += out;
+    onDelta(out);
+  };
+
+  const flushEvents = () => {
+    buffer = normalizeNewlines(buffer);
+
+    while (true) {
+      const sep = buffer.indexOf("\n\n");
+      if (sep < 0) break;
+
+      const rawEvent = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      const lines = rawEvent.split("\n");
+      let eventName = "";
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        // 빈 라인은 이벤트 내에서는 의미가 없으므로 스킵
+        if (!line) continue;
+
+        if (line.startsWith("event:")) {
+          eventName = line.slice("event:".length).trim();
+          continue;
+        }
+
+        if (line.startsWith("data:")) {
+          // (핵심) "data:" 뒤 첫 공백을 무조건 제거하면 안 됨.
+          // 서버가 `data:<delta>`(콜론 뒤 공백 없음)이고 delta 자체가 " 개인정보"처럼 선행 공백이면
+          // 여기서 공백이 잘려서 '띄어쓰기 없는' 스트림 출력이 된다.
+          const v = line.slice("data:".length); // 공백 포함 원문 보존
+          dataLines.push(v);
+        }
+        // 기타 필드(id:, retry:) 등은 무시
+      }
+
+      // data 라인이 0개면 의미 있는 이벤트가 아님
+      if (dataLines.length === 0) continue;
+
+      const dataRaw = dataLines.join("\n");
+
+      // 제어용 비교는 trim 사용 (단, 델타 자체는 절대 trim하지 않음)
+      const dataControl = dataRaw.trim();
+
+      // 서버 스펙: token 이벤트에서 [DONE]
+      if (dataControl === "[DONE]") {
+        done = true;
+        break;
+      }
+
+      // meta stream-start 같은 것은 토큰으로 붙이지 않음
+      if (eventName === "meta" && dataControl === "stream-start") continue;
+
+      // token or unnamed event → data를 델타로 취급
+      if (
+        !eventName ||
+        eventName === "token" ||
+        eventName === "delta" ||
+        eventName === "message"
+      ) {
+        // 공백/개행만 있는 토큰도 유효하므로 절대 trim 기반으로 버리지 않는다.
+        const fromJson = tryParseDeltaFromJson(dataRaw);
+        const delta = fromJson ?? dataRaw;
+
+        // 완전 빈 문자열(길이 0)만 제외
+        if (delta.length === 0) continue;
+
+        emitDelta(delta);
+      }
+    }
+  };
+
+  while (true) {
+    const r = await reader.read();
+    if (r.done) break;
+
+    const chunk = r.value ? decoder.decode(r.value, { stream: true }) : "";
+    if (!chunk) continue;
+
+    buffer += chunk;
+    flushEvents();
+
+    if (done) {
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore
+      }
+      break;
+    }
+  }
+
+  // tail 처리: trim 금지(공백/개행만 남아도 이벤트가 될 수 있음)
+  if (!done && buffer.length > 0) {
+    buffer += "\n\n";
+    flushEvents();
+  }
+
+  // 스트림이 짧아서 prefix 판별이 끝나지 않은 채 종료될 수 있음 → 안전하게 flush
+  if (prebuffer.length > 0) {
+    if (prefixMode === "unknown") {
+      // 끝까지 "공백 시작"만 봤다면 data: <payload> 스타일일 확률이 높음
+      prefixMode = "stripOneLeadingSpace";
+    }
+    flushPrebuffer();
+  }
+
+  return { content: acc };
+}
+
 /**
- * 스트리밍(선택)
+ * 스트리밍
  * - env가 비어 있어도 CHAT_MESSAGES_ENDPOINT로 스트림을 “시도”한다.
  * - 서버가 JSON으로 한 번에 주면: onDelta 1회 + onFinal (UX 일관)
  * - 서버가 SSE/NDJSON/텍스트 스트림이면: 가능한 범위에서 증분 파싱하여 onDelta 호출
@@ -916,13 +1363,12 @@ export async function sendChatToAIStream(
   req: ChatRequest,
   handlers: ChatStreamHandlers
 ): Promise<ChatSendResult> {
-  const streamUrl = (CHAT_MESSAGES_STREAM_ENDPOINT || "").trim() || CHAT_MESSAGES_ENDPOINT;
-
   const token = await ensureFreshToken();
   if (!token) throw new Error("Not authenticated: Keycloak token is missing.");
 
   const userUuid = getUserUuidFromKeycloak();
-  if (!userUuid) throw new Error("Not authenticated: userUuid(sub) is missing in token.");
+  if (!userUuid)
+    throw new Error("Not authenticated: userUuid(sub) is missing in token.");
 
   hydrateUserMapOnce(userUuid);
 
@@ -931,7 +1377,7 @@ export async function sendChatToAIStream(
 
   const clientSessionKey = pickClientSessionKey(req);
 
-  // 서버 세션 UUID 결정 (sendChatToAI와 동일)
+  // 1) 서버 세션 UUID 결정 (sendChatToAI와 동일)
   let serverSessionId: string | null = null;
 
   const directServerSessionId = pickDirectServerSessionId(req);
@@ -949,198 +1395,49 @@ export async function sendChatToAIStream(
     const tokenDomain = getServiceDomainFromKeycloak();
     const serviceDomain = toChatServiceDomain(uiDomain, tokenDomain ?? "POLICY");
 
-    const created = await createChatSession({ userUuid, title, domain: String(serviceDomain) }, token);
+    const created = await createChatSession(
+      { userUuid, title, domain: String(serviceDomain) },
+      token
+    );
     serverSessionId = created.id;
     setSessionMap(userUuid, clientSessionKey, created.id);
   }
 
-  const res = await fetchWithTimeout(
-    streamUrl,
+  // 2) 먼저 POST /chat/messages 로 messageId 확보
+  const sent = await sendChatMessage(
     {
-      method: "POST",
-      headers: {
-        Accept: "text/event-stream, application/x-ndjson, application/json",
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "Cache-Control": "no-cache",
-      },
-      body: JSON.stringify({
-        sessionId: serverSessionId,
-        content: lastUser,
-      }),
+      sessionId: serverSessionId,
+      content: lastUser,
     },
-    DEFAULT_TIMEOUT_MS
+    token
   );
 
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    throw new Error(
-      `Stream send failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
+  // 3) 그 다음 GET /chat/messages/{messageId}/stream 으로 SSE 구독
+  let streamed = "";
+  try {
+    const r = await streamMessageByIdSSE(
+      sent.messageId,
+      token,
+      handlers.onDelta
     );
-  }
-
-  const ct = (res.headers.get("content-type") ?? "").toLowerCase();
-
-  // 서버가 JSON이면 "스트림이 아닌 것"으로 간주하고 최종만 처리 (단, UX 일관 위해 onDelta 1회 호출)
-  if (ct.includes("application/json")) {
-    const data: unknown = await res.json().catch(() => null);
-    if (!isRecord(data) || !nonEmptyString(data["content"]) || !nonEmptyString(data["messageId"])) {
-      throw new Error("Stream send failed: invalid json response shape");
-    }
-
-    const final: ChatSendResult = {
-      sessionId: serverSessionId,
-      messageId: String(data["messageId"]),
-      role: "assistant",
-      content: String(data["content"]),
-      createdAt: nonEmptyString(data["createdAt"]) ?? new Date().toISOString(),
-    };
-
-    handlers.onDelta(final.content);
-    handlers.onFinal?.(final);
-    return final;
-  }
-
-  // SSE/NDJSON/Plain text 스트림 처리
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const text = await res.text().catch(() => "");
-    handlers.onDelta(text);
-    const final: ChatSendResult = {
-      sessionId: serverSessionId,
-      messageId: crypto.randomUUID?.() ?? `${Date.now()}`,
-      role: "assistant",
-      content: text || "응답이 비어 있습니다.",
-      createdAt: new Date().toISOString(),
-    };
-    handlers.onFinal?.(final);
-    return final;
-  }
-
-  const decoder = new TextDecoder("utf-8");
-  let acc = "";
-  let pending = "";
-  let stop = false;
-
-  let finalMessageId: string | null = null;
-  let finalCreatedAt: string | null = null;
-
-  const tryDeltaFromJson = (
-    line: string
-  ): { delta?: string; messageId?: string; createdAt?: string } | null => {
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (typeof parsed === "string") return { delta: parsed };
-
-      if (!isRecord(parsed)) return null;
-
-      const delta =
-        nonEmptyString(parsed["delta"]) ??
-        nonEmptyString(parsed["content"]) ??
-        null;
-
-      const messageId =
-        nonEmptyString(parsed["messageId"]) ?? nonEmptyString(parsed["id"]) ?? null;
-
-      const createdAt =
-        nonEmptyString(parsed["createdAt"]) ?? nonEmptyString(parsed["created_at"]) ?? null;
-
-      if (!delta && !messageId && !createdAt) return null;
-      return {
-        delta: delta ?? undefined,
-        messageId: messageId ?? undefined,
-        createdAt: createdAt ?? undefined,
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  const emitDelta = (delta: string) => {
-    if (!delta) return;
-    acc += delta;
-    handlers.onDelta(delta);
-  };
-
-  const flushLines = () => {
-    while (true) {
-      const idx = pending.indexOf("\n");
-      if (idx < 0) break;
-
-      const rawLine = pending.slice(0, idx);
-      pending = pending.slice(idx + 1);
-
-      const line = rawLine.replace(/\r$/, "");
-      if (!line) continue;
-
-      // SSE keep-alive 주석 라인
-      if (line.startsWith(":")) continue;
-
-      // SSE data 라인
-      if (line.startsWith("data:")) {
-        const dataPart = line.slice(5).trimStart();
-        if (!dataPart) continue;
-
-        if (dataPart === "[DONE]") {
-          stop = true;
-          break;
-        }
-
-        const j = tryDeltaFromJson(dataPart);
-        if (j?.messageId) finalMessageId = j.messageId;
-        if (j?.createdAt) finalCreatedAt = j.createdAt;
-
-        if (j?.delta) emitDelta(j.delta);
-        else emitDelta(dataPart);
-
-        continue;
-      }
-
-      // NDJSON/Plain line
-      const j = tryDeltaFromJson(line);
-      if (j?.messageId) finalMessageId = j.messageId;
-      if (j?.createdAt) finalCreatedAt = j.createdAt;
-
-      if (j?.delta) emitDelta(j.delta);
-      else emitDelta(line + "\n");
-    }
-  };
-
-  while (true) {
-    const r = await reader.read();
-    if (r.done) break;
-
-    const chunk = r.value ? decoder.decode(r.value, { stream: true }) : "";
-    if (!chunk) continue;
-
-    pending += chunk;
-    flushLines();
-    if (stop) {
-      try {
-        await reader.cancel();
-      } catch {
-        // ignore
-      }
-      break;
-    }
-  }
-
-  // 남아있는 pending 마지막 처리
-  const tail = pending.trim();
-  if (tail.length > 0 && !stop) {
-    const j = tryDeltaFromJson(tail);
-    if (j?.messageId) finalMessageId = j.messageId;
-    if (j?.createdAt) finalCreatedAt = j.createdAt;
-    if (j?.delta) emitDelta(j.delta);
-    else emitDelta(pending);
+    streamed = r.content;
+  } catch (err: unknown) {
+    console.warn(
+      "[chatApi] SSE stream failed; falling back to non-stream response",
+      err
+    );
+    // SSE가 실패하거나 서버가 스트림을 안 주는 경우: UX를 위해 최소 1회 델타로라도 반영
+    const fallback = sent.content || "응답이 비어 있습니다.";
+    handlers.onDelta(fallback);
+    streamed = fallback;
   }
 
   const final: ChatSendResult = {
     sessionId: serverSessionId,
-    messageId: finalMessageId ?? (crypto.randomUUID?.() ?? `${Date.now()}`),
+    messageId: sent.messageId,
     role: "assistant",
-    content: acc || "응답이 비어 있습니다.",
-    createdAt: finalCreatedAt ?? new Date().toISOString(),
+    content: streamed || sent.content || "응답이 비어 있습니다.",
+    createdAt: sent.createdAt || new Date().toISOString(),
   };
 
   handlers.onFinal?.(final);

@@ -96,7 +96,8 @@ function getFaqHomeLabel(it: FaqHomeItem): string {
 function getFaqHomeId(it: FaqHomeItem): string | null {
   const rec = it as unknown as Record<string, unknown>;
   const v = rec["faqId"] ?? rec["id"] ?? rec["key"];
-  const s = typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+  const s =
+    typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
   return s ? s : null;
 }
 
@@ -111,7 +112,8 @@ function getFaqHomeDomain(it: FaqHomeItem): ChatServiceDomain | null {
 function getFaqItemId(it: FaqItem): string | null {
   const rec = it as unknown as Record<string, unknown>;
   const v = rec["id"] ?? rec["faqId"] ?? rec["key"];
-  const s = typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+  const s =
+    typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
   return s ? s : null;
 }
 
@@ -169,6 +171,588 @@ type RoleChip = {
   onClick: () => void;
 };
 
+/**
+ * =========================
+ * 최소 마크다운 렌더러 (라이브러리 없이)
+ * 지원:
+ * - 헤딩: # ~ ######  (###. 형태도 대응)
+ * - 굵게: **bold** / __bold__
+ * - 인라인 코드: `code`
+ * - 펜스 코드블록: ```lang ... ```
+ * - 인용문: > quote
+ * - 구분선: --- / *** / ___ (공백 섞인 형태도 일부 대응)
+ * - 목록:
+ *   - Unordered: "- item" / "* item" / "• item" / "· item" / "● item"
+ *   - Ordered: "1. item" / "1) item"
+ *
+ * 주의:
+ * - XSS 방지: dangerouslySetInnerHTML 사용 안 함
+ * - 스트리밍 중 미완성 토큰(**, `)은 그대로 텍스트로 표시되었다가
+ *   닫히는 순간부터 자연스럽게 렌더링됨(깨짐 방지)
+ * - “빈 줄이 껴 있는 목록(loose list)”도 같은 리스트로 유지해서
+ *   <ol> 번호가 매 항목마다 1로 리셋되는 문제를 방지
+ * =========================
+ */
+
+function normalizeNewlines(s: string): string {
+  return s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function isBlankLine(line: string): boolean {
+  return line.trim().length === 0;
+}
+
+function isOrderedListLine(line: string): boolean {
+  // "1. item" / "1) item" 모두 허용
+  return /^\s*\d+[.)]\s+/.test(line);
+}
+
+function isUnorderedListLine(line: string): boolean {
+  // LLM이 흔히 섞는 bullet들도 같이 허용
+  return /^\s*([-*•·●])\s+/.test(line);
+}
+
+function stripOrderedMarker(line: string): string {
+  return line.replace(/^\s*\d+[.)]\s+/, "");
+}
+
+function stripUnorderedMarker(line: string): string {
+  return line.replace(/^\s*([-*•·●])\s+/, "");
+}
+
+function parseHeadingLine(
+  line: string
+): { level: 1 | 2 | 3 | 4 | 5 | 6; text: string } | null {
+  // "### 제목", "###. 제목" (LLM이 가끔 ###. 형태로 출력) 둘 다 대응
+  const m = /^\s{0,3}(#{1,6})\s*\.?\s+(.*)\s*$/.exec(line);
+  if (!m) return null;
+
+  const level = Math.min(6, Math.max(1, m[1].length)) as 1 | 2 | 3 | 4 | 5 | 6;
+  const text = (m[2] ?? "").trim();
+  if (!text) return null;
+
+  return { level, text };
+}
+
+function isHorizontalRuleLine(line: string): boolean {
+  // --- / *** / ___
+  // 공백 섞인 형태(- - -)도 일부 대응
+  const s = line.trim();
+  if (!s) return false;
+  if (/^(-\s*){3,}$/.test(s)) return true;
+  if (/^(\*\s*){3,}$/.test(s)) return true;
+  if (/^(_\s*){3,}$/.test(s)) return true;
+  return false;
+}
+
+function parseBlockquoteLine(line: string): string | null {
+  const m = /^\s{0,3}>\s?(.*)$/.exec(line);
+  if (!m) return null;
+  return m[1] ?? "";
+}
+
+function parseCodeFenceLine(line: string): { lang: string } | null {
+  const m = /^\s{0,3}```\s*([A-Za-z0-9_-]+)?\s*$/.exec(line);
+  if (!m) return null;
+  const lang = (m[1] ?? "").trim();
+  return { lang };
+}
+
+function findNextSpecial(
+  src: string,
+  from: number
+): { pos: number; kind: "code" | "bold"; marker: "`" | "**" | "__" } | null {
+  const pCode = src.indexOf("`", from);
+
+  const pBold1 = src.indexOf("**", from);
+  const pBold2 = src.indexOf("__", from);
+
+  let bestPos = -1;
+  let bestKind: "code" | "bold" = "code";
+  let bestMarker: "`" | "**" | "__" = "`";
+
+  if (pCode !== -1) {
+    bestPos = pCode;
+    bestKind = "code";
+    bestMarker = "`";
+  }
+
+  const considerBold = (p: number, marker: "**" | "__") => {
+    if (p === -1) return;
+    if (bestPos === -1 || p < bestPos) {
+      bestPos = p;
+      bestKind = "bold";
+      bestMarker = marker;
+    }
+  };
+
+  considerBold(pBold1, "**");
+  considerBold(pBold2, "__");
+
+  if (bestPos === -1) return null;
+  return { pos: bestPos, kind: bestKind, marker: bestMarker };
+}
+
+function renderInlineMarkdownLite(
+  text: string,
+  keyBase: string,
+  depth = 0
+): React.ReactNode {
+  const src = String(text ?? "");
+  if (!src) return null;
+
+  // 과도한 재귀 방지(이론상 필요 거의 없지만 안전장치)
+  if (depth > 6) return src;
+
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+
+  while (i < src.length) {
+    const next = findNextSpecial(src, i);
+    if (!next) {
+      nodes.push(src.slice(i));
+      break;
+    }
+
+    const { pos, kind, marker } = next;
+    if (pos > i) nodes.push(src.slice(i, pos));
+
+    if (kind === "code" && marker === "`") {
+      const close = src.indexOf("`", pos + 1);
+      if (close === -1) {
+        // 닫힘이 없으면 남은 부분은 그대로 출력(스트리밍 중 미완성 방어)
+        nodes.push(src.slice(pos));
+        break;
+      }
+
+      const inner = src.slice(pos + 1, close);
+      nodes.push(
+        <code
+          key={`${keyBase}:c:${key++}`}
+          className="cb-md-code"
+          style={{
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+            fontSize: "0.92em",
+            padding: "0.08em 0.38em",
+            borderRadius: 6,
+            background: "rgba(0,0,0,0.06)",
+          }}
+        >
+          {inner}
+        </code>
+      );
+      i = close + 1;
+      continue;
+    }
+
+    if (kind === "bold" && (marker === "**" || marker === "__")) {
+      const close = src.indexOf(marker, pos + marker.length);
+      if (close === -1) {
+        // 닫힘이 없으면 그대로 출력(스트리밍 중 미완성 방어)
+        nodes.push(src.slice(pos));
+        break;
+      }
+
+      const inner = src.slice(pos + marker.length, close);
+      nodes.push(
+        <strong
+          key={`${keyBase}:b:${key++}`}
+          className="cb-md-bold"
+          style={{ fontWeight: 700 }}
+        >
+          {renderInlineMarkdownLite(inner, `${keyBase}:binner:${key++}`, depth + 1)}
+        </strong>
+      );
+      i = close + marker.length;
+      continue;
+    }
+
+    // 이론상 도달하지 않음
+    nodes.push(src.slice(pos, pos + 1));
+    i = pos + 1;
+  }
+
+  return <>{nodes}</>;
+}
+
+function renderParagraphBlock(block: string, keyBase: string): React.ReactNode {
+  const lines = normalizeNewlines(block).split("\n");
+  // 문단 내부의 줄바꿈은 <br/>로 유지
+  const out: React.ReactNode[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    out.push(
+      <React.Fragment key={`${keyBase}:pl:${i}`}>
+        {renderInlineMarkdownLite(line, `${keyBase}:in:${i}`)}
+        {i < lines.length - 1 ? <br /> : null}
+      </React.Fragment>
+    );
+  }
+
+  return (
+    <div
+      key={keyBase}
+      className="cb-md-paragraph"
+      style={{
+        margin: "6px 0",
+      }}
+    >
+      {out}
+    </div>
+  );
+}
+
+function renderListBlock(block: string, keyBase: string): React.ReactNode {
+  const lines = normalizeNewlines(block)
+    .split("\n")
+    .filter((l) => !isBlankLine(l));
+
+  const allOrdered = lines.length > 0 && lines.every(isOrderedListLine);
+  const allUnordered = lines.length > 0 && lines.every(isUnorderedListLine);
+
+  if (!allOrdered && !allUnordered) {
+    return renderParagraphBlock(block, keyBase);
+  }
+
+  const items = lines.map((l, idx) => {
+    const content = allOrdered ? stripOrderedMarker(l) : stripUnorderedMarker(l);
+    return (
+      <li
+        key={`${keyBase}:li:${idx}`}
+        className="cb-md-li"
+        style={{ margin: "4px 0" }}
+      >
+        {renderInlineMarkdownLite(content, `${keyBase}:li-in:${idx}`)}
+      </li>
+    );
+  });
+
+  const commonStyle: React.CSSProperties = {
+    margin: "6px 0",
+    paddingLeft: 18,
+  };
+
+  if (allOrdered) {
+    return (
+      <ol key={keyBase} className="cb-md-ol" style={commonStyle}>
+        {items}
+      </ol>
+    );
+  }
+
+  return (
+    <ul key={keyBase} className="cb-md-ul" style={commonStyle}>
+      {items}
+    </ul>
+  );
+}
+
+function renderHeadingBlock(
+  level: 1 | 2 | 3 | 4 | 5 | 6,
+  text: string,
+  keyBase: string
+): React.ReactNode {
+  // 말풍선 안에서는 너무 과한 H1 느낌 대신 "섹션 타이틀" 톤으로 절제
+  const fontSize =
+    level === 1
+      ? "1.12em"
+      : level === 2
+        ? "1.08em"
+        : level === 3
+          ? "1.04em"
+          : "1.00em";
+
+  return (
+    <div
+      key={keyBase}
+      className={`cb-md-h cb-md-h${level}`}
+      style={{
+        margin: "10px 0 6px",
+        fontWeight: 800,
+        fontSize,
+        lineHeight: 1.25,
+      }}
+    >
+      {renderInlineMarkdownLite(text, `${keyBase}:h:${level}`)}
+    </div>
+  );
+}
+
+function renderHorizontalRule(keyBase: string): React.ReactNode {
+  return (
+    <hr
+      key={keyBase}
+      className="cb-md-hr"
+      style={{
+        border: 0,
+        borderTop: "1px solid rgba(0,0,0,0.12)",
+        margin: "10px 0",
+      }}
+    />
+  );
+}
+
+function renderCodeBlock(code: string, lang: string, keyBase: string): React.ReactNode {
+  const label = lang ? lang.toUpperCase() : "";
+  return (
+    <div key={keyBase} className="cb-md-prewrap" style={{ margin: "10px 0" }}>
+      {label && (
+        <div
+          className="cb-md-code-label"
+          style={{
+            fontSize: "0.78em",
+            opacity: 0.7,
+            marginBottom: 6,
+            fontWeight: 700,
+            letterSpacing: 0.3,
+          }}
+        >
+          {label}
+        </div>
+      )}
+      <pre
+        className="cb-md-pre"
+        style={{
+          margin: 0,
+          padding: "10px 12px",
+          borderRadius: 10,
+          background: "rgba(0,0,0,0.06)",
+          overflowX: "auto",
+          whiteSpace: "pre",
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+          fontSize: "0.92em",
+          lineHeight: 1.4,
+        }}
+      >
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+function renderBlockquoteBlock(content: string, keyBase: string, depth: number): React.ReactNode {
+  return (
+    <div
+      key={keyBase}
+      className="cb-md-quote"
+      style={{
+        margin: "10px 0",
+        padding: "8px 10px",
+        borderLeft: "3px solid rgba(0,0,0,0.18)",
+        background: "rgba(0,0,0,0.03)",
+        borderRadius: 10,
+      }}
+    >
+      {renderMarkdownLite(content, `${keyBase}:inner`, depth + 1)}
+    </div>
+  );
+}
+
+function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.ReactNode {
+  const src = String(text ?? "");
+  if (!src) return null;
+
+  // 재귀 안전장치(인용문 내부에서 다시 renderMarkdownLite 호출)
+  if (depth > 2) {
+    return renderParagraphBlock(src, `${keyBase}:maxdepth`);
+  }
+
+  const lines = normalizeNewlines(src).split("\n");
+
+  const out: React.ReactNode[] = [];
+  let paraBuf: string[] = [];
+
+  let listBuf: string[] = [];
+  let listKind: "ordered" | "unordered" | null = null;
+
+  // loose list: 목록 중간의 빈 줄이 <ol>을 분리해 번호가 1로 리셋되는 문제 방지
+  let pendingListBlank = false;
+
+  // blockquote
+  let quoteBuf: string[] = [];
+
+  // fenced code
+  let inCodeFence = false;
+  let codeFenceLang = "";
+  let codeBuf: string[] = [];
+
+  let pIndex = 0;
+  let lIndex = 0;
+  let hIndex = 0;
+  let rIndex = 0;
+  let qIndex = 0;
+  let cIndex = 0;
+
+  const flushPara = () => {
+    if (paraBuf.length === 0) return;
+    out.push(renderParagraphBlock(paraBuf.join("\n"), `${keyBase}:p:${pIndex++}`));
+    paraBuf = [];
+  };
+
+  const flushList = () => {
+    if (listBuf.length === 0) return;
+    out.push(renderListBlock(listBuf.join("\n"), `${keyBase}:l:${lIndex++}`));
+    listBuf = [];
+    listKind = null;
+    pendingListBlank = false;
+  };
+
+  const flushQuote = () => {
+    if (quoteBuf.length === 0) return;
+    out.push(renderBlockquoteBlock(quoteBuf.join("\n"), `${keyBase}:q:${qIndex++}`, depth));
+    quoteBuf = [];
+  };
+
+  const flushCode = () => {
+    if (!inCodeFence) return;
+    out.push(renderCodeBlock(codeBuf.join("\n"), codeFenceLang, `${keyBase}:c:${cIndex++}`));
+    inCodeFence = false;
+    codeFenceLang = "";
+    codeBuf = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine;
+
+    // 1) fenced code 내부
+    if (inCodeFence) {
+      const fence = parseCodeFenceLine(line);
+      if (fence) {
+        // closing fence
+        flushCode();
+        continue;
+      }
+      codeBuf.push(line);
+      continue;
+    }
+
+    // 2) code fence 시작
+    const fenceStart = parseCodeFenceLine(line);
+    if (fenceStart) {
+      flushQuote();
+      flushList();
+      flushPara();
+
+      inCodeFence = true;
+      codeFenceLang = fenceStart.lang;
+      codeBuf = [];
+      continue;
+    }
+
+    // 3) 빈 줄 처리
+    if (isBlankLine(line)) {
+      // quote 진행 중이면 빈 줄도 유지(인용문 내부 문단 유지)
+      if (quoteBuf.length > 0) {
+        quoteBuf.push("");
+        continue;
+      }
+
+      // list 진행 중이면 일단 보류(다음 라인이 list이면 같은 리스트로 유지)
+      if (listKind !== null) {
+        pendingListBlank = true;
+        continue;
+      }
+
+      // 일반 문단 종료
+      flushPara();
+      continue;
+    }
+
+    // 4) list blank 보류 상태 처리
+    if (pendingListBlank && listKind !== null) {
+      const isOl = isOrderedListLine(line);
+      const isUl = isUnorderedListLine(line);
+      const kind: "ordered" | "unordered" | null = isOl
+        ? "ordered"
+        : isUl
+          ? "unordered"
+          : null;
+
+      if (!kind || kind !== listKind) {
+        flushList();
+      } else {
+        pendingListBlank = false;
+      }
+    }
+
+    // 5) 구분선
+    if (isHorizontalRuleLine(line)) {
+      flushQuote();
+      flushList();
+      flushPara();
+      out.push(renderHorizontalRule(`${keyBase}:hr:${rIndex++}`));
+      continue;
+    }
+
+    // 6) 인용문
+    const q = parseBlockquoteLine(line);
+    if (q !== null) {
+      flushList();
+      flushPara();
+      quoteBuf.push(q);
+      continue;
+    } else if (quoteBuf.length > 0) {
+      flushQuote();
+    }
+
+    // 7) 헤딩
+    const heading = parseHeadingLine(line);
+    if (heading) {
+      flushList();
+      flushPara();
+      out.push(renderHeadingBlock(heading.level, heading.text, `${keyBase}:h:${hIndex++}`));
+      continue;
+    }
+
+    // 8) 리스트
+    const isOl = isOrderedListLine(line);
+    const isUl = isUnorderedListLine(line);
+
+    if (isOl || isUl) {
+      const kind: "ordered" | "unordered" = isOl ? "ordered" : "unordered";
+      flushPara();
+
+      if (listKind === null) {
+        listKind = kind;
+        listBuf.push(line);
+        pendingListBlank = false;
+        continue;
+      }
+
+      if (listKind === kind) {
+        listBuf.push(line);
+        pendingListBlank = false;
+        continue;
+      }
+
+      flushList();
+      listKind = kind;
+      listBuf.push(line);
+      pendingListBlank = false;
+      continue;
+    }
+
+    // 9) 일반 문단
+    flushList();
+    paraBuf.push(line);
+  }
+
+  // tail flush
+  flushCode();
+  flushQuote();
+  flushList();
+  flushPara();
+
+  return (
+    <div className="cb-md-root" style={{ margin: 0 }}>
+      {out}
+    </div>
+  );
+}
+
 const ChatWindow: React.FC<ChatWindowProps> = ({
   activeSession,
   onSendMessage,
@@ -191,6 +775,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  // 전송이 끝난 뒤 입력창에 포커스를 “복구”하기 위한 플래그
+  const refocusAfterSendRef = useRef(false);
 
   // FAQ: 선택된 도메인(없으면 HOME=추천)
   const [faqDomainFilter, setFaqDomainFilter] = useState<FaqFilterDomain>(null);
@@ -216,6 +803,32 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const isFaqDomain = currentDomain === "faq";
   const isGeneralDomain = currentDomain === "general";
 
+  // 입력창 포커스 복구 헬퍼 (FAQ/신고모달/전송중 상태 고려)
+  const focusChatInput = useCallback(
+    (opts?: { force?: boolean }) => {
+      // FAQ 도메인에서는 입력창이 없으므로 제외
+      if (isFaqDomain) return;
+      // 신고 모달이 열려있으면 모달 입력이 우선
+      if (isReportModalOpen) return;
+      // 전송 중에는 textarea가 disabled → 포커스 불가
+      if (isSending) return;
+
+      const el = inputRef.current;
+      if (!el) return;
+
+      // 사용자가 다른 입력창(검색/리네임 등)에 포커스를 둔 경우 포커스 강탈 방지
+      const active = document.activeElement as HTMLElement | null;
+      if (!opts?.force && active && active !== el) {
+        const tag = active.tagName;
+        const isTextField = tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable;
+        if (isTextField) return;
+      }
+
+      window.setTimeout(() => el.focus(), 0);
+    },
+    [isFaqDomain, isReportModalOpen, isSending]
+  );
+
   // Role 정보
   const isAdmin = can(userRole, "OPEN_ADMIN_DASHBOARD");
   const isReviewer = can(userRole, "OPEN_REVIEWER_DESK");
@@ -229,7 +842,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const messages = rawMessages as UiChatMessage[];
   const hasMessages = messages.length > 0;
 
-  // Streaming UX: 마지막 메시지가 assistant면(상위에서 streaming 업데이트하는 구조일 때) 별도 타이핑 버블을 띄우지 않음
+  // Streaming UX: 마지막 메시지가 assistant면 별도 타이핑 버블을 띄우지 않음
   const hasAssistantTail = useMemo(() => {
     if (!messages.length) return false;
     return messages[messages.length - 1].role === "assistant";
@@ -266,6 +879,21 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     el.style.height = `${next}px`;
   }, [inputValue]);
 
+  // 전송이 끝나는 순간(isSending=false)에 입력창 포커스를 자동 복구
+  useEffect(() => {
+    if (isSending) return;
+    if (!refocusAfterSendRef.current) return;
+
+    refocusAfterSendRef.current = false;
+    focusChatInput({ force: true });
+  }, [isSending, focusChatInput]);
+
+  // 신고 모달이 닫힌 뒤에는 입력창으로 자연스럽게 복귀
+  useEffect(() => {
+    if (isReportModalOpen) return;
+    focusChatInput();
+  }, [isReportModalOpen, focusChatInput]);
+
   // 신고 모달 열릴 때 textarea 포커스 + ESC 닫기
   useEffect(() => {
     if (!isReportModalOpen) return;
@@ -293,6 +921,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleSend = useCallback(() => {
     const trimmed = inputValue.trim();
     if (!trimmed || isSending) return;
+
+    // 이번 요청이 끝나면 입력창으로 포커스를 “복구”해야 함
+    refocusAfterSendRef.current = true;
 
     onSendMessage(trimmed);
     setInputValue("");
@@ -366,14 +997,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       });
     }
     return arr;
-  }, [
-    isAdmin,
-    isReviewer,
-    isCreator,
-    handleOpenAdminDashboard,
-    handleOpenReviewerDesk,
-    handleOpenCreatorStudio,
-  ]);
+  }, [isAdmin, isReviewer, isCreator, handleOpenAdminDashboard, handleOpenReviewerDesk, handleOpenCreatorStudio]);
 
   const handleFaqChipClick = useCallback(() => {
     if (isSending) return;
@@ -634,6 +1258,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           // Streaming 상태: 마지막 assistant 메시지는 전송 중일 때 “스트리밍 말풍선”로 표시
           const isStreaming = isAssistant && isSending && index === messages.length - 1;
 
+          // 스트리밍 시작 직후: placeholder assistant가 먼저 생기고 content가 비어있으면
+          const isStreamingEmpty = isStreaming && (msg.content?.length ?? 0) === 0;
+
           // 이 assistant 답변의 기준이 되는 user 질문 찾기
           let sourceQuestion: string | null = null;
           if (isAssistant) {
@@ -664,9 +1291,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               <div
                 className={
                   "cb-chat-bubble-container " +
-                  (isUser
-                    ? "cb-chat-bubble-container-user"
-                    : "cb-chat-bubble-container-bot")
+                  (isUser ? "cb-chat-bubble-container-user" : "cb-chat-bubble-container-bot")
                 }
               >
                 {isAssistant && isReportSuggestion ? (
@@ -701,18 +1326,34 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                         isStreaming ? "cb-chat-bubble-streaming" : "",
                       ].join(" ")}
                     >
-                      <div className="cb-chat-bubble-text">
-                        {msg.content}
-                        {isStreaming && <span className="cb-streaming-caret" aria-hidden="true" />}
+                      <div
+                        className="cb-chat-bubble-text"
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {isStreamingEmpty ? (
+                          <span aria-label="답변 생성 중" style={{ display: "inline-flex", alignItems: "center" }}>
+                            <span className="cb-typing-dots" style={{ margin: 0 }}>
+                              <span />
+                              <span />
+                              <span />
+                            </span>
+                          </span>
+                        ) : (
+                          <>
+                            {isAssistant ? renderMarkdownLite(msg.content, `m:${msg.id}`) : msg.content}
+                            {isStreaming && <span className="cb-streaming-caret" aria-hidden="true" />}
+                          </>
+                        )}
                       </div>
                     </div>
 
                     {allowActions && (
                       <div className="cb-chat-bubble-actions">
                         {isErrorAssistant && (
-                          <span className="cb-chat-bubble-error-text">
-                            네트워크 오류로 실패했어요.
-                          </span>
+                          <span className="cb-chat-bubble-error-text">네트워크 오류로 실패했어요.</span>
                         )}
 
                         <div className="cb-chat-actions-icon-group">
@@ -746,8 +1387,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                               }`}
                               onClick={() => {
                                 if (!onFeedbackChange) return;
-                                const next: FeedbackValue =
-                                  feedback === "down" ? null : "down";
+                                const next: FeedbackValue = feedback === "down" ? null : "down";
                                 onFeedbackChange(msg.id, next);
                               }}
                               title="별로인 응답"
@@ -757,7 +1397,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                             >
                               <img
                                 src={feedbackBadIcon}
-                                alt="별로인 응답"
+                                alt="별로예요"
                                 className="cb-chat-bubble-action-icon"
                               />
                             </button>
@@ -892,11 +1532,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   </div>
                 </div>
 
-                <div
-                  className={
-                    "cb-feature-row" + (hasMiddleRoleCard ? " cb-feature-row--admin" : "")
-                  }
-                >
+                <div className={"cb-feature-row" + (hasMiddleRoleCard ? " cb-feature-row--admin" : "")}>
                   <button type="button" className="cb-feature-card" onClick={handleQuizClick}>
                     <img src={quizIcon} alt="퀴즈" className="cb-feature-icon" />
                     <span className="cb-feature-label">퀴즈</span>

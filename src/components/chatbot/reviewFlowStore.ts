@@ -1,42 +1,64 @@
 // src/components/chatbot/reviewFlowStore.ts
 import type { ReviewWorkItem } from "./reviewerDeskTypes";
+import { getMyEducations, getEducationVideos } from "./educationServiceApi";
 
 /**
- * Mock 전용: Creator ↔ Reviewer ↔ Edu 연결 저장소
+ * Creator ↔ Reviewer ↔ Edu "흐름" 연결 저장소
+ *
+ * 목표
+ * - Reviewer WorkItem 스냅샷/구독: useSyncExternalStore 규칙 준수(참조 안정성)
+ * - Edu Published 목록:
+ *   - (과거) Mock store 기반
+ *   - (전환) 백엔드 "게시 목록 API" 기반으로 전환 가능
+ *   - (과도기) dual-run(= API + 로컬 publish 병합) 지원
+ *
+ * Flow(문서 기준, 구현 관점)
+ * 1) Creator가 1차(스크립트) 검토 요청: videoUrl = ""  → Reviewer 승인/반려(게시 X)
+ * 2) 1차 승인 후 Creator가 영상 생성/업로드 → 2차(최종) 검토 요청: videoUrl = "..." → Reviewer 승인 시 게시 O
+ * 3) 최종 게시 목록은 궁극적으로 백엔드가 Source of Truth
+ *    - 프론트는 API 목록을 구독/스냅샷으로 노출
+ *    - 과도기에는 승인 직후 UX 지연을 줄이기 위해 로컬 publish(optimistic) 병합 가능
  */
 
+export type EduVideoProgressRef = {
+  educationId: string;
+  videoId: string;
+};
+
+export type PublishedEduOrigin = "API" | "LOCAL";
+
 export type PublishedEduVideo = {
-  id: string; // "edu-<contentId>"
-  sourceContentId: string; // CreatorWorkItem.id
+  id: string; // UI 식별자(기존 그대로 사용)
+  sourceContentId: string;
   title: string;
   videoUrl: string;
-  publishedAt: string; // ISO
+  publishedAt: string;
   contentCategory?: string;
+
+  /**
+   * 진행률 PATCH용 백엔드 식별자
+   * - API로부터 온 항목만 존재
+   * - optimistic/local 항목은 undefined
+   */
+  progressRef?: EduVideoProgressRef;
+
+  /**
+   * optimistic/local 항목 스킵을 위한 원천 표시
+   */
+  origin?: PublishedEduOrigin;
 };
 
 type Listener = () => void;
 
-let hydrated = false;
+type UnknownRecord = Record<string, unknown>;
 
-const reviewItemsById = new Map<string, ReviewWorkItem>();
-const reviewListeners = new Set<Listener>();
-
-/**
- * useSyncExternalStore 호환: getSnapshot은 "항상 같은 참조"를 반환해야 한다.
- * - reviewItemsSnapshot / publishedEduVideos는 변경 시에만 새 배열로 교체한다.
- */
-let reviewItemsSnapshot: ReviewWorkItem[] = [];
-
-// let + 불변 업데이트(변경 시에만 새 배열 생성)
-let publishedEduVideos: PublishedEduVideo[] = [];
-const eduListeners = new Set<Listener>();
-
-function emitReview() {
-  reviewListeners.forEach((l) => l());
+function isRecord(v: unknown): v is UnknownRecord {
+  return typeof v === "object" && v !== null;
 }
 
-function emitEdu() {
-  eduListeners.forEach((l) => l());
+function getProp(obj: unknown, key: string): unknown {
+  if (!isRecord(obj)) return undefined;
+  return obj[key];
 }
 
 function isoNow() {
@@ -53,6 +75,38 @@ function toMs(iso: unknown): number | undefined {
   return Number.isFinite(t) ? t : undefined;
 }
 
+function trimStr(v: unknown) {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function stripUrlQuery(url: string): string {
+  const s = trimStr(url);
+  if (!s) return "";
+  const i = s.search(/[?#]/);
+  const base = i >= 0 ? s.slice(0, i) : s;
+  // origin 제거(절대/상대 혼용 대응)
+  return base.replace(/^https?:\/\/[^/]+/i, "");
+}
+
+/* =====================================================================================
+ * Review Store (Reviewer Desk)
+ * ===================================================================================== */
+
+let hydrated = false;
+
+const reviewItemsById = new Map<string, ReviewWorkItem>();
+const reviewListeners = new Set<Listener>();
+
+/**
+ * useSyncExternalStore 호환: getSnapshot은 "항상 같은 참조"를 반환해야 한다.
+ * - reviewItemsSnapshot은 변경 시에만 새 배열로 교체한다.
+ */
+let reviewItemsSnapshot: ReviewWorkItem[] = [];
+
+function emitReview() {
+  reviewListeners.forEach((l) => l());
+}
+
 /**
  * Creator(useCreatorStudioController)의 applyReviewStoreSync가
  * 숫자(ms) 기반 키(reviewedAt/updatedAt)를 읽을 수 있도록 보강한다.
@@ -61,41 +115,43 @@ function toMs(iso: unknown): number | undefined {
  *   런타임에만 추가 필드를 주입한다.
  */
 function normalizeForCreatorSync(item: ReviewWorkItem): ReviewWorkItem {
-  const base = item as unknown as Record<string, unknown>;
+  const base = item as unknown as UnknownRecord;
 
   // 정렬/표시용 최신 시각 후보(ISO) → ms
   const lastUpdatedIso =
-    (base["lastUpdatedAt"] as unknown) ??
-    (base["updatedAt"] as unknown) ??
-    (base["submittedAt"] as unknown) ??
-    (base["createdAt"] as unknown);
+    getProp(base, "lastUpdatedAt") ??
+    getProp(base, "updatedAt") ??
+    getProp(base, "submittedAt") ??
+    getProp(base, "createdAt");
 
+  const updatedAtRaw = getProp(base, "updatedAt");
   const updatedAtMs =
-    typeof base["updatedAt"] === "number"
-      ? (base["updatedAt"] as number)
+    typeof updatedAtRaw === "number"
+      ? updatedAtRaw
       : toMs(lastUpdatedIso) ?? Date.now();
 
   // 결정 시각(승인/반려) → ms
   const decisionIso =
-    (base["approvedAt"] as unknown) ??
-    (base["rejectedAt"] as unknown) ??
-    (base["reviewedAt"] as unknown);
+    getProp(base, "approvedAt") ??
+    getProp(base, "rejectedAt") ??
+    getProp(base, "reviewedAt");
 
+  const reviewedAtRaw = getProp(base, "reviewedAt");
   const reviewedAtMs =
-    typeof base["reviewedAt"] === "number"
-      ? (base["reviewedAt"] as number)
-      : toMs(decisionIso);
+    typeof reviewedAtRaw === "number" ? reviewedAtRaw : toMs(decisionIso);
 
-  // Creator 쪽 reviewCommentOf가 잡을 수 있는 키들 중 하나라도 채워주면 좋음(있으면 유지)
+  // Creator 쪽 comment 매핑(있으면 유지)
   const comment =
-    (typeof base["comment"] === "string" && (base["comment"] as string).trim()) ||
-    (typeof base["rejectReason"] === "string" && (base["rejectReason"] as string).trim()) ||
-    (typeof base["rejectedComment"] === "string" && (base["rejectedComment"] as string).trim()) ||
-    (typeof base["reviewerComment"] === "string" && (base["reviewerComment"] as string).trim()) ||
-    (typeof base["note"] === "string" && (base["note"] as string).trim()) ||
+    (typeof getProp(base, "comment") === "string" && trimStr(getProp(base, "comment"))) ||
+    (typeof getProp(base, "rejectReason") === "string" && trimStr(getProp(base, "rejectReason"))) ||
+    (typeof getProp(base, "rejectedComment") === "string" &&
+      trimStr(getProp(base, "rejectedComment"))) ||
+    (typeof getProp(base, "reviewerComment") === "string" &&
+      trimStr(getProp(base, "reviewerComment"))) ||
+    (typeof getProp(base, "note") === "string" && trimStr(getProp(base, "note"))) ||
     "";
 
-  const out: Record<string, unknown> = {
+  const out: UnknownRecord = {
     ...base,
     updatedAt: updatedAtMs, // Creator: readNum("updatedAt")
   };
@@ -105,7 +161,7 @@ function normalizeForCreatorSync(item: ReviewWorkItem): ReviewWorkItem {
     out.reviewedAt = reviewedAtMs;
   }
 
-  // 코멘트가 있으면 Creator가 읽을 수 있는 키들에 “동일 값”을 한 번 더 주입
+  // 코멘트가 있으면 Creator가 읽을 수 있는 키들에 “동일 값”을 한번 더 주입
   if (comment) {
     out.comment = out.comment ?? comment;
     out.rejectReason = out.rejectReason ?? comment;
@@ -129,6 +185,7 @@ function rebuildReviewSnapshot() {
 
 /**
  * ReviewerApiMock 초기 seed를 1회만 적재
+ * - 승인 상태 + videoUrl 존재(seed) 항목은 로컬 published에도 반영(전환기 UX 일관성)
  */
 export function hydrateReviewStoreOnce(items: ReviewWorkItem[]) {
   if (hydrated) return;
@@ -139,8 +196,12 @@ export function hydrateReviewStoreOnce(items: ReviewWorkItem[]) {
   });
 
   hydrated = true;
+
   rebuildReviewSnapshot();
   emitReview();
+
+  // seed된 review item 중 이미 최종 승인/영상URL이 있는 경우, 로컬 게시 목록도 동기화
+  seedLocalPublishedFromReviewSnapshot();
 }
 
 export function subscribeReviewStore(listener: Listener) {
@@ -150,9 +211,7 @@ export function subscribeReviewStore(listener: Listener) {
   };
 }
 
-/**
- *    "매 호출마다 새 배열 생성" 금지
- */
+/** "매 호출마다 새 배열 생성" 금지 */
 export function listReviewItemsSnapshot(): ReviewWorkItem[] {
   return reviewItemsSnapshot;
 }
@@ -161,10 +220,450 @@ export function getReviewItemSnapshot(id: string) {
   return reviewItemsById.get(id);
 }
 
+/* =====================================================================================
+ * Published Edu Videos Store (EduPanel)
+ * - Source Mode: MOCK | API | DUAL
+ * - Snapshot/Subscribe for useSyncExternalStore
+ * ===================================================================================== */
+
+export type PublishedEduSourceMode = "MOCK" | "API" | "DUAL";
+
+type PublishedEduSourceConfig = {
+  mode: PublishedEduSourceMode;
+
+  /**
+   * 백엔드 "교육 게시 목록" 조회(fetch)
+   * - 반환은 PublishedEduVideo[] 형태로 정규화된 결과여야 함
+   */
+  fetchPublished?: () => Promise<PublishedEduVideo[]>;
+
+  /**
+   * (선택) 최종 승인 시 백엔드 publish 트리거가 별도로 필요할 때 사용
+   * - 보통은 리뷰 승인 자체가 서버에서 publish까지 수행하므로 없어도 됨
+   * - 과도기에는 승인 직후 UX를 위해 local optimistic publish + 서버 refresh를 함께 사용 가능
+   */
+  pushPublished?: (published: PublishedEduVideo, fromReview: ReviewWorkItem) => Promise<void>;
+
+  /**
+   * API 모드에서도 승인 직후 UX 지연을 줄이기 위해
+   * 로컬 publish(optimistic)를 API 목록에 병합해서 노출할지 여부.
+   */
+  optimisticInApi?: boolean;
+};
+
+const eduListeners = new Set<Listener>();
+
+function emitEdu() {
+  eduListeners.forEach((l) => l());
+}
+
+function coercePublishedMode(v: unknown): PublishedEduSourceMode {
+  const s = String(v ?? "").toUpperCase();
+  if (s === "MOCK") return "MOCK";
+  if (s === "API") return "API";
+  if (s === "DUAL") return "DUAL";
+  // 기본값: 개발/실서비스 모두에서 “일단 API를 시도 + 실패 시 기존 mock/optimistic 유지”가 가장 안전
+  return "DUAL";
+}
+
+async function fetchPublishedEduVideosFromEducationApi(): Promise<PublishedEduVideo[]> {
+  const nowIso = isoNow();
+
+  const eduList = await getMyEducations();
+
+  const perEdu = await Promise.all(
+    eduList.map(async (edu) => {
+      try {
+        const videos = await getEducationVideos(edu.id);
+
+        const eduId = edu.id;
+        const eduTitle = edu.title ?? "교육";
+        const eduType = edu.eduType;
+        const eduCreatedAt = (edu as unknown as { createdAt?: string }).createdAt ?? nowIso;
+
+        const mapped = videos
+          .map((v) => {
+            const fileUrl =
+              (v as unknown as { fileUrl?: string; videoUrl?: string }).fileUrl ??
+              (v as unknown as { fileUrl?: string; videoUrl?: string }).videoUrl;
+
+            if (!fileUrl) return null;
+
+            const rawVideoId = v.id; // EducationVideoItem.id (서버 videoId로 가정)
+            const fallbackUiId =
+              `${eduId}:${String((v as unknown as { order?: number | string }).order ?? "") || "0"}`;
+
+            const uiId = rawVideoId || fallbackUiId;
+
+            const title = v.title ?? eduTitle;
+            const publishedAt =
+              (v as unknown as { createdAt?: string }).createdAt ?? eduCreatedAt;
+
+            const item: PublishedEduVideo = {
+              id: uiId,
+              sourceContentId: eduId,
+              title,
+              videoUrl: fileUrl,
+              publishedAt,
+              contentCategory: eduType,
+              origin: "API",
+              progressRef: rawVideoId ? { educationId: eduId, videoId: rawVideoId } : undefined,
+            };
+
+            return item;
+          })
+          .filter(Boolean) as PublishedEduVideo[];
+
+        return mapped;
+      } catch (e) {
+        console.warn("[reviewFlowStore] getEducationVideos failed:", edu.id, e);
+        return [];
+      }
+    })
+  );
+
+  const out = perEdu.flat();
+
+  // 최신(게시/생성) 우선 정렬
+  out.sort(
+    (a, b) =>
+      (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "") ||
+      a.title.localeCompare(b.title)
+  );
+
+  return out;
+}
+
+function readEnvVar(key: string): unknown {
+  const env = import.meta.env as unknown as UnknownRecord;
+  return env[key];
+}
+
+let publishedConfig: PublishedEduSourceConfig = {
+  mode: coercePublishedMode(
+    readEnvVar("VITE_EDU_PUBLISHED_SOURCE") ?? readEnvVar("VITE_PUBLISHED_EDU_SOURCE")
+  ),
+  optimisticInApi: true,
+  fetchPublished: fetchPublishedEduVideosFromEducationApi,
+  pushPublished: undefined,
+};
+
+/**
+ * publishedLocal: 로컬 publish(모킹/옵티미스틱/전환기)
+ * publishedFromApi: 백엔드 조회 결과(Truth 후보)
+ * publishedSnapshot: useSyncExternalStore 제공용(참조 안정성 필요)
+ */
+let publishedLocal: PublishedEduVideo[] = [];
+let publishedFromApi: PublishedEduVideo[] = [];
+let publishedSnapshot: PublishedEduVideo[] = [];
+
+/** Published 정렬: publishedAt 내림차순(없으면 0) */
+function sortPublishedDesc(list: PublishedEduVideo[]) {
+  return [...list].sort((a, b) => {
+    const ta = toMs(a.publishedAt) ?? 0;
+    const tb = toMs(b.publishedAt) ?? 0;
+    return tb - ta;
+  });
+}
+
+/** id 기준 중복 제거 병합(우선순위: api 우선, 없으면 local) */
+function mergePublished(apiList: PublishedEduVideo[], localList: PublishedEduVideo[]) {
+  const byId = new Map<string, PublishedEduVideo>();
+
+  // api를 먼저 넣어 "우선" 적용
+  for (const v of apiList) byId.set(v.id, v);
+
+  // local은 api에 없을 때만 보강(또는 api보다 최신이면 교체)
+  for (const v of localList) {
+    const prev = byId.get(v.id);
+    if (!prev) {
+      byId.set(v.id, v);
+      continue;
+    }
+    const p1 = toMs(prev.publishedAt) ?? 0;
+    const p2 = toMs(v.publishedAt) ?? 0;
+    if (p2 > p1) byId.set(v.id, v);
+  }
+
+  return sortPublishedDesc(Array.from(byId.values()));
+}
+
+function samePublishedArray(a: PublishedEduVideo[], b: PublishedEduVideo[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+
+    const px = x.progressRef;
+    const py = y.progressRef;
+
+    if (
+      x.id !== y.id ||
+      x.publishedAt !== y.publishedAt ||
+      x.videoUrl !== y.videoUrl ||
+      x.title !== y.title ||
+      x.sourceContentId !== y.sourceContentId ||
+      (x.contentCategory ?? "") !== (y.contentCategory ?? "") ||
+      (x.origin ?? "") !== (y.origin ?? "") ||
+      (px?.educationId ?? "") !== (py?.educationId ?? "") ||
+      (px?.videoId ?? "") !== (py?.videoId ?? "")
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * 스냅샷 재계산(변경 시에만 publishedSnapshot 참조 교체)
+ */
+function rebuildPublishedSnapshotAndEmitIfChanged(emit: boolean) {
+  const mode = publishedConfig.mode;
+
+  let next: PublishedEduVideo[] = [];
+
+  if (mode === "MOCK") {
+    next = publishedLocal;
+  } else if (mode === "API") {
+    if (publishedConfig.optimisticInApi) {
+      next = mergePublished(publishedFromApi, publishedLocal);
+    } else {
+      next = publishedFromApi;
+    }
+  } else {
+    // DUAL
+    next = mergePublished(publishedFromApi, publishedLocal);
+  }
+
+  // MOCK 모드는 publishedLocal 자체를 스냅샷으로 사용(불변 업데이트 전제)
+  const normalizedNext = mode === "MOCK" ? publishedLocal : next;
+
+  if (!samePublishedArray(publishedSnapshot, normalizedNext)) {
+    publishedSnapshot = normalizedNext;
+    if (emit) emitEdu();
+  }
+}
+
+/**
+ * 외부에서 Published 소스 전환/설정
+ * - 예: 앱 부트스트랩 또는 EduPanel useEffect에서 호출
+ */
+export function configurePublishedEduSource(config: Partial<PublishedEduSourceConfig>) {
+  publishedConfig = {
+    ...publishedConfig,
+    ...config,
+  };
+
+  // fetchPublished가 없는데 API/DUAL로 전환하면, 안전하게 MOCK처럼 동작시키기 위해 API 목록은 비워둔다.
+  // (실제 목록은 local 또는 이후에 fetchPublished 주입 후 refresh로 채움)
+  rebuildPublishedSnapshotAndEmitIfChanged(true);
+}
+
+/**
+ * 백엔드 게시 목록을 당겨와 publishedFromApi에 반영
+ * - 호출자는 EduPanel에서 1) mount 시 2) 특정 액션 직후 3) polling 으로 사용 가능
+ */
+let refreshInFlight: Promise<void> | null = null;
+let lastRefreshStartedAt = 0;
+
+type RefreshOpts = {
+  force?: boolean;
+  minIntervalMs?: number;
+};
+
+function reconcileLocalWithApi(): boolean {
+  if (publishedLocal.length === 0 || publishedFromApi.length === 0) return false;
+
+  const apiKeys = new Set<string>();
+  for (const a of publishedFromApi) {
+    apiKeys.add(`${a.sourceContentId}::${stripUrlQuery(a.videoUrl)}`);
+  }
+
+  const nextLocal = publishedLocal.filter((l) => {
+    // LOCAL만 정합화 대상 (나머지는 그대로)
+    if (l.origin !== "LOCAL") return true;
+    const key = `${l.sourceContentId}::${stripUrlQuery(l.videoUrl)}`;
+    return !apiKeys.has(key);
+  });
+
+  if (nextLocal.length !== publishedLocal.length) {
+    publishedLocal = nextLocal;
+    return true;
+  }
+  return false;
+}
+
+export async function refreshPublishedEduVideosFromApi(opts: RefreshOpts = {}) {
+  const fetcher = publishedConfig.fetchPublished;
+  if (!fetcher) return;
+
+  const minIntervalMs = opts.minIntervalMs ?? 600;
+  const now = Date.now();
+
+  // (1) 짧은 시간 내 중복 호출 방지
+  if (!opts.force && now - lastRefreshStartedAt < minIntervalMs) {
+    // 이미 진행 중이면 그 promise를 재사용
+    if (refreshInFlight) return refreshInFlight;
+    return;
+  }
+
+  // (2) in-flight 공유
+  if (refreshInFlight) return refreshInFlight;
+
+  lastRefreshStartedAt = now;
+
+  refreshInFlight = (async () => {
+    try {
+      const next = await fetcher();
+
+      const normalized = (Array.isArray(next) ? next : [])
+        .filter((v) => v && typeof v.id === "string" && v.id.trim().length > 0)
+        .map((v) => {
+          const vRec = isRecord(v as unknown) ? (v as unknown as UnknownRecord) : undefined;
+          const altContentId = vRec ? trimStr(getProp(vRec, "contentId")) : "";
+
+          const id = trimStr((v as PublishedEduVideo).id);
+          const sourceContentId =
+            trimStr((v as PublishedEduVideo).sourceContentId) || altContentId || id;
+
+          const title = trimStr((v as PublishedEduVideo).title);
+          const videoUrl = trimStr((v as PublishedEduVideo).videoUrl);
+          const publishedAt = trimStr((v as PublishedEduVideo).publishedAt) || isoNow();
+
+          const origin = (v as PublishedEduVideo).origin ?? "API";
+          const progressRef = (v as PublishedEduVideo).progressRef;
+
+          return {
+            ...(v as PublishedEduVideo),
+            id,
+            sourceContentId,
+            title,
+            videoUrl,
+            publishedAt,
+            origin,
+            progressRef,
+          };
+        });
+
+      const sorted = sortPublishedDesc(normalized);
+
+      const apiChanged = !samePublishedArray(publishedFromApi, sorted);
+      if (apiChanged) {
+        publishedFromApi = sorted;
+      }
+
+      // (3) 정합화: API에 “실물”이 보이면 LOCAL optimistic 제거
+      const localChanged = reconcileLocalWithApi();
+
+      if (apiChanged || localChanged) {
+        rebuildPublishedSnapshotAndEmitIfChanged(true);
+      }
+    } catch (e) {
+      console.warn("[reviewFlowStore] refreshPublishedEduVideosFromApi failed:", e);
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
+/**
+ * polling 헬퍼(선택)
+ * - EduPanel에서 mount 시 start → unmount 시 stop
+ */
+export function startPublishedEduVideosPolling(intervalMs = 30_000) {
+  let timer: number | null = null;
+
+  // 브라우저 환경 가드
+  const canUseWindow = typeof window !== "undefined" && typeof window.setInterval === "function";
+  if (!canUseWindow) return () => {};
+
+  // 즉시 1회(중복 호출은 refresh 내부에서 de-dupe됨)
+  void refreshPublishedEduVideosFromApi({ force: true });
+
+  timer = window.setInterval(() => {
+    void refreshPublishedEduVideosFromApi();
+  }, Math.max(5_000, intervalMs));
+
+  return () => {
+    if (timer != null) window.clearInterval(timer);
+    timer = null;
+  };
+}
+
+/** EduPanel 구독 */
+export function subscribePublishedEduVideos(listener: Listener) {
+  eduListeners.add(listener);
+  return () => {
+    eduListeners.delete(listener);
+  };
+}
+
+/** EduPanel 스냅샷 */
+export function listPublishedEduVideosSnapshot(): PublishedEduVideo[] {
+  return publishedSnapshot;
+}
+
+/* =====================================================================================
+ * Review ↔ Publish 연결 로직
+ * ===================================================================================== */
+
+/**
+ * 로컬 publish upsert(불변 업데이트 + 최신을 앞에)
+ * - MOCK/DUAL/옵티미스틱 API 모두에서 사용 가능
+ */
+function upsertLocalPublished(next: PublishedEduVideo) {
+  const id = next.id;
+  const rest = publishedLocal.filter((v) => v.id !== id);
+  // 최신을 앞으로
+  publishedLocal = [next, ...rest];
+}
+
+/**
+ * review snapshot에서 최종 승인+videoUrl 존재인 항목을 publishedLocal에 seed
+ * - hydrate 직후 1회 호출
+ */
+function seedLocalPublishedFromReviewSnapshot() {
+  for (const it of reviewItemsSnapshot) {
+    if (it.status === "APPROVED" && trimStr(it.videoUrl).length > 0) {
+      const published = toPublishedEduVideo(it, it.approvedAt ?? isoNow());
+      upsertLocalPublished(published);
+    }
+  }
+  rebuildPublishedSnapshotAndEmitIfChanged(true);
+}
+
+/**
+ * ReviewWorkItem → PublishedEduVideo 변환
+ */
+function toPublishedEduVideo(
+  reviewItem: ReviewWorkItem,
+  publishedAt = isoNow()
+): PublishedEduVideo {
+  const sourceContentId = reviewItem.contentId ?? reviewItem.id;
+
+  return {
+    // optimistic/local은 API videoId와 충돌/오인 방지용 prefix 사용
+    id: `local:${sourceContentId}`,
+    sourceContentId,
+    title: reviewItem.title,
+    videoUrl: trimStr(reviewItem.videoUrl),
+    publishedAt,
+    contentCategory: reviewItem.contentCategory,
+    origin: "LOCAL",
+    // progressRef는 서버에 실제 education/video 리소스가 생기기 전에는 알 수 없으므로 없음
+    progressRef: undefined,
+  };
+}
+
 /**
  * upsert 시점에:
  * 1) Creator sync용 보강 필드 주입(updatedAt/reviewedAt/comment 등)
- * 2) 상태 전이(APPROVED + videoUrl 존재)면 Edu publish를 store에서 일원화
+ * 2) 상태 전이(APPROVED + videoUrl 존재)면 publish 이벤트를 "단일 경로"로 처리
  */
 export function upsertReviewItem(next: ReviewWorkItem) {
   const prev = reviewItemsById.get(next.id);
@@ -175,12 +674,18 @@ export function upsertReviewItem(next: ReviewWorkItem) {
   rebuildReviewSnapshot();
   emitReview();
 
-  const becameApproved =
-    (prev?.status ?? "") !== "APPROVED" && normalized.status === "APPROVED";
+  const prevStatus = prev?.status ?? "";
+  const nextStatus = normalized.status ?? "";
+  const prevVideo = trimStr(prev?.videoUrl);
+  const nextVideo = trimStr(normalized.videoUrl);
 
-  // 최종(2차) 승인: videoUrl 존재 시 publish
-  if (becameApproved && (normalized.videoUrl ?? "").trim().length > 0) {
-    publishEduFromReviewItem(normalized);
+  const shouldPublish =
+    nextStatus === "APPROVED" &&
+    nextVideo.length > 0 &&
+    (prevStatus !== "APPROVED" || prevVideo !== nextVideo);
+
+  if (shouldPublish) {
+    void publishEduFromReviewItem(normalized);
   }
 }
 
@@ -254,39 +759,35 @@ export function submitCreatorReviewRequest(input: {
 }
 
 /**
- * 2차(최종) 승인 시 EduPanel 공개용 publish
+ * 2차(최종) 승인 시 Edu 게시 처리
+ *
+ * - MOCK: local publishedLocal만 갱신
+ * - API: (옵션) local optimistic 갱신 + (선택) pushPublished 트리거 + refresh로 서버 진실 동기화
+ * - DUAL: API 목록 + local optimistic 병합 노출
  */
-export function publishEduFromReviewItem(reviewItem: ReviewWorkItem) {
-  const videoUrl = (reviewItem.videoUrl ?? "").trim();
+export async function publishEduFromReviewItem(reviewItem: ReviewWorkItem) {
+  const videoUrl = trimStr(reviewItem.videoUrl);
   if (!videoUrl) return;
 
   const publishedAt = isoNow();
-  const id = `edu-${reviewItem.contentId}`;
+  const next = toPublishedEduVideo(reviewItem, publishedAt);
 
-  const sourceContentId = reviewItem.contentId ?? reviewItem.id;
+  // 1) local optimistic upsert (MOCK/DUAL/API(optimisticInApi=true) 모두에 유효)
+  upsertLocalPublished(next);
+  rebuildPublishedSnapshotAndEmitIfChanged(true);
 
-  const next: PublishedEduVideo = {
-    id,
-    sourceContentId,
-    title: reviewItem.title,
-    videoUrl,
-    publishedAt,
-    contentCategory: reviewItem.contentCategory,
-  };
+  // 2) (선택) 서버 publish 트리거가 필요하면 수행
+  const pusher = publishedConfig.pushPublished;
+  if (pusher) {
+    try {
+      await pusher(next, reviewItem);
+    } catch (e) {
+      console.warn("[reviewFlowStore] pushPublished failed:", e);
+    }
+  }
 
-  // 불변 업데이트: 변경 시에만 새 배열 참조 생성
-  // - 동일 id가 있으면 제거 후 맨 앞에 추가(unshift 동등)
-  publishedEduVideos = [next, ...publishedEduVideos.filter((v) => v.id !== id)];
-  emitEdu();
-}
-
-export function subscribePublishedEduVideos(listener: Listener) {
-  eduListeners.add(listener);
-  return () => {
-    eduListeners.delete(listener);
-  };
-}
-
-export function listPublishedEduVideosSnapshot(): PublishedEduVideo[] {
-  return publishedEduVideos;
+  // 3) API/DUAL 모드에서는 서버 진실을 다시 당겨와 정합성 확보(가능한 경우)
+  if (publishedConfig.mode !== "MOCK" && publishedConfig.fetchPublished) {
+    await refreshPublishedEduVideosFromApi();
+  }
 }

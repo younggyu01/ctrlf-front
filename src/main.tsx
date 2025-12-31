@@ -6,18 +6,20 @@ import App from "./App.tsx";
 import keycloak from "./keycloak";
 import "./index.css";
 
+const isDev = import.meta.env.DEV;
+
 // Keycloak 초기화
 keycloak
   .init({
-    onLoad: "login-required", // 앱 진입 시 무조건 로그인 요구
+    onLoad: "login-required",
     pkceMethod: "S256",
-    checkLoginIframe: false, // Vite/localhost 환경에서 권장
+    checkLoginIframe: false,
   })
   .then((authenticated) => {
-    console.log("Keycloak initialized. Authenticated:", authenticated);
-    console.log("Access Token:", keycloak.token);
+    if (isDev) {
+      console.log("Keycloak initialized. Authenticated:", authenticated);
+    }
 
-    // 초기화 완료 후 렌더링 시작
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
         <BrowserRouter>
@@ -28,19 +30,19 @@ keycloak
 
     // 로그인된 경우에만 토큰 자동 갱신
     if (authenticated) {
-      // 토큰 자동 갱신 (만료 60초 전 갱신)
+      // 만료 60초 전 갱신 시도
       setInterval(() => {
         keycloak
           .updateToken(60)
           .then((refreshed) => {
-            if (refreshed) {
+            if (isDev && refreshed) {
               console.log("Token was refreshed ✔");
             }
           })
           .catch(() => {
             console.error("Failed to refresh token ❌");
           });
-      }, 10000);
+      }, 30_000);
     }
   })
   .catch((err) => {

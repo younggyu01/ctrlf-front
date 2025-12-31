@@ -1357,6 +1357,18 @@
   color: #111827;
 }
 
+.cb-edu-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 24px;
+}
+
+.cb-edu-refresh-btn {
+  margin-left: auto;
+}
+
 /* 세로 스크롤 영역 */
 .cb-edu-body {
   flex: 1;
@@ -1603,10 +1615,52 @@
 }
 
 .cb-edu-watch-back-btn {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  font-size: 12px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 10px;
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+
+  color: #111827;
+  font-size: 14px;
+  line-height: 1;
+
+  cursor: pointer;
+  user-select: none;
+
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10);
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.cb-edu-watch-back-btn:hover {
+  background: #ffffff;
+  border-color: rgba(17, 24, 39, 0.2);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.14);
+  transform: translateY(-1px);
+}
+
+.cb-edu-watch-back-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10);
+}
+
+.cb-edu-watch-back-btn:focus-visible {
+  outline: 2px solid rgba(17, 24, 39, 0.35);
+  outline-offset: 2px;
+}
+
+.cb-edu-watch-back-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
 }
 
 /* 교육 영상 패널 전용 닫기 버튼 크기 조정 */
@@ -1633,7 +1687,8 @@
 }
 
 /* 비디오 영역 전체 박스 */
-.cb-edu-watch-player-wrapper {
+.cb-edu-watch-player-wrapper,
+.cb-edu-watch-video-wrapper {
   position: relative;
   width: 100%;
   flex: 1;
@@ -1667,6 +1722,8 @@
   color: #f9fafb;
   font-size: 13px;
   pointer-events: auto;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
 }
 
 /* 동그란 재생/일시정지 버튼 */
@@ -1702,7 +1759,9 @@
 .cb-edu-watch-footer {
   margin-top: 12px;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 /* 퀴즈 풀기 버튼 기본 스타일 (비활성) */
@@ -1741,7 +1800,6 @@
     margin-top: 8px;
   }
 }
-
 
 /* =========================
    Quiz Panel

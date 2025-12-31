@@ -1,8 +1,12 @@
 // src/components/chatbot/QuizPanel.tsx
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./chatbot.css";
-import { computePanelPosition, type Anchor, type PanelSize } from "../../utils/chat";
+import {
+  computePanelPosition,
+  type Anchor,
+  type PanelSize,
+} from "../../utils/chat";
 import type { QuizCourse, QuizQuestion, WrongAnswerEntry } from "./quizData";
 import {
   normalizeUnlockedFromStatus,
@@ -68,6 +72,134 @@ const DOCK_SAFE_BOTTOM = 60;
 
 const QUIZ_LAYER_Z = 2147483000;
 
+// =========================
+// UI Timeout (EduPanel과 동일 목적)
+// - fetchJson 내부에서 resolve/reject 없이 멈추는 경우(토큰 갱신 대기 등)
+//   UI 레벨에서 짧게 끊고 "에러"로 전환한다.
+// =========================
+const UI_TIMEOUT_DEFAULT_MS = 12_000;
+
+class UiTimeoutError extends Error {
+  readonly label: string;
+  readonly timeoutMs: number;
+
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} 요청 시간이 초과되었습니다. (${Math.round(timeoutMs / 1000)}s)`);
+    this.name = "UiTimeoutError";
+    this.label = label;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function isUiTimeoutError(err: unknown): err is UiTimeoutError {
+  return err instanceof UiTimeoutError;
+}
+
+function makeAbortError(): Error {
+  try {
+    // 브라우저 표준 AbortError
+    return new DOMException("Aborted", "AbortError");
+  } catch {
+    const e = new Error("Aborted");
+    (e as Error & { name: string }).name = "AbortError";
+    return e;
+  }
+}
+
+/**
+ * AbortSignal 없는 Promise도 UI 타임아웃으로 끊기(※ 실제 네트워크 cancel은 불가)
+ * - Promise.race에서 timeout이 먼저 나가면 원본 promise가 나중에 reject 될 수 있으므로
+ *   unhandled rejection 방지용 catch를 꼭 붙인다.
+ */
+function raceUiTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs: number = UI_TIMEOUT_DEFAULT_MS
+): Promise<T> {
+  if (typeof window === "undefined") return promise;
+
+  const p = promise;
+  // 즉시 catch 핸들러 부착(체인 결과는 사용하지 않음) → unhandled 방지
+  p.catch(() => undefined);
+
+  let tid: number | null = null;
+
+  const timeout = new Promise<T>((_, reject) => {
+    tid = window.setTimeout(
+      () => reject(new UiTimeoutError(label, timeoutMs)),
+      timeoutMs
+    );
+  });
+
+  return Promise.race([p, timeout]).finally(() => {
+    if (tid !== null) window.clearTimeout(tid);
+  });
+}
+
+/**
+ * AbortSignal을 넘길 수 있는 작업을 UI 타임아웃으로 끊기 (Abort + Promise.race)
+ * - parentSignal(패널 언마운트 등) abort도 즉시 반영
+ */
+async function raceUiTimeoutWithAbort<T>(
+  label: string,
+  work: (signal: AbortSignal) => Promise<T>,
+  opts?: { timeoutMs?: number; parentSignal?: AbortSignal }
+): Promise<T> {
+  const timeoutMs = opts?.timeoutMs ?? UI_TIMEOUT_DEFAULT_MS;
+
+  // SSR 안전장치
+  if (typeof window === "undefined") {
+    const ac = new AbortController();
+    if (opts?.parentSignal?.aborted) ac.abort();
+    return work(ac.signal);
+  }
+
+  const ac = new AbortController();
+
+  // parent abort → 즉시 abort/reject
+  const parentAbortPromise = new Promise<T>((_, reject) => {
+    const parent = opts?.parentSignal;
+    if (!parent) return;
+    if (parent.aborted) {
+      ac.abort();
+      reject(makeAbortError());
+      return;
+    }
+    parent.addEventListener(
+      "abort",
+      () => {
+        ac.abort();
+        reject(makeAbortError());
+      },
+      { once: true }
+    );
+  });
+
+  let tid: number | null = null;
+  let timedOut = false;
+
+  const p = work(ac.signal);
+  // 즉시 catch 핸들러 부착 → unhandled 방지
+  p.catch(() => undefined);
+
+  const timeout = new Promise<T>((_, reject) => {
+    tid = window.setTimeout(() => {
+      timedOut = true;
+      ac.abort();
+      reject(new UiTimeoutError(label, timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([p, timeout, parentAbortPromise]);
+  } catch (e) {
+    if (timedOut) throw new UiTimeoutError(label, timeoutMs);
+    throw e;
+  } finally {
+    if (tid !== null) window.clearTimeout(tid);
+  }
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -110,7 +242,11 @@ function getMinTop(topSafe: number) {
   return ALLOW_OVERLAP_APP_HEADER ? 0 : topSafe;
 }
 
-function clampPanelPos(pos: { top: number; left: number }, size: Size, minTop: number) {
+function clampPanelPos(
+  pos: { top: number; left: number },
+  size: Size,
+  minTop: number
+) {
   if (typeof window === "undefined") return pos;
 
   const vw = window.innerWidth;
@@ -218,7 +354,9 @@ function toUiDepartmentStats(stats: QuizDepartmentStat[]): DepartmentScore[] {
   }));
 }
 
-function toUiCourses(raw: Awaited<ReturnType<typeof getQuizAvailableEducations>>): QuizCourse[] {
+function toUiCourses(
+  raw: Awaited<ReturnType<typeof getQuizAvailableEducations>>
+): QuizCourse[] {
   return raw.map((r) => ({
     id: r.educationId,
     title: r.title,
@@ -251,6 +389,10 @@ function safeErrorMessage(err: unknown): string {
   if (!err) return "알 수 없는 오류가 발생했습니다.";
   if (typeof err === "string") return err;
 
+  if (isUiTimeoutError(err)) {
+    return `${err.label} 응답이 지연되고 있습니다. 네트워크/로그인 상태를 확인 후 다시 시도해 주세요.`;
+  }
+
   if (err instanceof Error) {
     const msg = err.message?.trim();
     return msg ? msg : "요청 처리 중 오류가 발생했습니다.";
@@ -260,13 +402,30 @@ function safeErrorMessage(err: unknown): string {
     const rec = err as Record<string, unknown>;
     const m = typeof rec.message === "string" ? rec.message : "";
     const e = typeof rec.error === "string" ? rec.error : "";
-    const s = typeof rec.status === "number" ? ` (status: ${rec.status})` : "";
+    const s =
+      typeof rec.status === "number" ? ` (status: ${rec.status})` : "";
     const picked = (m || e).trim();
     if (picked) return `${picked}${s}`;
     if (s) return `요청 처리 중 오류가 발생했습니다.${s}`;
   }
 
   return "요청 처리 중 오류가 발생했습니다.";
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  if (!err) return false;
+  if (typeof err === "object" && err !== null) {
+    const rec = err as Record<string, unknown>;
+    const name = typeof rec.name === "string" ? rec.name : "";
+    const msg = typeof rec.message === "string" ? rec.message : "";
+    if (name === "AbortError") return true;
+    if (msg.toLowerCase().includes("aborted")) return true; // "signal is aborted without reason"
+  }
+  if (err instanceof Error) {
+    if (err.name === "AbortError") return true;
+    if ((err.message ?? "").toLowerCase().includes("aborted")) return true;
+  }
+  return false;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -288,7 +447,8 @@ function pickNumber(v: unknown): number | null {
  */
 function normalizeAttemptNo(dto: unknown): number | null {
   if (!isRecord(dto)) return null;
-  const v = (dto as Record<string, unknown>).attemptNo ?? (dto as Record<string, unknown>)["attempt_no"] ?? (dto as Record<string, unknown>)["attempt-no"];
+  const rec = dto as Record<string, unknown>;
+  const v = rec.attemptNo ?? rec["attempt_no"] ?? rec["attempt-no"];
   return pickNumber(v);
 }
 
@@ -301,13 +461,17 @@ function normalizePassScore(dto: unknown): number | null {
   if (!isRecord(dto)) return null;
 
   const rec = dto as Record<string, unknown>;
-  const result = isRecord(rec.result) ? (rec.result as Record<string, unknown>) : null;
+  const result = isRecord(rec.result)
+    ? (rec.result as Record<string, unknown>)
+    : null;
 
   const v =
     rec.passScore ??
     rec["pass_score"] ??
     rec["pass-score"] ??
-    (result ? (result.passScore ?? result["pass_score"] ?? result["pass-score"]) : null);
+    (result
+      ? (result.passScore ?? result["pass_score"] ?? result["pass-score"])
+      : null);
 
   const n = pickNumber(v);
   if (n === null) return null;
@@ -324,14 +488,21 @@ function normalizeRetryInfo(dto: unknown): RetryInfoUi | null {
   if (!isRecord(dto)) return null;
 
   const rec = dto as Record<string, unknown>;
-  const result = isRecord(rec.result) ? (rec.result as Record<string, unknown>) : null;
+  const result = isRecord(rec.result)
+    ? (rec.result as Record<string, unknown>)
+    : null;
 
   const raw =
     rec.retryInfo ??
     rec["retry-info"] ??
     rec["retry_info"] ??
     rec.retry ??
-    (result ? (result.retryInfo ?? result["retry-info"] ?? result["retry_info"] ?? (result as Record<string, unknown>).retry) : null);
+    (result
+      ? (result.retryInfo ??
+        result["retry-info"] ??
+        result["retry_info"] ??
+        (result as Record<string, unknown>).retry)
+      : null);
 
   if (!isRecord(raw)) return null;
   const r = raw as Record<string, unknown>;
@@ -345,9 +516,13 @@ function normalizeRetryInfo(dto: unknown): RetryInfoUi | null {
           ? r.isRetryable
           : null;
 
-  const remaining = pickNumber(r.remainingAttempts ?? r.remainingCount ?? r.remaining ?? r.left) ?? null;
+  const remaining =
+    pickNumber(
+      r.remainingAttempts ?? r.remainingCount ?? r.remaining ?? r.left
+    ) ?? null;
   const max = pickNumber(r.maxAttempts ?? r.maxCount ?? r.max ?? r.limit) ?? null;
-  const used = pickNumber(r.usedAttempts ?? r.usedCount ?? r.used ?? r.attempted) ?? null;
+  const used =
+    pickNumber(r.usedAttempts ?? r.usedCount ?? r.used ?? r.attempted) ?? null;
 
   const nextAvailableAt =
     typeof r.nextAvailableAt === "string"
@@ -366,11 +541,7 @@ function normalizeRetryInfo(dto: unknown): RetryInfoUi | null {
         : null;
 
   const resolvedCanRetry =
-    canRetry !== null
-      ? canRetry
-      : remaining !== null
-        ? remaining > 0
-        : null;
+    canRetry !== null ? canRetry : remaining !== null ? remaining > 0 : null;
 
   return {
     canRetry: resolvedCanRetry,
@@ -395,7 +566,9 @@ function toRetryInfoUiFromRetryInfoApi(raw: {
     canRetry: raw.canRetry,
     remainingAttempts: raw.remainingAttempts ?? null,
     maxAttempts: raw.maxAttempts ?? null,
-    usedAttempts: Number.isFinite(raw.currentAttemptCount) ? raw.currentAttemptCount : null,
+    usedAttempts: Number.isFinite(raw.currentAttemptCount)
+      ? raw.currentAttemptCount
+      : null,
     nextAvailableAt: null,
     reason: null,
     _raw: raw,
@@ -416,7 +589,8 @@ const getQuizPageSize = (panelWidth: number): number => {
   return 5;
 };
 
-const range = (count: number): number[] => Array.from({ length: count }, (_, idx) => idx);
+const range = (count: number): number[] =>
+  Array.from({ length: count }, (_, idx) => idx);
 
 function formatRemaining(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -436,7 +610,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   zIndex,
   initialCourseId,
 }) => {
-  const hasDOM = typeof window !== "undefined" && typeof document !== "undefined";
+  const hasDOM =
+    typeof window !== "undefined" && typeof document !== "undefined";
 
   const initialTopSafe = hasDOM ? readAppHeaderSafeTop() : 0;
   const topSafeRef = useRef<number>(initialTopSafe);
@@ -446,7 +621,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   const [panelPos, setPanelPos] = useState(() => {
     if (!hasDOM) return { top: 80, left: 120 };
 
-    const pos = anchor ? computePanelPosition(anchor, INITIAL_SIZE) : computeDockFallbackPos(INITIAL_SIZE);
+    const pos = anchor
+      ? computePanelPosition(anchor, INITIAL_SIZE)
+      : computeDockFallbackPos(INITIAL_SIZE);
     return clampPanelPos(pos, INITIAL_SIZE, getMinTop(initialTopSafe));
   });
 
@@ -488,16 +665,26 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   const [courses, setCourses] = useState<QuizCourse[]>([]);
 
   // attempt details (on-demand)
-  const [attemptsByCourseId, setAttemptsByCourseId] = useState<Record<string, QuizAttemptSummary[] | undefined>>({});
+  const [attemptsByCourseId, setAttemptsByCourseId] = useState<
+    Record<string, QuizAttemptSummary[] | undefined>
+  >({});
   const attemptsLoadingRef = useRef<Set<string>>(new Set());
 
+  // attempts 로딩 실패를 숨기지 않기 위한 에러 상태
+  const [attemptsErrorByCourseId, setAttemptsErrorByCourseId] = useState<
+    Record<string, string | undefined>
+  >({});
+
   // 서버 DTO meta 캐시(대시보드/solve에 그대로 표시)
-  const [courseMetaById, setCourseMetaById] = useState<Record<string, CourseMeta>>({});
+  const [courseMetaById, setCourseMetaById] = useState<
+    Record<string, CourseMeta>
+  >({});
 
   // dashboard selection
   const [deptPage, setDeptPage] = useState(0);
   const [quizPage, setQuizPage] = useState(0);
-  const [activeAttemptIndexByCourseId, setActiveAttemptIndexByCourseId] = useState<Record<string, number>>({});
+  const [activeAttemptIndexByCourseId, setActiveAttemptIndexByCourseId] =
+    useState<Record<string, number>>({});
 
   // mode
   const [mode, setMode] = useState<PanelMode>("dashboard");
@@ -522,7 +709,18 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteModal, setNoteModal] = useState<WrongAnswerEntry | null>(null);
 
+  // 오답노트 로딩 레이스 방지용 시퀀스
+  const noteLoadSeqRef = useRef(0);
+
   const [resultMessage, setResultMessage] = useState<ResultMessage | null>(null);
+
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   // timer/remaining ref (unload/visibility 시 최신값 확보 + 이벤트 리스너 재바인딩 방지)
   const timeLimitRef = useRef<number>(timeLimit);
@@ -534,6 +732,22 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     remainingRef.current = remainingSeconds;
   }, [remainingSeconds]);
 
+  // leave 중복 방지 (attemptId 단위)
+  const leaveOnceRef = useRef<Set<string>>(new Set());
+
+  // timer pull/push in-flight 가드(중첩 호출 방지)
+  const timerPullInFlightRef = useRef(false);
+  const timerPushInFlightRef = useRef(false);
+
+  // solve meta 안정화(값이 한번 내려오면 UI가 덜 흔들리도록 latch)
+  const solveLatchedMetaRef = useRef<{
+    passScore: number | null;
+    retry: RetryInfoUi | null;
+  }>({
+    passScore: null,
+    retry: null,
+  });
+
   // 모드 변경될 때마다 상위에 "시험 모드 여부" 전달
   useEffect(() => {
     onExamModeChange?.(mode === "solve");
@@ -544,9 +758,12 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     return () => onExamModeChange?.(false);
   }, [onExamModeChange]);
 
-  const showResultMessage = useCallback((type: ResultType, title: string, description?: string) => {
-    setResultMessage({ type, title, description });
-  }, []);
+  const showResultMessage = useCallback(
+    (type: ResultType, title: string, description?: string) => {
+      setResultMessage({ type, title, description });
+    },
+    []
+  );
 
   useEffect(() => {
     if (!resultMessage) return;
@@ -580,15 +797,28 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   // =========================
   // Dashboard API 로딩/리프레시
   // =========================
+  const dashSeqRef = useRef(0);
+
   const refreshDashboard = useCallback(
     async (signal?: AbortSignal) => {
+      const seq = ++dashSeqRef.current;
+
       try {
         setLoadError(null);
 
-        const [deptRaw, courseRaw] = await Promise.all([
-          getQuizDepartmentStats({ signal }),
-          getQuizAvailableEducations({ signal }),
-        ]);
+        const [deptRaw, courseRaw] = await raceUiTimeoutWithAbort(
+          "퀴즈 대시보드",
+          (s) =>
+            Promise.all([
+              getQuizDepartmentStats({ signal: s }),
+              getQuizAvailableEducations({ signal: s }),
+            ]),
+          { timeoutMs: 12_000, parentSignal: signal }
+        );
+
+        // 중간에 abort되었거나 더 최신 요청이 있으면 state 반영 금지
+        if (signal?.aborted) return;
+        if (seq !== dashSeqRef.current) return;
 
         const deptUi = toUiDepartmentStats(deptRaw);
         const courseUi = toUiCourses(courseRaw);
@@ -613,6 +843,12 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
         setLoading(false);
       } catch (e) {
+        // Abort는 "실패"가 아니라 정상 중단이므로 UI 에러로 올리지 않음
+        if (signal?.aborted || isAbortLikeError(e)) {
+          return;
+        }
+        if (seq !== dashSeqRef.current) return;
+
         setLoading(false);
         setLoadError(safeErrorMessage(e));
       }
@@ -649,76 +885,127 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   // =========================
   // attempt list + retry-info on-demand
   // =========================
-  const ensureAttemptsLoaded = async (courseId: string) => {
-    const hasAttemptsKey = Object.prototype.hasOwnProperty.call(attemptsByCourseId, courseId);
-    const hasRetryMeta = courseMetaById[courseId]?.retryInfo !== undefined;
+  const ensureAttemptsLoaded = useCallback(
+    async (courseId: string, opts?: { force?: boolean }) => {
+      const force = Boolean(opts?.force);
 
-    if (hasAttemptsKey && hasRetryMeta) return;
-    if (attemptsLoadingRef.current.has(courseId)) return;
+      const hasAttemptsKey = Object.prototype.hasOwnProperty.call(
+        attemptsByCourseId,
+        courseId
+      );
+      const hasRetryMeta = courseMetaById[courseId]?.retryInfo !== undefined;
 
-    attemptsLoadingRef.current.add(courseId);
-    try {
-      const [list, retryInfoApi] = await Promise.all([
-        hasAttemptsKey ? Promise.resolve(attemptsByCourseId[courseId] ?? []) : getQuizEducationAttempts(courseId),
-        hasRetryMeta ? Promise.resolve(null) : getQuizRetryInfo(courseId).catch(() => null),
-      ]);
+      const prevErr = attemptsErrorByCourseId[courseId];
 
-      if (!hasAttemptsKey) {
-        setAttemptsByCourseId((prev) => ({ ...prev, [courseId]: list }));
-      }
+      // ✅ 이미 정상 로딩 완료(에러 없음) 상태면 스킵
+      if (!force && hasAttemptsKey && hasRetryMeta && !prevErr) return;
 
-      if (retryInfoApi) {
-        const retryUi = toRetryInfoUiFromRetryInfoApi(retryInfoApi);
-        setCourseMetaById((prev) => ({
-          ...prev,
-          [courseId]: {
-            passScore: prev[courseId]?.passScore ?? null,
-            retryInfo: retryUi,
-          },
-        }));
-      }
+      if (attemptsLoadingRef.current.has(courseId)) return;
 
-      if (Array.isArray(list) && list.length > 0) {
-        const latest = list.reduce<QuizAttemptSummary>((acc, cur) => {
-          const a = normalizeAttemptNo(acc) ?? -1;
-          const b = normalizeAttemptNo(cur) ?? -1;
-          return b >= a ? cur : acc;
-        }, list[0]);
+      attemptsLoadingRef.current.add(courseId);
+      try {
+        setAttemptsErrorByCourseId((prev) => ({ ...prev, [courseId]: undefined }));
 
-        const passScore = normalizePassScore(latest);
-        const retryInfo = normalizeRetryInfo(latest);
+        // ✅ 에러가 있었거나 force면 attempts도 다시 가져온다
+        const needAttempts = force || !hasAttemptsKey || Boolean(prevErr);
+        const needRetryMeta = force || !hasRetryMeta;
 
-        if (passScore !== null || retryInfo !== null) {
+        const [list, retryInfoApi] = await Promise.all([
+          needAttempts
+            ? raceUiTimeout(
+              "응시 내역 조회",
+              getQuizEducationAttempts(courseId),
+              10_000
+            )
+            : Promise.resolve(attemptsByCourseId[courseId] ?? []),
+
+          needRetryMeta
+            ? raceUiTimeout("재응시 정보 조회", getQuizRetryInfo(courseId), 8_000)
+            : Promise.resolve(null),
+        ]);
+
+        if (needAttempts) {
+          setAttemptsByCourseId((prev) => ({ ...prev, [courseId]: list }));
+        }
+
+        if (retryInfoApi) {
+          const retryUi = toRetryInfoUiFromRetryInfoApi(retryInfoApi);
           setCourseMetaById((prev) => ({
             ...prev,
             [courseId]: {
-              passScore: passScore ?? prev[courseId]?.passScore ?? null,
-              retryInfo: retryInfo ?? prev[courseId]?.retryInfo ?? null,
+              passScore: prev[courseId]?.passScore ?? null,
+              retryInfo: retryUi,
             },
           }));
         }
+
+        if (Array.isArray(list) && list.length > 0) {
+          const latest = list.reduce<QuizAttemptSummary>((acc, cur) => {
+            const a = normalizeAttemptNo(acc) ?? -1;
+            const b = normalizeAttemptNo(cur) ?? -1;
+            return b >= a ? cur : acc;
+          }, list[0]);
+
+          const passScore = normalizePassScore(latest);
+          const retryInfo = normalizeRetryInfo(latest);
+
+          if (passScore !== null || retryInfo !== null) {
+            setCourseMetaById((prev) => ({
+              ...prev,
+              [courseId]: {
+                passScore: passScore ?? prev[courseId]?.passScore ?? null,
+                retryInfo: retryInfo ?? prev[courseId]?.retryInfo ?? null,
+              },
+            }));
+          }
+        }
+      } catch (e) {
+        setAttemptsErrorByCourseId((prev) => ({
+          ...prev,
+          [courseId]: safeErrorMessage(e),
+        }));
+
+        // ✅ “빈 카드 고정”은 유지하되, 위에서 prevErr/force로 재시도 가능해졌음
+        setAttemptsByCourseId((prev) => ({
+          ...prev,
+          [courseId]: prev[courseId] ?? [],
+        }));
+
+        throw e;
+      } finally {
+        attemptsLoadingRef.current.delete(courseId);
       }
-    } catch {
-      setAttemptsByCourseId((prev) => ({ ...prev, [courseId]: prev[courseId] ?? [] }));
-    } finally {
-      attemptsLoadingRef.current.delete(courseId);
-    }
-  };
+    },
+    [attemptsByCourseId, courseMetaById, attemptsErrorByCourseId]
+  );
 
   // =========================
-  // leave 기록(문서 경로 포함)
+  // leave 기록(문서 경로 포함) + 중복 방지
   // =========================
   const recordLeave = useCallback(
-    (attemptId: string, reason: "CLOSE" | "HIDDEN" | "UNLOAD" | "BACK", keepalive?: boolean) => {
+    (
+      attemptId: string,
+      reason: "CLOSE" | "HIDDEN" | "UNLOAD" | "BACK",
+      keepalive?: boolean
+    ) => {
+      if (!attemptId) return Promise.resolve(undefined);
+      const key = `${attemptId}:${reason}`;
+      if (leaveOnceRef.current.has(key)) return Promise.resolve(undefined);
+      leaveOnceRef.current.add(key);
+
       const nowIso = new Date().toISOString();
       const tl = timeLimitRef.current;
       const rs = remainingRef.current;
       const leaveSeconds = tl > 0 ? Math.max(0, Math.round(tl - rs)) : undefined;
 
-      return postQuizLeave(
-        attemptId,
-        { timestamp: nowIso, reason, leaveSeconds },
-        keepalive ? { keepalive: true } : undefined
+      return raceUiTimeout(
+        "이탈 기록",
+        postQuizLeave(
+          attemptId,
+          { timestamp: nowIso, reason, leaveSeconds },
+          keepalive ? { keepalive: true } : undefined
+        ),
+        3_000
       ).catch(() => undefined);
     },
     []
@@ -748,14 +1035,23 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         const contentHeight = contentEl.offsetHeight;
         const minTop = getMinTop(topSafeRef.current);
 
-        const desiredHeight = Math.min(Math.max(contentHeight + 40, MIN_HEIGHT), window.innerHeight - 40);
+        const desiredHeight = Math.min(
+          Math.max(contentHeight + 40, MIN_HEIGHT),
+          window.innerHeight - 40
+        );
 
         setSize((prev) => {
           if (Math.abs(prev.height - desiredHeight) < 2) return prev;
           return { ...prev, height: desiredHeight };
         });
 
-        setPanelPos((prev) => clampPanelPos(prev, { width: sizeRef.current.width, height: desiredHeight }, minTop));
+        setPanelPos((prev) =>
+          clampPanelPos(
+            prev,
+            { width: sizeRef.current.width, height: desiredHeight },
+            minTop
+          )
+        );
       });
     };
 
@@ -813,7 +1109,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         let newLeft = resizeState.startLeft;
 
         const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
-        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - minTop - EDGE_MARGIN);
+        const maxHeight = Math.max(
+          MIN_HEIGHT,
+          window.innerHeight - minTop - EDGE_MARGIN
+        );
 
         const proposedWidthForW = resizeState.startWidth - dx;
         const proposedHeightForN = resizeState.startHeight - dy;
@@ -841,7 +1140,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         }
 
         const nextSize = { width: clampedWidth, height: clampedHeight };
-        const clampedPos = clampPanelPos({ top: newTop, left: newLeft }, nextSize, minTop);
+        const clampedPos = clampPanelPos(
+          { top: newTop, left: newLeft },
+          nextSize,
+          minTop
+        );
 
         setSize(nextSize);
         setPanelPos(clampedPos);
@@ -923,7 +1226,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   // 페이지 계산
   // =========================
   const deptPageSize = getDeptPageSize(size.width);
-  const totalDeptPages = Math.max(1, Math.ceil(departments.length / deptPageSize)) || 1;
+  const totalDeptPages = Math.max(
+    1,
+    Math.ceil(departments.length / deptPageSize)
+  ) || 1;
   const safeDeptPage = Math.min(deptPage, totalDeptPages - 1);
   const deptStart = safeDeptPage * deptPageSize;
   const visibleDepartments = departments.slice(deptStart, deptStart + deptPageSize);
@@ -933,6 +1239,22 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   const safeQuizPage = Math.min(quizPage, totalQuizPages - 1);
   const quizStart = safeQuizPage * quizPageSize;
   const visibleCourses = courses.slice(quizStart, quizStart + quizPageSize);
+
+  const visibleCourseIdsKey = useMemo(
+    () => visibleCourses.map((c) => c.id).join("|"),
+    [visibleCourses]
+  );
+
+  // (표시 안정화) 현재 페이지에 보이는 카드들은 meta/attempt를 미리 당겨서 passScore/retry-info 공란을 최소화
+  useEffect(() => {
+    if (!hasDOM) return;
+    if (mode !== "dashboard") return;
+    if (!visibleCourseIdsKey) return;
+
+    for (const c of visibleCourses) {
+      ensureAttemptsLoaded(c.id).catch(() => undefined);
+    }
+  }, [hasDOM, mode, visibleCourseIdsKey, visibleCourses, ensureAttemptsLoaded]);
 
   const extraWidth = Math.max(0, size.width - INITIAL_SIZE.width);
   const baseCardHeight = 150;
@@ -958,7 +1280,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
   const handleToggleAttempt = async (courseId: string, index: number) => {
     setActiveAttemptIndexByCourseId((prev) => ({ ...prev, [courseId]: index }));
-    await ensureAttemptsLoaded(courseId);
+    try {
+      await ensureAttemptsLoaded(courseId, { force: true });
+    } catch (e) {
+      showResultMessage("warning", "응시 내역 조회 실패", safeErrorMessage(e));
+    }
   };
 
   // =========================
@@ -968,7 +1294,19 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   const pendingSaveTimerRef = useRef<number | null>(null);
   const lastSavedFingerprintRef = useRef<string>("");
 
-  const buildAnswerPayload = useCallback((): { answers: Array<{ questionId: string; userSelectedIndex: number }> } => {
+  // 새 attempt(또는 solve 진입)마다 임시저장 fingerprint 리셋 + 남은 디바운스 타이머 정리
+  useEffect(() => {
+    lastSavedFingerprintRef.current = "";
+
+    if (typeof window !== "undefined" && pendingSaveTimerRef.current) {
+      window.clearTimeout(pendingSaveTimerRef.current);
+      pendingSaveTimerRef.current = null;
+    }
+  }, [solve?.attemptId]);
+
+  const buildAnswerPayload = useCallback((): {
+    answers: Array<{ questionId: string; userSelectedIndex: number }>;
+  } => {
     if (!solve) return { answers: [] };
     const answers = solve.questions
       .map((q, idx) => {
@@ -976,13 +1314,15 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         if (sel === undefined || sel === null || sel < 0) return null;
         return { questionId: q.id, userSelectedIndex: sel };
       })
-      .filter((v): v is { questionId: string; userSelectedIndex: number } => v !== null);
+      .filter(
+        (v): v is { questionId: string; userSelectedIndex: number } => v !== null
+      );
 
     return { answers };
   }, [solve, selectedAnswers]);
 
   const flushSaveNow = useCallback(
-    async (opts?: { keepalive?: boolean }) => {
+    async (opts?: { keepalive?: boolean; silent?: boolean }) => {
       if (!solve) return;
       const payload = buildAnswerPayload();
 
@@ -991,21 +1331,30 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         return;
       }
 
-      setSaveState({ status: "saving" });
+      if (!opts?.silent) setSaveState({ status: "saving" });
       try {
         const tl = timeLimitRef.current;
         const rs = remainingRef.current;
         const elapsed = tl > 0 ? Math.max(0, Math.round(tl - rs)) : undefined;
 
-        const res = await saveQuizAnswers(
-          solve.attemptId,
-          { answers: payload.answers, elapsedSeconds: elapsed },
-          opts?.keepalive ? { keepalive: true } : undefined
+        const res = await raceUiTimeout(
+          "임시 저장",
+          saveQuizAnswers(
+            solve.attemptId,
+            { answers: payload.answers, elapsedSeconds: elapsed },
+            opts?.keepalive ? { keepalive: true } : undefined
+          ),
+          8_000
         );
         lastSavedFingerprintRef.current = fingerprint;
-        setSaveState({ status: "saved", savedAt: res?.savedAt });
+
+        if (!opts?.silent) {
+          setSaveState({ status: "saved", savedAt: res?.savedAt });
+        }
       } catch (e) {
-        setSaveState({ status: "error", message: safeErrorMessage(e) });
+        if (!opts?.silent) {
+          setSaveState({ status: "error", message: safeErrorMessage(e) });
+        }
       }
     },
     [solve, buildAnswerPayload]
@@ -1015,7 +1364,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     if (!hasDOM) return;
     if (!solve) return;
 
-    if (pendingSaveTimerRef.current) window.clearTimeout(pendingSaveTimerRef.current);
+    if (pendingSaveTimerRef.current)
+      window.clearTimeout(pendingSaveTimerRef.current);
     pendingSaveTimerRef.current = window.setTimeout(() => {
       flushSaveNow().catch(() => undefined);
     }, saveDebounceMs);
@@ -1024,39 +1374,115 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   useEffect(() => {
     if (!hasDOM) return;
     return () => {
-      if (pendingSaveTimerRef.current) window.clearTimeout(pendingSaveTimerRef.current);
+      if (pendingSaveTimerRef.current)
+        window.clearTimeout(pendingSaveTimerRef.current);
       pendingSaveTimerRef.current = null;
     };
   }, [hasDOM]);
 
-  // solve 중: 1초 tick (로컬), 10초마다 서버 sync
+  // =========================
+  // Solve: 타이머 동기(로컬 tick + 서버 push/pull)
+  // =========================
+  const TIMER_PULL_INTERVAL_MS = 15_000;
+  const TIMER_PUSH_INTERVAL_MS = 10_000;
+
   useEffect(() => {
     if (!hasDOM) return;
     if (!solve) return;
 
     autoSubmitOnceRef.current = false;
 
+    // Set 순회 중 delete 방지
+    for (const k of Array.from(leaveOnceRef.current)) {
+      if (k.startsWith(`${solve.attemptId}:`)) leaveOnceRef.current.delete(k);
+    }
+
+    solveLatchedMetaRef.current = { passScore: null, retry: null };
+
     const tick = window.setInterval(() => {
-      setRemainingSeconds((prev) => Math.max(0, prev - 1));
+      setRemainingSeconds((prev) => {
+        const next = Math.max(0, prev - 1);
+        return next;
+      });
     }, 1000);
 
-    const sync = window.setInterval(async () => {
+    const push = window.setInterval(() => {
+      if (timerPushInFlightRef.current) return;
+      timerPushInFlightRef.current = true;
+
+      const rs = Math.max(0, remainingRef.current);
+      raceUiTimeout(
+        "타이머 저장",
+        putQuizTimer(solve.attemptId, { remainingSeconds: rs }),
+        4_000
+      )
+        .catch(() => undefined)
+        .finally(() => {
+          timerPushInFlightRef.current = false;
+        });
+    }, TIMER_PUSH_INTERVAL_MS);
+
+    const pull = window.setInterval(async () => {
+      if (timerPullInFlightRef.current) return;
+      timerPullInFlightRef.current = true;
+
       try {
-        const t = await getQuizTimer(solve.attemptId);
+        const t = await raceUiTimeout(
+          "타이머 조회",
+          getQuizTimer(solve.attemptId),
+          5_000
+        );
+
         setTimeLimit(t.timeLimit);
         setServerExpired(t.isExpired);
 
-        setRemainingSeconds((prev) => (Math.abs(prev - t.remainingSeconds) >= 2 ? t.remainingSeconds : prev));
+        setRemainingSeconds((prev) =>
+          Math.abs(prev - t.remainingSeconds) >= 2 ? t.remainingSeconds : prev
+        );
       } catch {
         // ignore
+      } finally {
+        timerPullInFlightRef.current = false;
       }
-    }, 10_000);
+    }, TIMER_PULL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(tick);
-      window.clearInterval(sync);
+      window.clearInterval(push);
+      window.clearInterval(pull);
     };
   }, [hasDOM, solve]);
+
+  // =========================
+  // Solve: passScore/retry-info latch (표시 안정화)
+  // =========================
+  const solvePassScoreFromServer = solve
+    ? (solve.passScore ?? courseMetaById[solve.course.id]?.passScore ?? null)
+    : null;
+  const solveRetryInfoFromServer = solve
+    ? (solve.retryInfo ?? courseMetaById[solve.course.id]?.retryInfo ?? null)
+    : null;
+
+  useEffect(() => {
+    if (!solve) {
+      solveLatchedMetaRef.current = { passScore: null, retry: null };
+      return;
+    }
+
+    if (
+      solvePassScoreFromServer !== null &&
+      Number.isFinite(solvePassScoreFromServer)
+    ) {
+      solveLatchedMetaRef.current.passScore = solvePassScoreFromServer;
+    }
+    if (solveRetryInfoFromServer) {
+      solveLatchedMetaRef.current.retry = solveRetryInfoFromServer;
+    }
+  }, [solve, solvePassScoreFromServer, solveRetryInfoFromServer]);
+
+  const solvePassScoreDisplay =
+    solveLatchedMetaRef.current.passScore ?? DEFAULT_PASSING_SCORE;
+  const solveRetryDisplay = solveLatchedMetaRef.current.retry;
 
   // 타임아웃 자동 제출(1회만)
   useEffect(() => {
@@ -1073,7 +1499,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         await flushSaveNow();
 
         const payload = buildAnswerPayload();
-        const res = await submitQuizAnswers(solve.attemptId, payload);
+        const res = await raceUiTimeout(
+          "퀴즈 자동 제출",
+          submitQuizAnswers(solve.attemptId, payload),
+          15_000
+        );
 
         const passScore =
           normalizePassScore(res) ??
@@ -1097,31 +1527,53 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
           }));
         }
 
-        const retryDesc =
-          retryInfo
-            ? ` / 재응시 ${retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"} (남은 ${retryInfo.remainingAttempts ?? "-"} / ${retryInfo.maxAttempts ?? "-"})`
-            : "";
+        const retryDesc = retryInfo
+          ? ` / 재응시 ${
+              retryInfo.canRetry === null
+                ? "-"
+                : retryInfo.canRetry
+                  ? "가능"
+                  : "불가"
+            } (남은 ${retryInfo.remainingAttempts ?? "-"} / ${retryInfo.maxAttempts ?? "-"})`
+          : "";
 
-        showResultMessage(
-          res.passed ? "success" : "info",
-          "시간 만료로 자동 제출되었습니다",
-          `점수 ${Math.round(res.score)}점 (정답 ${res.correctCount}/${res.totalCount})${passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""}${retryDesc}`
-        );
-
-        await refreshDashboard();
+        if (aliveRef.current) {
+          showResultMessage(
+            res.passed ? "success" : "info",
+            "시간 만료로 자동 제출되었습니다",
+            `점수 ${Math.round(res.score)}점 (정답 ${res.correctCount}/${res.totalCount})${
+              passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""
+            }${retryDesc}`
+          );
+        }
+        if (aliveRef.current) {
+          await refreshDashboard();
+        }
       } catch (e) {
         showResultMessage("warning", "자동 제출 실패", safeErrorMessage(e));
       } finally {
-        setMode("dashboard");
-        setSolve(null);
-        setSelectedAnswers([]);
-        setSaveState({ status: "idle" });
-        setTimeLimit(0);
-        setRemainingSeconds(0);
-        setServerExpired(false);
+        // ✅ no-unsafe-finally: finally 내부 return 금지 → 조건부 실행으로 처리
+        if (aliveRef.current) {
+          setMode("dashboard");
+          setSolve(null);
+          setSelectedAnswers([]);
+          setSaveState({ status: "idle" });
+          setTimeLimit(0);
+          setRemainingSeconds(0);
+          setServerExpired(false);
+        }
       }
     })();
-  }, [serverExpired, remainingSeconds, solve, flushSaveNow, buildAnswerPayload, courseMetaById, refreshDashboard, showResultMessage]);
+  }, [
+    serverExpired,
+    remainingSeconds,
+    solve,
+    flushSaveNow,
+    buildAnswerPayload,
+    courseMetaById,
+    refreshDashboard,
+    showResultMessage,
+  ]);
 
   // 페이지 이탈/숨김 시: 저장 + 타이머/leave 기록(keepalive)
   useEffect(() => {
@@ -1133,19 +1585,23 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     const onVisibility = () => {
       if (document.visibilityState !== "hidden") return;
 
-      flushSaveNow({ keepalive: true }).catch(() => undefined);
+      flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
 
       const rs = Math.max(0, remainingRef.current);
-      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(
+        () => undefined
+      );
 
       recordLeave(attemptId, "HIDDEN", true);
     };
 
     const onBeforeUnload = () => {
-      flushSaveNow({ keepalive: true }).catch(() => undefined);
+      flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
 
       const rs = Math.max(0, remainingRef.current);
-      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(
+        () => undefined
+      );
 
       recordLeave(attemptId, "UNLOAD", true);
     };
@@ -1159,11 +1615,40 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     };
   }, [hasDOM, solve, flushSaveNow, recordLeave]);
 
+  // solve 언마운트/패널 강제 제거 대비
+  useEffect(() => {
+    if (!hasDOM) return;
+    if (!solve) return;
+
+    const attemptId = solve.attemptId;
+
+    return () => {
+      flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
+
+      const rs = Math.max(0, remainingRef.current);
+      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(
+        () => undefined
+      );
+
+      recordLeave(attemptId, "CLOSE", true);
+    };
+  }, [hasDOM, solve, flushSaveNow, recordLeave]);
+
   // =========================
   // 액션: 퀴즈 시작/제출/노트
   // =========================
   const handleStartQuiz = async (course: QuizCourse) => {
     if (!course.unlocked) return;
+
+    // 방어: 합격이면 재응시/시작은 막고, 오답노트만 유도
+    if (course.passed === true) {
+      showResultMessage(
+        "info",
+        "이미 합격 처리되었습니다",
+        "오답노트에서 틀린 문제를 확인해 주세요."
+      );
+      return;
+    }
 
     try {
       setSaveState({ status: "idle" });
@@ -1171,9 +1656,13 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       setTimeLimit(0);
       setRemainingSeconds(0);
 
-      // 시작 전 retry-info를 확보(문서 경로 사용 + UI gating 품질)
+      // 시작 전 retry-info 확보(실패 시도 숨기지 않음: 실패하면 메시지로 안내)
       try {
-        const r = await getQuizRetryInfo(course.id);
+        const r = await raceUiTimeout(
+          "재응시 정보 조회",
+          getQuizRetryInfo(course.id),
+          7_000
+        );
         setCourseMetaById((prev) => ({
           ...prev,
           [course.id]: {
@@ -1182,16 +1671,22 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
           },
         }));
 
-        // “명시적으로 재응시 불가”가 내려오면, 호출 전에 컷(백엔드 정책과 UX 일치)
         if (r.canRetry === false) {
-          showResultMessage("info", "재응시가 불가능합니다", "남은 횟수를 확인하거나 관리자에게 문의해 주세요.");
+          showResultMessage(
+            "info",
+            "재응시가 불가능합니다",
+            "남은 횟수를 확인하거나 관리자에게 문의해 주세요."
+          );
           return;
         }
-      } catch {
-        // ignore
+      } catch (e) {
+        showResultMessage("warning", "재응시 정보 조회 실패", safeErrorMessage(e));
+        // 정책상 retry-info가 없어도 start 자체는 가능할 수 있으므로 진행은 계속
       }
 
-      const started = await startQuiz(course.id);
+      const started = await raceUiTimeout("퀴즈 시작", startQuiz(course.id), 12_000);
+      if (!aliveRef.current) return;
+
       const questions = toUiQuestions(started.questions);
 
       const startedPassScore = normalizePassScore(started);
@@ -1210,17 +1705,21 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
       const savedMap = new Map<string, number>();
       if (Array.isArray(started.savedAnswers)) {
-        for (const a of started.savedAnswers) savedMap.set(a.questionId, a.userSelectedIndex);
+        for (const a of started.savedAnswers)
+          savedMap.set(a.questionId, a.userSelectedIndex);
       }
 
       const mergedQuestions: QuizQuestion[] = questions.map((q) => {
         const restored = savedMap.get(q.id);
-        const userSel = restored !== undefined ? restored : q.userSelectedIndex ?? null;
+        const userSel =
+          restored !== undefined ? restored : q.userSelectedIndex ?? null;
         return { ...q, userSelectedIndex: userSel };
       });
 
       const initialSelected = mergedQuestions.map((q) =>
-        q.userSelectedIndex !== null && q.userSelectedIndex !== undefined ? q.userSelectedIndex : -1
+        q.userSelectedIndex !== null && q.userSelectedIndex !== undefined
+          ? q.userSelectedIndex
+          : -1
       );
 
       setSolve({
@@ -1237,7 +1736,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       ensureAttemptsLoaded(course.id).catch(() => undefined);
 
       try {
-        const t = await getQuizTimer(started.attemptId);
+        const t = await raceUiTimeout(
+          "타이머 조회",
+          getQuizTimer(started.attemptId),
+          6_000
+        );
         setTimeLimit(t.timeLimit);
         setRemainingSeconds(t.remainingSeconds);
         setServerExpired(t.isExpired);
@@ -1269,7 +1772,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     const total = solve.questions.length;
 
     if (answeredCount < total) {
-      showResultMessage("warning", "답변이 완료되지 않았습니다", "모든 문항에 대해 보기 하나를 선택해 주세요.");
+      showResultMessage(
+        "warning",
+        "답변이 완료되지 않았습니다",
+        "모든 문항에 대해 보기 하나를 선택해 주세요."
+      );
       return;
     }
 
@@ -1281,7 +1788,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       await flushSaveNow();
 
       const payload = buildAnswerPayload();
-      const res = await submitQuizAnswers(solve.attemptId, payload);
+      const res = await raceUiTimeout(
+        "퀴즈 제출",
+        submitQuizAnswers(solve.attemptId, payload),
+        15_000
+      );
 
       const passScore =
         normalizePassScore(res) ??
@@ -1305,15 +1816,18 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         }));
       }
 
-      const retryDesc =
-        retryInfo
-          ? ` / 재응시 ${retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"} (남은 ${retryInfo.remainingAttempts ?? "-"} / ${retryInfo.maxAttempts ?? "-"})`
-          : "";
+      const retryDesc = retryInfo
+        ? ` / 재응시 ${
+            retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"
+          } (남은 ${retryInfo.remainingAttempts ?? "-"} / ${retryInfo.maxAttempts ?? "-"})`
+        : "";
 
       showResultMessage(
         res.passed ? "success" : "info",
         res.passed ? "합격입니다" : "제출 완료",
-        `점수 ${Math.round(res.score)}점 (정답 ${res.correctCount}/${res.totalCount}, 오답 ${res.wrongCount})${passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""}${retryDesc}`
+        `점수 ${Math.round(res.score)}점 (정답 ${res.correctCount}/${res.totalCount}, 오답 ${res.wrongCount})${
+          passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""
+        }${retryDesc}`
       );
 
       await refreshDashboard();
@@ -1341,7 +1855,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       await flushSaveNow();
       if (solve) {
         const rs = Math.max(0, remainingRef.current);
-        await putQuizTimer(solve.attemptId, { remainingSeconds: rs }).catch(() => undefined);
+        await putQuizTimer(solve.attemptId, { remainingSeconds: rs }).catch(
+          () => undefined
+        );
         await recordLeave(solve.attemptId, "BACK", false);
       }
     } catch {
@@ -1361,8 +1877,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   const handleOpenNoteClick = async (course: QuizCourse) => {
     if (!course.unlocked) return;
 
+    // ✅ seq를 try 밖으로 빼서 finally에서도 접근 가능하게
+    let seq = 0;
+
     try {
-      await ensureAttemptsLoaded(course.id);
+      await ensureAttemptsLoaded(course.id, { force: true });
       const list = attemptsByCourseId[course.id] ?? [];
       if (list.length === 0) {
         showResultMessage("info", "오답노트 안내", "제출된 응시 내역이 없습니다.");
@@ -1374,7 +1893,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
       const pickedStatus = (picked?.status ?? "").toUpperCase();
       if (!picked || pickedStatus !== "SUBMITTED") {
-        showResultMessage("info", "오답노트 안내", "해당 회차는 아직 제출되지 않았습니다.");
+        showResultMessage(
+          "info",
+          "오답노트 안내",
+          "해당 회차는 아직 제출되지 않았습니다."
+        );
         return;
       }
 
@@ -1385,7 +1908,17 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       setNoteError(null);
       setNoteLoading(true);
 
-      const wrongs = await getQuizWrongs(picked.attemptId);
+      // ✅ 여기서 seq 할당
+      seq = ++noteLoadSeqRef.current;
+
+      const wrongs = await raceUiTimeout(
+        "오답노트 조회",
+        getQuizWrongs(picked.attemptId),
+        10_000
+      );
+
+      if (!aliveRef.current) return;
+      if (noteLoadSeqRef.current !== seq) return; // 최신 요청만 반영
 
       const ui: WrongAnswerEntry[] = wrongs.map((w, i) => ({
         attemptId: picked.attemptId,
@@ -1401,7 +1934,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       setNoteError(safeErrorMessage(e));
       showResultMessage("warning", "오답노트 조회 실패", safeErrorMessage(e));
     } finally {
-      setNoteLoading(false);
+      // ✅ no-unsafe-finally: finally에서 return 금지 → 조건부로만 처리
+      if (aliveRef.current && seq > 0 && noteLoadSeqRef.current === seq) {
+        setNoteLoading(false);
+      }
     }
   };
 
@@ -1423,9 +1959,6 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     selectedAnswers.every((idx) => idx >= 0);
 
   if (!hasDOM) return null;
-
-  const solvePassScoreFromServer = solve ? (solve.passScore ?? courseMetaById[solve.course.id]?.passScore ?? null) : null;
-  const solveRetryInfoFromServer = solve ? (solve.retryInfo ?? courseMetaById[solve.course.id]?.retryInfo ?? null) : null;
 
   return createPortal(
     <div
@@ -1453,15 +1986,39 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         >
           <div className="cb-drag-bar" onMouseDown={handleDragMouseDown} />
 
-          <div className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-nw" onMouseDown={handleResizeMouseDown("nw")} />
-          <div className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-ne" onMouseDown={handleResizeMouseDown("ne")} />
-          <div className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-sw" onMouseDown={handleResizeMouseDown("sw")} />
-          <div className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-se" onMouseDown={handleResizeMouseDown("se")} />
+          <div
+            className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-nw"
+            onMouseDown={handleResizeMouseDown("nw")}
+          />
+          <div
+            className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-ne"
+            onMouseDown={handleResizeMouseDown("ne")}
+          />
+          <div
+            className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-sw"
+            onMouseDown={handleResizeMouseDown("sw")}
+          />
+          <div
+            className="cb-resize-handle cb-resize-handle-corner cb-resize-handle-se"
+            onMouseDown={handleResizeMouseDown("se")}
+          />
 
-          <div className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-n" onMouseDown={handleResizeMouseDown("n")} />
-          <div className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-s" onMouseDown={handleResizeMouseDown("s")} />
-          <div className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-w" onMouseDown={handleResizeMouseDown("w")} />
-          <div className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-e" onMouseDown={handleResizeMouseDown("e")} />
+          <div
+            className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-n"
+            onMouseDown={handleResizeMouseDown("n")}
+          />
+          <div
+            className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-s"
+            onMouseDown={handleResizeMouseDown("s")}
+          />
+          <div
+            className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-w"
+            onMouseDown={handleResizeMouseDown("w")}
+          />
+          <div
+            className="cb-resize-handle cb-resize-handle-edge cb-resize-handle-e"
+            onMouseDown={handleResizeMouseDown("e")}
+          />
 
           <button
             type="button"
@@ -1470,10 +2027,16 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
               if (mode === "solve" && solve) {
                 const attemptId = solve.attemptId;
 
-                flushSaveNow({ keepalive: true }).catch(() => undefined);
+                flushSaveNow({ keepalive: true, silent: true }).catch(
+                  () => undefined
+                );
 
                 const rs = Math.max(0, remainingRef.current);
-                putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+                putQuizTimer(
+                  attemptId,
+                  { remainingSeconds: rs },
+                  { keepalive: true }
+                ).catch(() => undefined);
 
                 recordLeave(attemptId, "CLOSE", true);
               }
@@ -1484,7 +2047,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
             ✕
           </button>
 
-          <div className="cb-edu-panel-inner" ref={contentRef} style={{ position: "relative" }}>
+          <div
+            className="cb-edu-panel-inner"
+            ref={contentRef}
+            style={{ position: "relative" }}
+          >
             {resultMessage && (
               <div
                 style={{
@@ -1528,7 +2095,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                   }}
                 >
                   <span style={{ fontSize: 16 }}>
-                    {resultMessage.type === "success" ? "✅" : resultMessage.type === "warning" ? "⚠️" : "ℹ️"}
+                    {resultMessage.type === "success"
+                      ? "✅"
+                      : resultMessage.type === "warning"
+                        ? "⚠️"
+                        : "ℹ️"}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
@@ -1577,7 +2148,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
             {/* 로딩/에러 */}
             {mode === "dashboard" && loading && (
-              <div style={{ padding: 18, fontSize: 13, color: "#cbd5e1" }}>퀴즈 데이터를 불러오는 중입니다...</div>
+              <div style={{ padding: 18, fontSize: 13, color: "#cbd5e1" }}>
+                퀴즈 데이터를 불러오는 중입니다...
+              </div>
             )}
 
             {mode === "dashboard" && !loading && loadError && (
@@ -1606,42 +2179,58 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                     <h2 className="cb-quiz-section-title">부서별 점수판</h2>
                   </div>
 
-                  <div className="cb-quiz-dept-row">
-                    <button
-                      type="button"
-                      className="cb-quiz-arrow-btn"
-                      onClick={handlePrevDept}
-                      disabled={safeDeptPage === 0}
-                      aria-label="이전 부서 보기"
-                    >
-                      ◀
-                    </button>
-
-                    <div className="cb-quiz-dept-list">
-                      {visibleDepartments.map((dept) => (
-                        <div key={dept.id} className="cb-quiz-dept-card" style={{ minHeight: responsiveCardHeight }}>
-                          <div className="cb-quiz-dept-name">{dept.name}</div>
-                          <div className="cb-quiz-dept-score">{dept.avgScore}점</div>
-                          <div className="cb-quiz-dept-progress-label">
-                            전체 진행률&nbsp;<span className="cb-quiz-dept-progress-value">{dept.progress}%</span>
-                          </div>
-                          <div className="cb-quiz-progress-bar">
-                            <div className="cb-quiz-progress-bar-fill" style={{ width: `${dept.progress}%` }} />
-                          </div>
-                        </div>
-                      ))}
+                  {departments.length === 0 ? (
+                    <div style={{ padding: 14, fontSize: 12, color: "#94a3b8" }}>
+                      표시할 부서 점수 데이터가 없습니다. (서버 응답이 비어있거나, 래핑 키가 문서와 다르면 위에서 에러로 표시됩니다.)
                     </div>
+                  ) : (
+                    <div className="cb-quiz-dept-row">
+                      <button
+                        type="button"
+                        className="cb-quiz-arrow-btn"
+                        onClick={handlePrevDept}
+                        disabled={safeDeptPage === 0}
+                        aria-label="이전 부서 보기"
+                      >
+                        ◀
+                      </button>
 
-                    <button
-                      type="button"
-                      className="cb-quiz-arrow-btn"
-                      onClick={handleNextDept}
-                      disabled={safeDeptPage >= totalDeptPages - 1}
-                      aria-label="다음 부서 보기"
-                    >
-                      ▶
-                    </button>
-                  </div>
+                      <div className="cb-quiz-dept-list">
+                        {visibleDepartments.map((dept) => (
+                          <div
+                            key={dept.id}
+                            className="cb-quiz-dept-card"
+                            style={{ minHeight: responsiveCardHeight }}
+                          >
+                            <div className="cb-quiz-dept-name">{dept.name}</div>
+                            <div className="cb-quiz-dept-score">{dept.avgScore}점</div>
+                            <div className="cb-quiz-dept-progress-label">
+                              전체 진행률&nbsp;
+                              <span className="cb-quiz-dept-progress-value">
+                                {dept.progress}%
+                              </span>
+                            </div>
+                            <div className="cb-quiz-progress-bar">
+                              <div
+                                className="cb-quiz-progress-bar-fill"
+                                style={{ width: `${dept.progress}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="cb-quiz-arrow-btn"
+                        onClick={handleNextDept}
+                        disabled={safeDeptPage >= totalDeptPages - 1}
+                        aria-label="다음 부서 보기"
+                      >
+                        ▶
+                      </button>
+                    </div>
+                  )}
                 </section>
 
                 <section className="cb-quiz-section cb-quiz-section-quiz">
@@ -1649,210 +2238,298 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                     <h2 className="cb-quiz-section-title">Quiz</h2>
                   </div>
 
-                  <div className="cb-quiz-course-row">
-                    <button
-                      type="button"
-                      className="cb-quiz-arrow-btn"
-                      onClick={handlePrevQuiz}
-                      disabled={safeQuizPage === 0}
-                      aria-label="이전 퀴즈 보기"
-                    >
-                      ◀
-                    </button>
+                  {courses.length === 0 ? (
+                    <div style={{ padding: 14, fontSize: 12, color: "#94a3b8" }}>
+                      표시할 퀴즈가 없습니다. (서버에서 available-educations가 비어있거나, 응답 래핑이 다르면 에러로 표시됩니다.)
+                    </div>
+                  ) : (
+                    <div className="cb-quiz-course-row">
+                      <button
+                        type="button"
+                        className="cb-quiz-arrow-btn"
+                        onClick={handlePrevQuiz}
+                        disabled={safeQuizPage === 0}
+                        aria-label="이전 퀴즈 보기"
+                      >
+                        ◀
+                      </button>
 
-                    <div className="cb-quiz-course-list">
-                      {visibleCourses.map((course) => {
-                        const isLocked = !course.unlocked;
+                      <div className="cb-quiz-course-list">
+                        {visibleCourses.map((course) => {
+                          const isLocked = !course.unlocked;
 
-                        const activeIdx = activeAttemptIndexByCourseId[course.id] ?? 0;
+                          const activeIdx = activeAttemptIndexByCourseId[course.id] ?? 0;
 
-                        const attempts = attemptsByCourseId[course.id];
-                        const attemptFromApi = attempts?.[activeIdx];
+                          const attempts = attemptsByCourseId[course.id];
+                          const attemptFromApi = attempts?.[activeIdx];
 
-                        const activeScore =
-                          attemptFromApi?.score !== null && attemptFromApi?.score !== undefined
-                            ? attemptFromApi.score
-                            : activeIdx === 0
-                              ? course.bestScore
+                          const activeScore =
+                            attemptFromApi?.score !== null &&
+                              attemptFromApi?.score !== undefined
+                              ? attemptFromApi.score
+                              : activeIdx === 0
+                                ? course.bestScore
+                                : null;
+
+                          const hasScore =
+                            activeScore !== null && activeScore !== undefined;
+
+                          const displayScore = hasScore ? formatScore(activeScore) : "-";
+                          const progressPercent = hasScore
+                            ? scoreToPercent(activeScore)
+                            : 0;
+
+                          const totalAttempts =
+                            course.maxAttempts !== null
+                              ? Math.max(1, course.maxAttempts)
+                              : Math.min(
+                                Math.max(QUIZ_ATTEMPT_FALLBACK, course.attemptCount),
+                                3
+                              );
+
+                          const attemptIndexes = range(totalAttempts);
+
+                          const submitted =
+                            String(attemptFromApi?.status ?? "").toUpperCase() === "SUBMITTED";
+
+                          // attempts 전체 중 SUBMITTED가 하나라도 있으면 오답노트 가능으로 판단
+                          const hasAnySubmitted = submitted
+                            ? true
+                            : Array.isArray(attempts)
+                              ? attempts.some(
+                                (a) => String(a.status ?? "").toUpperCase() === "SUBMITTED"
+                              )
+                              : false;
+
+                          // passed=true면 오답노트가 기본 액션(로딩 지연으로 라벨이 흔들리지 않도록)
+                          const preferNote = !isLocked && (course.passed === true || hasAnySubmitted);
+                          const canOpenNote = preferNote;
+
+                          const meta = courseMetaById[course.id];
+                          const metaPassScore =
+                            normalizePassScore(attemptFromApi) ?? meta?.passScore ?? null;
+                          const metaRetry =
+                            normalizeRetryInfo(attemptFromApi) ?? meta?.retryInfo ?? null;
+
+                          const fallbackRemaining =
+                            course.maxAttempts !== null
+                              ? Math.max(0, course.maxAttempts - course.attemptCount)
                               : null;
 
-                        const hasScore = activeScore !== null && activeScore !== undefined;
+                          const canStartByRetryInfo =
+                            metaRetry?.canRetry !== null && metaRetry?.canRetry !== undefined
+                              ? metaRetry.canRetry
+                              : null;
 
-                        const displayScore = hasScore ? formatScore(activeScore) : "-";
-                        const progressPercent = hasScore ? scoreToPercent(activeScore) : 0;
+                          const canStartQuiz =
+                            !isLocked &&
+                            (canStartByRetryInfo !== null
+                              ? canStartByRetryInfo
+                              : course.maxAttempts === null
+                                ? true
+                                : course.attemptCount < course.maxAttempts) &&
+                            course.passed !== true;
 
-                        const totalAttempts =
-                          course.maxAttempts !== null
-                            ? Math.max(1, course.maxAttempts)
-                            : Math.min(Math.max(QUIZ_ATTEMPT_FALLBACK, course.attemptCount), 3);
+                          const primaryLabel = preferNote ? "오답노트" : "퀴즈 풀기";
+                          // 오답노트 우선이면(=preferNote) start 가능 여부와 무관하게 활성
+                          const primaryDisabled = isLocked || (!preferNote && !canStartQuiz);
 
-                        const attemptIndexes = range(totalAttempts);
+                          const handlePrimaryClick = () => {
+                            if (primaryDisabled) return;
 
-                        const submitted = ((attemptFromApi?.status ?? "") as string).toUpperCase() === "SUBMITTED";
-                        const canOpenNote = !isLocked && (submitted || (course.hasAttempted && course.bestScore !== null));
+                            if (canOpenNote) {
+                              handleOpenNoteClick(course).catch(() => undefined);
+                            } else {
+                              handleStartQuiz(course).catch(() => undefined);
+                            }
+                          };
 
-                        const meta = courseMetaById[course.id];
-                        const metaPassScore = normalizePassScore(attemptFromApi) ?? meta?.passScore ?? null;
-                        const metaRetry = normalizeRetryInfo(attemptFromApi) ?? meta?.retryInfo ?? null;
+                          const attemptsErr = attemptsErrorByCourseId[course.id];
 
-                        const fallbackRemaining =
-                          course.maxAttempts !== null ? Math.max(0, course.maxAttempts - course.attemptCount) : null;
+                          return (
+                            <article
+                              key={course.id}
+                              className={
+                                "cb-quiz-course-card" + (isLocked ? " is-locked" : "")
+                              }
+                              style={{ minHeight: responsiveCardHeight }}
+                            >
+                              <header className="cb-quiz-course-header">
+                                <h3 className="cb-quiz-course-title">{course.title}</h3>
 
-                        const canStartByRetryInfo =
-                          metaRetry?.canRetry !== null && metaRetry?.canRetry !== undefined ? metaRetry.canRetry : null;
+                                <div className="cb-quiz-course-attempt-toggle">
+                                  {attemptIndexes.map((idx) => (
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      className={
+                                        "cb-quiz-attempt-dot" +
+                                        (activeIdx === idx ? " is-active" : "")
+                                      }
+                                      onClick={() => handleToggleAttempt(course.id, idx)}
+                                      aria-label={`${idx + 1}회차 보기`}
+                                    >
+                                      {idx + 1}
+                                    </button>
+                                  ))}
+                                </div>
+                              </header>
 
-                        const canStartQuiz =
-                          !isLocked &&
-                          (canStartByRetryInfo !== null
-                            ? canStartByRetryInfo
-                            : course.maxAttempts === null
-                              ? true
-                              : course.attemptCount < course.maxAttempts) &&
-                          course.passed !== true;
-
-                        const primaryLabel = canOpenNote ? "오답노트" : "퀴즈 풀기";
-                        const primaryDisabled = isLocked || (!canOpenNote && !canStartQuiz);
-
-                        const handlePrimaryClick = () => {
-                          if (primaryDisabled) return;
-
-                          if (canOpenNote) {
-                            handleOpenNoteClick(course).catch(() => undefined);
-                          } else {
-                            handleStartQuiz(course).catch(() => undefined);
-                          }
-                        };
-
-                        return (
-                          <article
-                            key={course.id}
-                            className={"cb-quiz-course-card" + (isLocked ? " is-locked" : "")}
-                            style={{ minHeight: responsiveCardHeight }}
-                          >
-                            <header className="cb-quiz-course-header">
-                              <h3 className="cb-quiz-course-title">{course.title}</h3>
-
-                              <div className="cb-quiz-course-attempt-toggle">
-                                {attemptIndexes.map((idx) => (
-                                  <button
-                                    key={idx}
-                                    type="button"
-                                    className={"cb-quiz-attempt-dot" + (activeIdx === idx ? " is-active" : "")}
-                                    onClick={() => handleToggleAttempt(course.id, idx)}
-                                    aria-label={`${idx + 1}회차 보기`}
-                                  >
-                                    {idx + 1}
-                                  </button>
-                                ))}
-                              </div>
-                            </header>
-
-                            <div className="cb-quiz-course-body">
-                              <div className="cb-quiz-course-score-row">
-                                <span className="cb-quiz-course-score-label">개인 점수</span>
-                                <span className="cb-quiz-course-score-value">{displayScore}</span>
-                              </div>
-
-                              <div className="cb-quiz-progress-bar cb-quiz-course-progress">
-                                <div className="cb-quiz-progress-bar-fill" style={{ width: `${progressPercent}%` }} />
-                              </div>
-
-                              <div
-                                style={{
-                                  marginTop: 10,
-                                  fontSize: 12,
-                                  color: "#94a3b8",
-                                  display: "grid",
-                                  gridTemplateColumns: "1fr 1fr",
-                                  rowGap: 6,
-                                  columnGap: 10,
-                                }}
-                              >
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                  <span>합격 기준</span>
-                                  <span style={{ color: "#e2e8f0" }}>
-                                    {metaPassScore !== null ? `${Math.round(metaPassScore)}점` : "-"}
+                              <div className="cb-quiz-course-body">
+                                <div className="cb-quiz-course-score-row">
+                                  <span className="cb-quiz-course-score-label">개인 점수</span>
+                                  <span className="cb-quiz-course-score-value">
+                                    {displayScore}
                                   </span>
                                 </div>
 
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                  <span>재응시</span>
-                                  <span style={{ color: "#e2e8f0" }}>
-                                    {metaRetry
-                                      ? metaRetry.canRetry === null
-                                        ? "-"
-                                        : metaRetry.canRetry
-                                          ? "가능"
-                                          : "불가"
-                                      : course.passed === true
-                                        ? "불가"
-                                        : "가능"}
-                                  </span>
+                                <div className="cb-quiz-progress-bar cb-quiz-course-progress">
+                                  <div
+                                    className="cb-quiz-progress-bar-fill"
+                                    style={{ width: `${progressPercent}%` }}
+                                  />
                                 </div>
 
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                  <span>남은 횟수</span>
-                                  <span style={{ color: "#e2e8f0" }}>
-                                    {metaRetry
-                                      ? `${metaRetry.remainingAttempts ?? "-"} / ${metaRetry.maxAttempts ?? "-"}`
-                                      : fallbackRemaining !== null && course.maxAttempts !== null
-                                        ? `${fallbackRemaining} / ${course.maxAttempts}`
-                                        : "-"}
-                                  </span>
-                                </div>
-
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                  <span>응시 횟수</span>
-                                  <span style={{ color: "#e2e8f0" }}>
-                                    {metaRetry?.usedAttempts !== null && metaRetry?.usedAttempts !== undefined
-                                      ? `${metaRetry.usedAttempts}`
-                                      : `${course.attemptCount}`}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {isLocked && <p className="cb-quiz-locked-text">교육 이수 완료 후 퀴즈를 풀 수 있어요.</p>}
-
-                              {!isLocked && course.passed === true && (
-                                <p className="cb-quiz-locked-text" style={{ color: "#a7f3d0" }}>
-                                  이미 합격 처리되었습니다. 오답노트만 확인할 수 있어요.
-                                </p>
-                              )}
-
-                              {!isLocked && metaRetry?.reason && (
-                                <p className="cb-quiz-locked-text" style={{ color: "#cbd5e1" }}>
-                                  {metaRetry.reason}
-                                </p>
-                              )}
-                            </div>
-
-                            <footer className="cb-quiz-course-footer">
-                              {!isLocked && (
-                                <button
-                                  type="button"
-                                  className="cb-quiz-note-btn"
-                                  disabled={primaryDisabled}
-                                  onClick={handlePrimaryClick}
+                                <div
+                                  style={{
+                                    marginTop: 10,
+                                    fontSize: 12,
+                                    color: "#94a3b8",
+                                    display: "grid",
+                                    gridTemplateColumns: "1fr 1fr",
+                                    rowGap: 6,
+                                    columnGap: 10,
+                                  }}
                                 >
-                                  {primaryLabel}
-                                </button>
-                              )}
-                            </footer>
-                          </article>
-                        );
-                      })}
-                    </div>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      gap: 10,
+                                    }}
+                                  >
+                                    <span>합격 기준</span>
+                                    <span style={{ color: "#e2e8f0" }}>
+                                      {metaPassScore !== null
+                                        ? `${Math.round(metaPassScore)}점`
+                                        : "-"}
+                                    </span>
+                                  </div>
 
-                    <button
-                      type="button"
-                      className="cb-quiz-arrow-btn"
-                      onClick={handleNextQuiz}
-                      disabled={safeQuizPage >= totalQuizPages - 1}
-                      aria-label="다음 퀴즈 보기"
-                    >
-                      ▶
-                    </button>
-                  </div>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      gap: 10,
+                                    }}
+                                  >
+                                    <span>재응시</span>
+                                    <span style={{ color: "#e2e8f0" }}>
+                                      {metaRetry
+                                        ? metaRetry.canRetry === null
+                                          ? "-"
+                                          : metaRetry.canRetry
+                                            ? "가능"
+                                            : "불가"
+                                        : course.passed === true
+                                          ? "불가"
+                                          : "가능"}
+                                    </span>
+                                  </div>
+
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      gap: 10,
+                                    }}
+                                  >
+                                    <span>남은 횟수</span>
+                                    <span style={{ color: "#e2e8f0" }}>
+                                      {metaRetry
+                                        ? `${metaRetry.remainingAttempts ?? "-"} / ${metaRetry.maxAttempts ?? "-"}`
+                                        : fallbackRemaining !== null && course.maxAttempts !== null
+                                          ? `${fallbackRemaining} / ${course.maxAttempts}`
+                                          : "-"}
+                                    </span>
+                                  </div>
+
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      gap: 10,
+                                    }}
+                                  >
+                                    <span>응시 횟수</span>
+                                    <span style={{ color: "#e2e8f0" }}>
+                                      {metaRetry?.usedAttempts !== null &&
+                                        metaRetry?.usedAttempts !== undefined
+                                        ? `${metaRetry.usedAttempts}`
+                                        : `${course.attemptCount}`}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {attemptsErr && (
+                                  <p className="cb-quiz-locked-text" style={{ color: "#fecaca" }}>
+                                    응시 내역/메타 불러오기 실패: {attemptsErr}
+                                  </p>
+                                )}
+
+                                {isLocked && (
+                                  <p className="cb-quiz-locked-text">
+                                    교육 이수 완료 후 퀴즈를 풀 수 있어요.
+                                  </p>
+                                )}
+
+                                {!isLocked && course.passed === true && (
+                                  <p
+                                    className="cb-quiz-locked-text"
+                                    style={{ color: "#a7f3d0" }}
+                                  >
+                                    이미 합격 처리되었습니다. 오답노트만 확인할 수 있어요.
+                                  </p>
+                                )}
+
+                                {!isLocked && metaRetry?.reason && (
+                                  <p
+                                    className="cb-quiz-locked-text"
+                                    style={{ color: "#cbd5e1" }}
+                                  >
+                                    {metaRetry.reason}
+                                  </p>
+                                )}
+                              </div>
+
+                              <footer className="cb-quiz-course-footer">
+                                {!isLocked && (
+                                  <button
+                                    type="button"
+                                    className="cb-quiz-note-btn"
+                                    disabled={primaryDisabled}
+                                    onClick={handlePrimaryClick}
+                                  >
+                                    {primaryLabel}
+                                  </button>
+                                )}
+                              </footer>
+                            </article>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="cb-quiz-arrow-btn"
+                        onClick={handleNextQuiz}
+                        disabled={safeQuizPage >= totalQuizPages - 1}
+                        aria-label="다음 퀴즈 보기"
+                      >
+                        ▶
+                      </button>
+                    </div>
+                  )}
                 </section>
               </div>
             )}
@@ -1879,7 +2556,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                     </div>
                   </div>
 
-                  <div className="cb-quiz-solve-meta" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div
+                    className="cb-quiz-solve-meta"
+                    style={{ display: "flex", gap: 10, alignItems: "center" }}
+                  >
                     <span>{solve.course.title}</span>
 
                     <span
@@ -1924,7 +2604,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                             {q.choices.map((opt, optIdx) => (
                               <li
                                 key={optIdx}
-                                className={"cb-quiz-solve-option" + (selectedAnswers[idx] === optIdx ? " is-selected" : "")}
+                                className={
+                                  "cb-quiz-solve-option" +
+                                  (selectedAnswers[idx] === optIdx ? " is-selected" : "")
+                                }
                                 onClick={() => handleSelectOption(idx, optIdx)}
                               >
                                 {opt}
@@ -1946,21 +2629,31 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                       </button>
                     </div>
 
-                    <div style={{ padding: "10px 14px", fontSize: 12, color: "#94a3b8", display: "grid", rowGap: 6 }}>
+                    <div
+                      style={{
+                        padding: "10px 14px",
+                        fontSize: 12,
+                        color: "#94a3b8",
+                        display: "grid",
+                        rowGap: 6,
+                      }}
+                    >
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                         <span>합격 기준(passScore)</span>
                         <span style={{ color: "#e2e8f0" }}>
-                          {solvePassScoreFromServer !== null ? `${Math.round(solvePassScoreFromServer)}점` : "-"}
+                          {Number.isFinite(solvePassScoreDisplay)
+                            ? `${Math.round(solvePassScoreDisplay)}점`
+                            : "-"}
                         </span>
                       </div>
 
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                         <span>재응시(retry-info)</span>
                         <span style={{ color: "#e2e8f0" }}>
-                          {solveRetryInfoFromServer
-                            ? solveRetryInfoFromServer.canRetry === null
+                          {solveRetryDisplay
+                            ? solveRetryDisplay.canRetry === null
                               ? "-"
-                              : solveRetryInfoFromServer.canRetry
+                              : solveRetryDisplay.canRetry
                                 ? "가능"
                                 : "불가"
                             : "-"}
@@ -1970,14 +2663,14 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                         <span>남은 횟수</span>
                         <span style={{ color: "#e2e8f0" }}>
-                          {solveRetryInfoFromServer
-                            ? `${solveRetryInfoFromServer.remainingAttempts ?? "-"} / ${solveRetryInfoFromServer.maxAttempts ?? "-"}`
+                          {solveRetryDisplay
+                            ? `${solveRetryDisplay.remainingAttempts ?? "-"} / ${solveRetryDisplay.maxAttempts ?? "-"}`
                             : "-"}
                         </span>
                       </div>
 
                       <div style={{ opacity: 0.9 }}>
-                        서버 DTO가 아직 내려오지 않는 환경에서는 기본 합격 기준 {DEFAULT_PASSING_SCORE}점으로만 표시될 수 있습니다.
+                        서버 DTO가 아직 내려오지 않는 환경에서는 기본 합격 기준 {DEFAULT_PASSING_SCORE}점으로 표시됩니다.
                       </div>
                     </div>
                   </div>
@@ -2006,23 +2699,30 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         const total =
                           noteCourse.maxAttempts !== null
                             ? Math.max(1, noteCourse.maxAttempts)
-                            : Math.min(Math.max(QUIZ_ATTEMPT_FALLBACK, noteCourse.attemptCount), 3);
+                            : Math.min(
+                              Math.max(QUIZ_ATTEMPT_FALLBACK, noteCourse.attemptCount),
+                              3
+                            );
 
                         const tabs =
-                          attempts.length > 0 ? attempts.map((a) => a.attemptNo) : range(total).map((i) => i + 1);
+                          attempts.length > 0
+                            ? attempts.map((a, i) => normalizeAttemptNo(a) ?? i + 1)
+                            : range(total).map((i) => i + 1);
 
                         return tabs.map((n, idx) => (
                           <button
                             key={`${n}-${idx}`}
                             type="button"
-                            className={"cb-quiz-note-tab" + (noteAttemptIndex === idx ? " is-active" : "")}
+                            className={
+                              "cb-quiz-note-tab" + (noteAttemptIndex === idx ? " is-active" : "")
+                            }
                             onClick={() => {
                               setNoteAttemptIndex(idx);
 
                               const courseId = noteCourse.id;
                               const list = attemptsByCourseId[courseId] ?? [];
                               const picked = list[idx];
-                              const st = ((picked?.status ?? "") as string).toUpperCase();
+                              const st = String(picked?.status ?? "").toUpperCase();
 
                               if (!picked || st !== "SUBMITTED") {
                                 setNoteItems([]);
@@ -2034,8 +2734,13 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                               setNoteAttemptId(picked.attemptId);
                               setNoteError(null);
                               setNoteLoading(true);
-                              getQuizWrongs(picked.attemptId)
+                              const seq = ++noteLoadSeqRef.current;
+
+                              raceUiTimeout("오답노트 조회", getQuizWrongs(picked.attemptId), 10_000)
                                 .then((wrongs) => {
+                                  if (!aliveRef.current) return;
+                                  if (noteLoadSeqRef.current !== seq) return;
+
                                   const ui: WrongAnswerEntry[] = wrongs.map((w, i) => ({
                                     attemptId: picked.attemptId,
                                     questionNumber: i + 1,
@@ -2044,8 +2749,15 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                                   }));
                                   setNoteItems(ui);
                                 })
-                                .catch((e) => setNoteError(safeErrorMessage(e)))
-                                .finally(() => setNoteLoading(false));
+                                .catch((e) => {
+                                  if (!aliveRef.current) return;
+                                  if (noteLoadSeqRef.current !== seq) return;
+                                  setNoteError(safeErrorMessage(e));
+                                })
+                                .finally(() => {
+                                  if (!aliveRef.current) return;
+                                  if (noteLoadSeqRef.current === seq) setNoteLoading(false);
+                                });
                             }}
                             aria-label={`${n}회차 오답 보기`}
                           >
@@ -2063,7 +2775,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         응시 ID:{" "}
                         <span
                           style={{
-                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                             color: "#e2e8f0",
                           }}
                         >
@@ -2097,7 +2810,11 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                             <div className="cb-quiz-note-question-no">{item.questionNumber}</div>
                             <div className="cb-quiz-note-question-text">{item.questionText}</div>
                             <div className="cb-quiz-note-explain-cell">
-                              <button type="button" className="cb-quiz-note-explain-btn" onClick={() => setNoteModal(item)}>
+                              <button
+                                type="button"
+                                className="cb-quiz-note-explain-btn"
+                                onClick={() => setNoteModal(item)}
+                              >
                                 해설보기
                               </button>
                             </div>

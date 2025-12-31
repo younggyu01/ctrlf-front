@@ -10,6 +10,7 @@ import {
   postEduVideoProgress,
   type EducationItem,
   type EducationVideoItem,
+  resolveEducationVideoUrl,
 } from "./educationServiceApi";
 
 type Size = PanelSize;
@@ -40,24 +41,10 @@ export interface EduPanelProps {
   anchor?: Anchor | null;
   onClose: () => void;
 
-  /**
-   * QuizPanel이 eduId 기반으로 시작하도록 설계하는 게 자연스러움.
-   * (QuizPanel 실연동 시: GET /quiz/{eduId}/start)
-   */
   onOpenQuizPanel?: (eduId?: string) => void;
 
-  /**
-   * 외부(상위)에서 관리하는 진행률 맵이 있으면 병합(호환 유지)
-   * key는 "videoId"로 간주
-   */
   videoProgressMap?: VideoProgressMap;
 
-  /**
-   * 기존(2 args) 호환 + 확장(4 args)
-   * - progressPercent: 0~100
-   * - resumeSeconds: 재생 위치(초)
-   * - completed: 완료 여부
-   */
   onUpdateVideoProgress?: (
     videoId: string,
     progressPercent: number,
@@ -69,50 +56,107 @@ export interface EduPanelProps {
   zIndex?: number;
 }
 
-// =======================
-// 옵션: 상단 헤더 위로도 패널 이동을 허용할지
-// =======================
 const ALLOW_OVERLAP_APP_HEADER = true;
 
-// 최소 크기
 const MIN_WIDTH = 520;
 const MIN_HEIGHT = 480;
 
-// 최대 폭 + 화면 여백
 const MAX_WIDTH = 1360;
 const PANEL_MARGIN = 80;
 
-// 시청 모드 기본 사이즈
 const WATCH_DEFAULT_SIZE: Size = { width: 540, height: 480 };
 
-// 패널이 화면 밖으로 나가지 않게 잡는 기본 여백
 const EDGE_MARGIN = 0;
 
-// 패널이 완전히 사라지지 않게 최소한 이만큼은 화면에 남김
 const KEEP_VISIBLE_X = 120;
 const KEEP_VISIBLE_Y = 80;
 
-// Dock 주변 초기 위치 안전 여백
 const DOCK_SAFE_RIGHT = 60;
 const DOCK_SAFE_BOTTOM = 60;
 
-// z-index 최상단
 const EDU_LAYER_Z = 2147483000;
 
-// progress 전송 주기(스펙 권장: 10~30s)
 const PROGRESS_TICK_MS = 15_000;
 
-// =======================
-// UI 모델(섹션 = 교육, 카드 = 영상)
-// =======================
+// fetchJson이 내부에서 pending에 빠져도 UI가 무한 로딩에 갇히지 않도록 패널 레벨 타임아웃
+const EDU_LIST_TIMEOUT_MS = 4_500;
+const EDU_VIDEOS_TIMEOUT_MS = 4_500;
+
+function isTimeoutError(e: unknown): boolean {
+  if (!e) return false;
+  if (e instanceof Error) return (e.message ?? "").startsWith("TIMEOUT:");
+  if (typeof e === "object") {
+    const rec = e as Record<string, unknown>;
+    const msg = typeof rec.message === "string" ? rec.message : "";
+    return msg.startsWith("TIMEOUT:");
+  }
+  return false;
+}
+
+/**
+ * Promise가 영원히 pending이면 ms 후 강제로 reject
+ * - onTimeout에서 AbortController.abort()를 호출해 실제 fetch도 끊을 수 있게 함
+ * - fetchJson이 fetch 이전 단계에서 멈춰도 race로 UI는 탈출 가능
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutP = new Promise<never>((_, reject) => {
+    t = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } finally {
+        reject(new Error(`TIMEOUT:${ms}`));
+      }
+    }, ms);
+  });
+
+  return Promise.race([p, timeoutP]).finally(() => {
+    if (t !== null) clearTimeout(t);
+  });
+}
+
+// 앞으로 점프(seek forward) 허용치(초) — 너무 빡빡하면 UX가 깨질 수 있어 약간 둠
+const SEEK_FORWARD_TOLERANCE_SEC = 1.25;
+
+/**
+ * resumePositionSeconds가 백엔드/저장 계층에서 ms로 들어오거나(예: 50123),
+ * duration보다 큰 값으로 내려오는 케이스를 방어한다.
+ * - duration보다 약간 큰 값(오차)까지는 clamp
+ * - duration보다 많이 크면 ms로 가정하고 /1000 변환을 시도
+ */
+function normalizeResumeSeconds(raw: number, durationSec: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+
+  // duration이 유효하면 범위를 보고 ms 여부를 더 정확히 판단
+  if (Number.isFinite(durationSec) && durationSec > 0) {
+    const hardMax = durationSec + 10; // 오차 허용
+
+    // 정상 초 단위로 보이는 범위
+    if (raw <= hardMax) return clamp(raw, 0, durationSec);
+
+    // duration 대비 과도하게 크면(ms 가능성 높음) /1000 시도
+    if (raw > durationSec * 10) {
+      const sec = raw / 1000;
+      if (sec <= hardMax) return clamp(sec, 0, durationSec);
+    }
+  }
+
+  // duration이 없거나 판단 불가: 휴리스틱
+  // 6시간(21600초)보다 큰 값은 ms일 확률이 높다고 보고 /1000
+  if (raw > 60 * 60 * 6) return raw / 1000;
+
+  return raw;
+}
+
 type EduVideoStatusKey = "not-started" | "in-progress" | "completed";
 
 type UiVideo = {
-  id: string; // videoId
+  id: string;
   title: string;
-  videoUrl?: string;
-  progress?: number; // 0~100
-  resumeSeconds?: number; // seconds
+  videoUrl?: string; // 원본(or 이미 playable인) URL
+  progress?: number;
+  resumeSeconds?: number;
   completed?: boolean;
 };
 
@@ -133,6 +177,7 @@ type VideoLoadState =
 type SelectedVideo = UiVideo & {
   educationId: string;
   educationTitle: string;
+  rawVideoUrl: string;
 };
 
 function getVideoStatus(progress: number): { label: string; key: EduVideoStatusKey } {
@@ -163,9 +208,6 @@ function isAbortError(e: unknown): boolean {
   return "name" in e && (e as { name?: unknown }).name === "AbortError";
 }
 
-/**
- * 헤더 높이를 “안전 상단 여백”으로 사용
- */
 function readAppHeaderSafeTop(): number {
   if (typeof window === "undefined" || typeof document === "undefined") return 0;
 
@@ -266,9 +308,6 @@ function derivePosByBottomRight(
   return clampPanelPos(nextPos, nextSize, minTop);
 }
 
-/**
- * 외부 progressMap(videoId->progress%)을 섹션 비디오에 병합(호환 유지)
- */
 function mergeExternalProgress(sections: UiSection[], progressMap?: VideoProgressMap): UiSection[] {
   if (!progressMap) return sections;
 
@@ -298,6 +337,51 @@ function toUiVideo(v: EducationVideoItem): UiVideo {
   };
 }
 
+function isSectionDone(section: UiSection): boolean {
+  if (section.completed) return true;
+  if (!section.videos || section.videos.length === 0) return false;
+  return section.videos.every((v) => (v.completed ?? false) || (v.progress ?? 0) >= 100);
+}
+
+// “playable URL 판별”
+function isPlayableUrl(url: string): boolean {
+  const s = (url ?? "").trim();
+  if (!s) return false;
+  if (/^https?:\/\//i.test(s)) return true;
+  if (s.startsWith("/")) return true; // same-origin relative
+  if (s.startsWith("blob:") || s.startsWith("data:")) return true;
+  return false;
+}
+
+/**
+ * presign URL은 만료된다.
+ * - educationServiceApi.ts 내부에서도 objectKey 기준 캐시를 하지만,
+ *   EduPanel이 raw→url을 “무기한 캐시”하면 만료 URL을 재사용할 수 있음.
+ * - 그래서 EduPanel 캐시는 TTL을 둔다(보수적으로 8분).
+ */
+const PRESIGN_UI_CACHE_MS = 8 * 60 * 1000;
+const PRESIGN_UI_SAFETY_MS = 25_000;
+
+type PresignState =
+  | { status: "idle" }
+  | { status: "resolving" }
+  | { status: "ready"; url: string }
+  | { status: "error"; message: string };
+
+function getCachedUrl(
+  m: Map<string, { url: string; expiresAtMs: number }>,
+  raw: string
+): string | undefined {
+  const now = Date.now();
+  const hit = m.get(raw);
+  if (!hit) return undefined;
+  if (hit.expiresAtMs - now <= PRESIGN_UI_SAFETY_MS) {
+    m.delete(raw);
+    return undefined;
+  }
+  return hit.url;
+}
+
 const EduPanel: React.FC<EduPanelProps> = ({
   anchor,
   onClose,
@@ -312,20 +396,20 @@ const EduPanel: React.FC<EduPanelProps> = ({
   const initialTopSafe = hasDOM ? readAppHeaderSafeTop() : 0;
   const topSafeRef = useRef<number>(initialTopSafe);
 
-  // ====== education list / videos cache ======
   const [educations, setEducations] = useState<EducationItem[]>([]);
   const [eduLoading, setEduLoading] = useState<boolean>(false);
   const [eduError, setEduError] = useState<string | null>(null);
+  const [eduReloadKey, setEduReloadKey] = useState<number>(0);
 
   const [videosByEduId, setVideosByEduId] = useState<Record<string, VideoLoadState>>({});
   const videosByEduIdRef = useRef<Record<string, VideoLoadState>>({});
+
   useEffect(() => {
     videosByEduIdRef.current = videosByEduId;
   }, [videosByEduId]);
 
   const videosAbortRef = useRef<Map<string, AbortController>>(new Map());
 
-  // ====== panel position/size ======
   const [size, setSize] = useState<Size>(() => createInitialSize(initialTopSafe));
   const [panelPos, setPanelPos] = useState(() => {
     const initialSize = createInitialSize(initialTopSafe);
@@ -362,34 +446,43 @@ const EduPanel: React.FC<EduPanelProps> = ({
     startLeft: 0,
   });
 
-  // 섹션 페이징(educationId -> page)
   const [sectionPages, setSectionPages] = useState<Record<string, number>>({});
 
-  /**
-   * 교육 목록이 바뀌는 "시점"에만 섹션 페이지/비디오 캐시를 정리한다.
-   * - useEffect 안에서 setState를 하면 eslint 규칙(react-hooks/set-state-in-effect)에 걸릴 수 있어
-   *   목록 로드 성공 콜백에서만 호출한다.
-   */
   const syncCachesForEducationList = useCallback((nextList: EducationItem[]) => {
     const nextIds = new Set(nextList.map((e) => e.id));
 
-    // sectionPages: 존재하는 교육만 유지 + 신규는 0으로
     setSectionPages((prev) => {
       const next: Record<string, number> = {};
       for (const id of nextIds) next[id] = prev[id] ?? 0;
       return next;
     });
 
-    // videosByEduId: 존재하는 교육만 유지 + 신규는 idle로
     setVideosByEduId((prev) => {
       const next: Record<string, VideoLoadState> = {};
-      for (const id of nextIds) {
-        next[id] = prev[id] ?? { status: "idle", videos: [] };
+      for (const edu of nextList) {
+        const id = edu.id;
+
+        const embedded = Array.isArray(edu.videos) ? edu.videos.map(toUiVideo) : [];
+        const hasEmbedded = embedded.length > 0;
+
+        const existing = prev[id];
+
+        if (hasEmbedded) {
+          if (existing?.status === "ready" && existing.videos.length > 0) {
+            next[id] = existing;
+          } else {
+            next[id] = { status: "ready", videos: embedded };
+          }
+        } else {
+          next[id] = existing ?? { status: "idle", videos: [] };
+        }
       }
+
+      videosByEduIdRef.current = next;
+
       return next;
     });
 
-    // 제거된 교육의 in-flight 요청 abort + ref cleanup
     const abortMap = videosAbortRef.current;
     for (const [id, controller] of abortMap.entries()) {
       if (!nextIds.has(id)) {
@@ -399,7 +492,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
     }
   }, []);
 
-  // ====== watch state ======
   const [selectedVideo, setSelectedVideo] = useState<SelectedVideo | null>(null);
   const selectedVideoRef = useRef<SelectedVideo | null>(null);
   useEffect(() => {
@@ -412,6 +504,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
   const videoDurationRef = useRef<number>(0);
   const maxWatchedTimeRef = useRef<number>(0);
 
+  // programmatic seek(복원/초기화) 구간에서는 seek-guard를 잠깐 해제
+  const allowProgrammaticSeekRef = useRef<boolean>(false);
+
   const [watchPercent, setWatchPercent] = useState<number>(0);
   const watchPercentRef = useRef<number>(0);
   useEffect(() => {
@@ -419,10 +514,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
   }, [watchPercent]);
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-
   const roundedWatchPercent = Math.round(watchPercent);
 
-  // ====== progress sending(throttle/flush/abort) ======
   const tickHandleRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
 
   const lastTimeSampleRef = useRef<number | null>(null);
@@ -432,99 +525,272 @@ const EduPanel: React.FC<EduPanelProps> = ({
   const completedSentRef = useRef<boolean>(false);
 
   // =========================
+  // presign 결과 캐시/상태 + resolve 제어 state/ref
+  // =========================
+  const presignCacheRef = useRef<Map<string, { url: string; expiresAtMs: number }>>(new Map()); // rawUrl -> playableUrl(+ttl)
+  const presignInFlightRef = useRef<Map<string, Promise<string>>>(new Map()); // rawUrl -> promise
+  const presignAbortByRawRef = useRef<Map<string, AbortController>>(new Map()); // rawUrl -> controller
+
+  const [presignByVideoId, setPresignByVideoId] = useState<Record<string, PresignState>>({});
+  const presignByVideoIdRef = useRef<Record<string, PresignState>>({});
+  useEffect(() => {
+    presignByVideoIdRef.current = presignByVideoId;
+  }, [presignByVideoId]);
+
+  const watchResolvingRawRef = useRef<string | null>(null);
+
+  const setPresignState = useCallback((videoId: string, next: PresignState) => {
+    setPresignByVideoId((prev) => ({ ...prev, [videoId]: next }));
+  }, []);
+
+  const abortWatchResolve = useCallback(() => {
+    const raw = watchResolvingRawRef.current;
+    if (!raw) return;
+
+    const ac = presignAbortByRawRef.current.get(raw);
+    if (ac) ac.abort();
+
+    presignAbortByRawRef.current.delete(raw);
+    watchResolvingRawRef.current = null;
+  }, []);
+
+  const abortAllResolves = useCallback(() => {
+    for (const [, ac] of presignAbortByRawRef.current.entries()) ac.abort();
+    presignAbortByRawRef.current.clear();
+    presignInFlightRef.current.clear();
+    watchResolvingRawRef.current = null;
+  }, []);
+
+  const getKnownPlayableUrl = useCallback((videoId: string, rawUrl: string): string | undefined => {
+    const raw = (rawUrl ?? "").trim();
+    if (!raw) return undefined;
+
+    const st = presignByVideoIdRef.current[videoId];
+    if (st && st.status === "ready") return st.url;
+
+    // playable은 그대로
+    if (isPlayableUrl(raw)) return raw;
+
+    // s3 등은 TTL 캐시만 신뢰
+    const cached = getCachedUrl(presignCacheRef.current, raw);
+    if (cached) return cached;
+
+    return undefined;
+  }, []);
+
+  // =========================
+  // presign resolve 함수 (EduPanel 내부)
+  // =========================
+  const resolvePlayableUrl = useCallback(
+    async (videoId: string, rawUrl: string, opts?: { force?: boolean; watch?: boolean }) => {
+      const raw = (rawUrl ?? "").trim();
+      if (!raw) throw new Error("EMPTY_RAW_URL");
+
+      // playable이면 그대로
+      if (isPlayableUrl(raw)) {
+        presignCacheRef.current.set(raw, { url: raw, expiresAtMs: Date.now() + 365 * 24 * 60 * 60 * 1000 });
+        setPresignState(videoId, { status: "ready", url: raw });
+        return raw;
+      }
+
+      if (!opts?.force) {
+        const cached = getCachedUrl(presignCacheRef.current, raw);
+        if (cached) {
+          setPresignState(videoId, { status: "ready", url: cached });
+          return cached;
+        }
+
+        const existingState = presignByVideoIdRef.current[videoId];
+        if (existingState?.status === "ready") return existingState.url;
+
+        const inFlight = presignInFlightRef.current.get(raw);
+        if (inFlight) {
+          setPresignState(videoId, { status: "resolving" });
+          return inFlight;
+        }
+      }
+
+      // watch 컨텍스트면 이전 watch resolve는 abort
+      if (opts?.watch) {
+        abortWatchResolve();
+        watchResolvingRawRef.current = raw;
+      }
+
+      const ac = new AbortController();
+      presignAbortByRawRef.current.set(raw, ac);
+
+      setPresignState(videoId, { status: "resolving" });
+
+      const p = resolveEducationVideoUrl(raw, { signal: ac.signal })
+        .then((resolved) => {
+          const u = (resolved ?? "").trim();
+          if (!u) throw new Error("EMPTY_RESOLVED_URL");
+
+          // UI 캐시는 TTL
+          presignCacheRef.current.set(raw, { url: u, expiresAtMs: Date.now() + PRESIGN_UI_CACHE_MS });
+
+          setPresignState(videoId, { status: "ready", url: u });
+          return u;
+        })
+        .catch((e: unknown) => {
+          // abort는 “조용히” 처리
+          if (isAbortError(e)) {
+            setPresignState(videoId, { status: "idle" });
+            throw e;
+          }
+
+          const msg = "영상 URL을 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+          setPresignState(videoId, { status: "error", message: msg });
+          throw e;
+        })
+        .finally(() => {
+          const cur = presignAbortByRawRef.current.get(raw);
+          if (cur === ac) presignAbortByRawRef.current.delete(raw);
+          presignInFlightRef.current.delete(raw);
+          if (opts?.watch && watchResolvingRawRef.current === raw) {
+            watchResolvingRawRef.current = null;
+          }
+        });
+
+      presignInFlightRef.current.set(raw, p);
+      return p;
+    },
+    [abortWatchResolve, setPresignState]
+  );
+
+  // =========================
   // 1) 교육 목록 로드
   // =========================
   useEffect(() => {
     if (!hasDOM) return;
 
     const ac = new AbortController();
+    let alive = true;
+    let timedOut = false;
 
-    /**
-     * eslint(react-hooks/set-state-in-effect) 대응:
-     * - effect 본문에서 동기 setState 금지
-     * - rAF(또는 setTimeout) 콜백으로 “외부 시스템 이벤트”처럼 처리
-     */
-    const raf = window.requestAnimationFrame(() => {
-      setEduLoading(true);
-      setEduError(null);
-    });
+    setEduLoading(true);
+    setEduError(null);
 
-    getMyEducations(undefined, { signal: ac.signal })
+    void withTimeout(
+      getMyEducations(undefined, { signal: ac.signal }),
+      EDU_LIST_TIMEOUT_MS,
+      () => {
+        timedOut = true;
+        ac.abort();
+      }
+    )
       .then((list) => {
+        if (!alive) return;
         setEducations(list);
-
-        // educations 목록이 "갱신되는 순간"에 캐시/페이지 상태 동기화
         syncCachesForEducationList(list);
       })
       .catch((e: unknown) => {
-        if (isAbortError(e)) return;
+        if (!alive) return;
+
+        // “unmount/재요청 abort”는 조용히 무시
+        if (isAbortError(e) && !timedOut) return;
+
+        // timeout은 무한 로딩 대신 에러로 전환
+        if (timedOut || isTimeoutError(e)) {
+          setEduError("교육 목록 요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.");
+          return;
+        }
+
         console.warn("[EduPanel] getMyEducations failed", e);
         setEduError("교육 목록을 불러오지 못했습니다.");
       })
-      .finally(() => setEduLoading(false));
+      .finally(() => {
+        if (!alive) return;
+        setEduLoading(false);
+      });
 
     return () => {
-      window.cancelAnimationFrame(raf);
+      alive = false;
       ac.abort();
     };
-  }, [hasDOM, syncCachesForEducationList]);
+  }, [hasDOM, syncCachesForEducationList, eduReloadKey]);
 
   const ensureVideosLoaded = useCallback(async (educationId: string) => {
     const state = videosByEduIdRef.current[educationId];
     if (state && (state.status === "loading" || state.status === "ready")) return;
 
-    // 기존 요청 abort 후 재시도
     const prev = videosAbortRef.current.get(educationId);
     if (prev) prev.abort();
 
     const ac = new AbortController();
     videosAbortRef.current.set(educationId, ac);
 
-    setVideosByEduId((prevMap) => ({
-      ...prevMap,
-      [educationId]: { status: "loading", videos: prevMap[educationId]?.videos ?? [] },
-    }));
-
-    try {
-      const list = await getEducationVideos(educationId, { signal: ac.signal });
-      const videos = list.map(toUiVideo);
-
-      setVideosByEduId((prevMap) => ({
-        ...prevMap,
-        [educationId]: { status: "ready", videos },
-      }));
-    } catch (e: unknown) {
-      if (isAbortError(e)) return;
-      console.warn("[EduPanel] getEducationVideos failed", e);
-
-      setVideosByEduId((prevMap) => ({
+    setVideosByEduId((prevMap) => {
+      const next = {
         ...prevMap,
         [educationId]: {
-          status: "error",
+          status: "loading",
           videos: prevMap[educationId]?.videos ?? [],
-          message: "영상 목록을 불러오지 못했습니다.",
-        },
-      }));
+        } as VideoLoadState,
+      };
+      videosByEduIdRef.current = next;
+      return next;
+    });
+
+    let timedOut = false;
+
+    try {
+      const list = await withTimeout(
+        getEducationVideos(educationId, { signal: ac.signal }),
+        EDU_VIDEOS_TIMEOUT_MS,
+        () => {
+          timedOut = true;
+          ac.abort();
+        }
+      );
+
+      const videos = list.map(toUiVideo);
+
+      setVideosByEduId((prevMap) => {
+        const next = {
+          ...prevMap,
+          [educationId]: { status: "ready", videos } as VideoLoadState,
+        };
+        videosByEduIdRef.current = next;
+        return next;
+      });
+    } catch (e: unknown) {
+      // “재요청/언마운트 abort”는 무시 (타임아웃 abort만 에러로)
+      if (isAbortError(e) && !timedOut) return;
+
+      const msg =
+        timedOut || isTimeoutError(e)
+          ? "영상 목록 요청 시간이 초과되었습니다. 다시 시도해 주세요."
+          : "영상 목록을 불러오지 못했습니다.";
+
+      console.warn("[EduPanel] getEducationVideos failed", e);
+
+      setVideosByEduId((prevMap) => {
+        const next = {
+          ...prevMap,
+          [educationId]: {
+            status: "error",
+            videos: prevMap[educationId]?.videos ?? [],
+            message: msg,
+          } as VideoLoadState,
+        };
+        videosByEduIdRef.current = next;
+        return next;
+      });
+    } finally {
+      // 완료/에러 후 controller 정리 (메모리/누수 방지)
+      const cur = videosAbortRef.current.get(educationId);
+      if (cur === ac) videosAbortRef.current.delete(educationId);
     }
   }, []);
 
-  // 교육 목록이 준비되면: 전체 영상 목록을 백그라운드로 순차 로드
   useEffect(() => {
     if (!hasDOM) return;
     if (educations.length === 0) return;
 
-    let cancelled = false;
-
-    (async () => {
-      for (const edu of educations) {
-        if (cancelled) return;
-        await ensureVideosLoaded(edu.id);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    for (const edu of educations) {
+      void ensureVideosLoaded(edu.id);
+    }
   }, [hasDOM, educations, ensureVideosLoaded]);
 
   // =========================
@@ -545,8 +811,91 @@ const EduPanel: React.FC<EduPanelProps> = ({
     return mergeExternalProgress(out, videoProgressMap);
   }, [educations, videosByEduId, videoProgressMap]);
 
+  const canTakeQuizForSelected = useMemo(() => {
+    if (!selectedVideo) return false;
+    const section = sections.find((s) => s.id === selectedVideo.educationId);
+    if (!section) return false;
+    return isSectionDone(section);
+  }, [selectedVideo, sections]);
+
   // =========================
-  // 3) 헤더 safe top 동기화(리사이즈/이동)
+  // 2-1) 리스트 썸네일 presign 백그라운드 resolve (visibleVideos 기준)
+  // =========================
+  type ThumbTarget = { videoId: string; rawUrl: string };
+
+  const visibleThumbTargets = useMemo<ThumbTarget[]>(() => {
+    // watch 화면에서는 리스트 썸네일 resolve 불필요
+    if (selectedVideo) return [];
+
+    const out: ThumbTarget[] = [];
+    const pageSize = getPageSize(size.width);
+
+    for (const section of sections) {
+      const videos = section.videos ?? [];
+      if (videos.length === 0) continue;
+
+      const maxPage = Math.max(0, Math.ceil(videos.length / pageSize) - 1);
+      const currentPage = Math.min(sectionPages[section.id] ?? 0, maxPage);
+
+      const start = currentPage * pageSize;
+      const visible = videos.slice(start, start + pageSize);
+
+      for (const v of visible) {
+        const raw = (v.videoUrl ?? "").trim();
+        if (!raw) continue;
+
+        // 이미 재생 가능이면 skip
+        if (isPlayableUrl(raw)) continue;
+
+        // TTL 캐시 hit면 skip
+        if (getCachedUrl(presignCacheRef.current, raw)) continue;
+
+        // videoId 기준 state가 resolving/ready/error면 skip (error는 자동 재시도 X)
+        const st = presignByVideoId[v.id];
+        if (st?.status === "ready" || st?.status === "resolving" || st?.status === "error") continue;
+
+        // raw 기준 inFlight면 skip (중복 호출 방지)
+        if (presignInFlightRef.current.has(raw)) continue;
+
+        out.push({ videoId: v.id, rawUrl: raw });
+      }
+    }
+
+    return out;
+  }, [selectedVideo, sections, sectionPages, size.width, presignByVideoId]);
+
+  useEffect(() => {
+    if (!hasDOM) return;
+    if (visibleThumbTargets.length === 0) return;
+
+    let cancelled = false;
+
+    const MAX_CONCURRENCY = 4;
+    let idx = 0;
+
+    const worker = async () => {
+      while (!cancelled) {
+        const t = visibleThumbTargets[idx++];
+        if (!t) break;
+
+        try {
+          await resolvePlayableUrl(t.videoId, t.rawUrl, { watch: false });
+        } catch (e: unknown) {
+          if (isAbortError(e)) continue;
+        }
+      }
+    };
+
+    const count = Math.min(MAX_CONCURRENCY, visibleThumbTargets.length);
+    for (let i = 0; i < count; i++) void worker();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDOM, visibleThumbTargets, resolvePlayableUrl]);
+
+  // =========================
+  // 3) 헤더 safe top 동기화
   // =========================
   useEffect(() => {
     if (!hasDOM) return;
@@ -584,7 +933,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
       const minTop = getMinTop(topSafeRef.current);
 
-      // 1) 리사이즈
       if (resizeState.resizing && resizeState.dir) {
         const dx = event.clientX - resizeState.startX;
         const dy = event.clientY - resizeState.startY;
@@ -594,8 +942,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
         let newTop = resizeState.startTop;
         let newLeft = resizeState.startLeft;
 
-        const maxWidth = Math.max(MIN_WIDTH, window.innerWidth);
-        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - minTop);
+        const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
+        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - minTop - EDGE_MARGIN);
 
         const proposedWidthForW = resizeState.startWidth - dx;
         const proposedHeightForN = resizeState.startHeight - dy;
@@ -630,7 +978,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
         return;
       }
 
-      // 2) 드래그
       if (dragState.dragging) {
         const currentSize = sizeRef.current;
 
@@ -689,6 +1036,7 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
   const handleDragMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     const currentPos = posRef.current;
 
     dragRef.current = {
@@ -736,15 +1084,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
       eduCompleted?: boolean,
       videoCompleted?: boolean
     ) => {
-      if (eduCompleted !== undefined) {
-        setEducations((prev) =>
-          prev.map((e) => (e.id === educationId ? { ...e, completed: eduCompleted } : e))
-        );
-      }
-
       if (
         nextProgressPercent === undefined &&
         nextResumeSeconds === undefined &&
+        eduCompleted === undefined &&
         videoCompleted === undefined
       )
         return;
@@ -763,12 +1106,29 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
           const resume =
             typeof nextResumeSeconds === "number" ? Math.max(0, nextResumeSeconds) : v.resumeSeconds;
+
           const completed = videoCompleted ?? v.completed ?? p >= 100;
 
           return { ...v, progress: p, resumeSeconds: resume, completed };
         });
 
-        return { ...prev, [educationId]: { ...st, videos } };
+        const next = { ...prev, [educationId]: { ...st, videos } as VideoLoadState };
+        videosByEduIdRef.current = next;
+        return next;
+      });
+
+      setEducations((prev) => {
+        const next = prev.map((e) => {
+          if (e.id !== educationId) return e;
+          if (eduCompleted !== undefined) return { ...e, completed: eduCompleted };
+
+          const st = videosByEduIdRef.current[educationId];
+          if (!st || st.status !== "ready" || st.videos.length === 0) return e;
+
+          const derivedDone = st.videos.every((v) => (v.completed ?? false) || (v.progress ?? 0) >= 100);
+          return derivedDone ? { ...e, completed: true } : e;
+        });
+        return next;
       });
     },
     []
@@ -792,7 +1152,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
       const position = Math.max(0, Math.floor(v.currentTime));
 
-      // 최신 상태 우선: 이전 in-flight는 abort
       abortInFlightProgress();
       const ac = new AbortController();
       progressAbortRef.current = ac;
@@ -805,11 +1164,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
           { signal: ac.signal, keepalive: opts?.keepalive }
         );
 
-        // 성공 시에만 누적 watchTime 리셋
         watchTimeAccumRef.current = 0;
 
-        const nextProgress =
-          typeof res?.progressPercent === "number" ? res.progressPercent : undefined;
+        const nextProgress = typeof res?.progressPercent === "number" ? res.progressPercent : undefined;
+
         const nextResume =
           typeof res?.resumePositionSeconds === "number" ? res.resumePositionSeconds : position;
 
@@ -822,7 +1180,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
         const eduCompleted = typeof res?.eduCompleted === "boolean" ? res.eduCompleted : undefined;
 
-        // 상위 호환 업데이트
         if (nextProgress !== undefined) {
           syncProgressToParent(sel.id, clamp(nextProgress, 0, 100), nextResume, Boolean(videoCompleted));
         } else {
@@ -834,7 +1191,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
       } catch (e: unknown) {
         if (isAbortError(e)) return;
         console.warn("[EduPanel] postEduVideoProgress failed", e);
-        // 실패 시 watchTime 누적은 유지(다음 tick에서 재시도)
       }
     },
     [abortInFlightProgress, patchLocalVideoProgress, syncProgressToParent]
@@ -846,6 +1202,29 @@ const EduPanel: React.FC<EduPanelProps> = ({
       void flushProgress({ force: false });
     }, PROGRESS_TICK_MS);
   }, [flushProgress]);
+
+  // 탭 숨김/언로드 시에도 진행도 flush (keepalive)
+  useEffect(() => {
+    if (!hasDOM) return;
+    if (!selectedVideo) return;
+
+    const onVisibility = () => {
+      if (document.visibilityState !== "hidden") return;
+      void flushProgress({ force: true, keepalive: true });
+    };
+
+    const onBeforeUnload = () => {
+      void flushProgress({ force: true, keepalive: true });
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [hasDOM, selectedVideo, flushProgress]);
 
   // =========================
   // 6) list interactions
@@ -876,41 +1255,72 @@ const EduPanel: React.FC<EduPanelProps> = ({
     });
   };
 
-  const handleVideoClick = (educationId: string, educationTitle: string, video: UiVideo) => {
-    if (!video.videoUrl) return;
+  // handleVideoClick를 “async + presign 선반영”으로 변경
+  const handleVideoClick = useCallback(
+    async (educationId: string, educationTitle: string, video: UiVideo) => {
+      const raw = (video.videoUrl ?? "").trim();
+      if (!raw) return;
 
-    listRestoreRef.current = { size: sizeRef.current, pos: posRef.current };
+      // watch 전환 시 이전 resolve는 abort
+      abortWatchResolve();
 
-    const base = clamp(video.progress ?? 0, 0, 100);
+      listRestoreRef.current = { size: sizeRef.current, pos: posRef.current };
 
-    setSelectedVideo({
-      ...video,
-      educationId,
-      educationTitle,
-      progress: base,
-    });
+      const base = clamp(video.progress ?? 0, 0, 100);
 
-    setWatchPercent(base);
-    completedSentRef.current = base >= 100;
+      // watch 패널부터 먼저 열어 UX 지연 방지
+      const prevPos = posRef.current;
+      const prevSize = sizeRef.current;
+      const nextSize = WATCH_DEFAULT_SIZE;
+      const minTop = getMinTop(topSafeRef.current);
+      setSize(nextSize);
+      setPanelPos(derivePosByBottomRight(prevPos, prevSize, nextSize, minTop));
 
-    // watch tracking reset
-    maxWatchedTimeRef.current = 0;
-    videoDurationRef.current = 0;
-    watchTimeAccumRef.current = 0;
-    lastTimeSampleRef.current = null;
-    setIsPlaying(false);
+      // 초기 선택 상태 (rawVideoUrl은 항상 유지)
+      const knownPlayable = getKnownPlayableUrl(video.id, raw);
 
-    const prevPos = posRef.current;
-    const prevSize = sizeRef.current;
-    const nextSize = WATCH_DEFAULT_SIZE;
+      setSelectedVideo({
+        ...video,
+        educationId,
+        educationTitle,
+        rawVideoUrl: raw,
+        videoUrl: knownPlayable, // presign된 URL이 있으면 즉시 반영
+        progress: base,
+      });
 
-    const minTop = getMinTop(topSafeRef.current);
-    setSize(nextSize);
-    setPanelPos(derivePosByBottomRight(prevPos, prevSize, nextSize, minTop));
-  };
+      setWatchPercent(base);
+      completedSentRef.current = base >= 100;
+
+      maxWatchedTimeRef.current = 0;
+      videoDurationRef.current = 0;
+      watchTimeAccumRef.current = 0;
+      lastTimeSampleRef.current = null;
+      setIsPlaying(false);
+
+      // playable이 이미 확보되면 끝
+      if (knownPlayable) {
+        setPresignState(video.id, { status: "ready", url: knownPlayable });
+        return;
+      }
+
+      // 아니면 presign resolve
+      try {
+        const resolved = await resolvePlayableUrl(video.id, raw, { watch: true });
+
+        // 이미 다른 영상으로 이동한 경우 state 업데이트 금지
+        const cur = selectedVideoRef.current;
+        if (!cur || cur.id !== video.id) return;
+
+        setSelectedVideo((prev) => (prev && prev.id === video.id ? { ...prev, videoUrl: resolved } : prev));
+      } catch (e: unknown) {
+        if (isAbortError(e)) return;
+      }
+    },
+    [abortWatchResolve, getKnownPlayableUrl, resolvePlayableUrl, setPresignState]
+  );
 
   // =========================
-  // 7) video events (seek/resume + watchTime accumulate)
+  // 7) video events
   // =========================
   const handleLoadedMetadata = () => {
     const v = videoRef.current;
@@ -919,28 +1329,66 @@ const EduPanel: React.FC<EduPanelProps> = ({
     const duration = v.duration || 0;
     videoDurationRef.current = duration;
 
-    const basePercent = selectedVideo?.progress ?? 0;
-    const resumeSeconds = selectedVideo?.resumeSeconds;
+    const basePercent = clamp(selectedVideo?.progress ?? 0, 0, 100);
+    const resumeSecondsRaw = selectedVideo?.resumeSeconds;
 
-    let startTime = 0;
-    if (typeof resumeSeconds === "number" && resumeSeconds > 0) {
-      startTime = resumeSeconds;
-    } else if (duration > 0) {
-      startTime = duration * (basePercent / 100);
+    const fromPercent = duration > 0 ? duration * (basePercent / 100) : 0;
+
+    const fromResume =
+      typeof resumeSecondsRaw === "number" && resumeSecondsRaw > 0
+        ? duration > 0
+          ? normalizeResumeSeconds(resumeSecondsRaw, duration)
+          : Math.max(0, resumeSecondsRaw)
+        : 0;
+
+    // “이미 본 만큼”은 최소한 보장해야 seek-guard UX가 깨지지 않는다.
+    let startTime = Math.max(fromPercent, fromResume);
+
+    if (duration > 0) {
+      // duration 끝에 너무 붙으면 ended/seek 이슈가 있어 살짝 여유
+      startTime = clamp(startTime, 0, Math.max(0, duration - 0.25));
+    } else {
+      startTime = Math.max(0, startTime);
     }
 
-    startTime = Math.max(0, Math.min(duration || startTime, startTime));
-
     try {
+      allowProgrammaticSeekRef.current = true;
       v.currentTime = startTime;
+      window.setTimeout(() => {
+        allowProgrammaticSeekRef.current = false;
+      }, 0);
     } catch {
-      // ignore
+      allowProgrammaticSeekRef.current = false;
     }
 
     maxWatchedTimeRef.current = startTime;
     lastTimeSampleRef.current = startTime;
 
-    setWatchPercent(basePercent);
+    const derivedPercent = duration > 0 ? (startTime / duration) * 100 : basePercent;
+    setWatchPercent(clamp(Math.max(basePercent, derivedPercent), 0, 100));
+  };
+
+  // 앞으로 점프 seek 방지
+  const handleSeeking = () => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    if (allowProgrammaticSeekRef.current) return;
+
+    const target = v.currentTime;
+    const maxAllowed = maxWatchedTimeRef.current + SEEK_FORWARD_TOLERANCE_SEC;
+
+    if (Number.isFinite(target) && target > maxAllowed) {
+      try {
+        allowProgrammaticSeekRef.current = true;
+        v.currentTime = maxWatchedTimeRef.current;
+        window.setTimeout(() => {
+          allowProgrammaticSeekRef.current = false;
+        }, 0);
+      } catch {
+        allowProgrammaticSeekRef.current = false;
+      }
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -950,7 +1398,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
     const current = v.currentTime;
 
-    // 누적 watchTime: "재생으로 인한 증가"만 반영(큰 점프는 seek로 간주)
     if (!v.paused && !v.ended && isPlaying) {
       const prev = lastTimeSampleRef.current;
       if (typeof prev === "number") {
@@ -962,7 +1409,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
       lastTimeSampleRef.current = current;
     }
 
-    // 진행률: 최대 시청 위치 기반(되감기 방지)
     const newMax = Math.max(maxWatchedTimeRef.current, current);
     maxWatchedTimeRef.current = newMax;
 
@@ -971,7 +1417,6 @@ const EduPanel: React.FC<EduPanelProps> = ({
     setWatchPercent((prev) => {
       const next = newPercent > prev ? newPercent : prev;
 
-      // 100% 달성 1회 처리(상위 상태만)
       if (selectedVideo && !completedSentRef.current && Math.round(next) >= 100) {
         completedSentRef.current = true;
         const resume = getResumeSeconds();
@@ -1003,14 +1448,32 @@ const EduPanel: React.FC<EduPanelProps> = ({
     }
   };
 
+  const canWatchPlay = useMemo(() => {
+    if (!selectedVideo) return false;
+
+    const st = presignByVideoId[selectedVideo.id];
+    if (st?.status === "resolving") return false;
+    if (st?.status === "error") return false;
+
+    return Boolean(selectedVideo.videoUrl);
+  }, [selectedVideo, presignByVideoId]);
+
   const handlePlayPause = () => {
     const v = videoRef.current;
     if (!v) return;
 
+    if (!canWatchPlay) return;
+
     if (v.paused || v.ended) {
-      void v.play();
-      setIsPlaying(true);
-      startTick();
+      v.play()
+        .then(() => {
+          setIsPlaying(true);
+          startTick();
+        })
+        .catch(() => {
+          setIsPlaying(false);
+          stopTick();
+        });
     } else {
       v.pause();
       setIsPlaying(false);
@@ -1019,10 +1482,39 @@ const EduPanel: React.FC<EduPanelProps> = ({
     }
   };
 
+  const retryResolveSelected = useCallback(() => {
+    const cur = selectedVideoRef.current;
+    if (!cur) return;
+
+    const raw = (cur.rawVideoUrl ?? "").trim();
+    if (!raw) return;
+
+    if (isPlayableUrl(raw)) {
+      presignCacheRef.current.set(raw, { url: raw, expiresAtMs: Date.now() + 365 * 24 * 60 * 60 * 1000 });
+      setPresignState(cur.id, { status: "ready", url: raw });
+      setSelectedVideo((prev) => (prev && prev.id === cur.id ? { ...prev, videoUrl: raw } : prev));
+      return;
+    }
+
+    void (async () => {
+      try {
+        const resolved = await resolvePlayableUrl(cur.id, raw, { force: true, watch: true });
+
+        const latest = selectedVideoRef.current;
+        if (!latest || latest.id !== cur.id) return;
+
+        setSelectedVideo((prev) => (prev && prev.id === cur.id ? { ...prev, videoUrl: resolved } : prev));
+      } catch (e: unknown) {
+        if (isAbortError(e)) return;
+      }
+    })();
+  }, [resolvePlayableUrl, setPresignState]);
+
   const handleGoToQuiz = () => {
     if (!selectedVideo) return;
     if (!onOpenQuizPanel) return;
-    if (roundedWatchPercent < 100) return;
+
+    if (!canTakeQuizForSelected) return;
 
     void flushProgress({ force: true });
     onOpenQuizPanel(selectedVideo.educationId);
@@ -1043,6 +1535,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
   };
 
   const handleBackToList = () => {
+    abortWatchResolve();
+
     if (selectedVideo) {
       videoRef.current?.pause();
       setIsPlaying(false);
@@ -1074,6 +1568,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
   };
 
   const handleCloseClick = () => {
+    abortAllResolves();
+
     if (selectedVideo) {
       videoRef.current?.pause();
       setIsPlaying(false);
@@ -1088,17 +1584,101 @@ const EduPanel: React.FC<EduPanelProps> = ({
     onClose();
   };
 
-  // 언마운트 cleanup
   useEffect(() => {
     const abortMap = videosAbortRef.current;
     return () => {
       stopTick();
+      abortInFlightProgress();
+      abortAllResolves();
+
       for (const [, c] of abortMap.entries()) c.abort();
       abortMap.clear();
     };
-  }, [stopTick]);
+  }, [stopTick, abortInFlightProgress, abortAllResolves]);
 
   if (!hasDOM) return null;
+
+  const selectedPresignState: PresignState | undefined =
+    selectedVideo ? presignByVideoId[selectedVideo.id] : undefined;
+
+  const isResolvingSelected = selectedPresignState?.status === "resolving";
+  const isErrorSelected = selectedPresignState?.status === "error";
+  const selectedErrorMessage =
+    selectedPresignState && selectedPresignState.status === "error"
+      ? selectedPresignState.message
+      : "영상 URL을 준비하지 못했습니다.";
+
+  // =========================
+  // UI helpers
+  // =========================
+  const renderThumb = (v: UiVideo) => {
+    const raw = (v.videoUrl ?? "").trim();
+    const playable = raw ? getKnownPlayableUrl(v.id, raw) : undefined;
+    const st = presignByVideoId[v.id];
+
+    const labelStyle: React.CSSProperties = {
+      position: "absolute",
+      inset: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 12,
+      opacity: 0.85,
+      pointerEvents: "none",
+    };
+
+    if (st?.status === "resolving") {
+      return (
+        <div className="cb-edu-video-thumbnail">
+          <div style={labelStyle}>URL 준비 중…</div>
+        </div>
+      );
+    }
+
+    if (st?.status === "error") {
+      return (
+        <div className="cb-edu-video-thumbnail">
+          <div style={labelStyle}>URL 오류</div>
+        </div>
+      );
+    }
+
+    if (playable) {
+      return (
+        <div className="cb-edu-video-thumbnail">
+          <video
+            className="cb-edu-video-thumbnail-video"
+            src={playable}
+            muted
+            playsInline
+            preload="metadata"
+            controls={false}
+            disablePictureInPicture
+            disableRemotePlayback
+            onContextMenu={(e) => e.preventDefault()}
+            onLoadedMetadata={(e) => {
+              try {
+                const el = e.currentTarget;
+                el.currentTime = 0;
+                el.pause();
+              } catch {
+                // ignore
+              }
+            }}
+          />
+          <div className="cb-edu-video-play-circle">
+            <span className="cb-edu-video-play-icon">▶</span>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="cb-edu-video-thumbnail">
+        <div style={labelStyle}>미리보기 없음</div>
+      </div>
+    );
+  };
 
   return createPortal(
     <div
@@ -1171,17 +1751,22 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
           <div className="cb-edu-panel-inner">
             {selectedVideo ? (
+              // =========================
+              // WATCH VIEW
+              // =========================
               <div className="cb-edu-watch-layout">
                 <header className="cb-edu-watch-header">
                   <button
                     type="button"
-                    className="cb-edu-nav-btn cb-edu-watch-back-btn"
+                    className="cb-edu-watch-back-btn"
                     onClick={handleBackToList}
                     aria-label="교육 영상 목록으로 돌아가기"
                   >
                     ◀
                   </button>
-                  <h2 className="cb-edu-watch-title">{selectedVideo.title}</h2>
+                  <h2 className="cb-edu-watch-title" title={selectedVideo.title}>
+                    {selectedVideo.title}
+                  </h2>
                 </header>
 
                 <div className="cb-edu-watch-body">
@@ -1192,214 +1777,289 @@ const EduPanel: React.FC<EduPanelProps> = ({
                       ref={videoRef}
                       onLoadedMetadata={handleLoadedMetadata}
                       onTimeUpdate={handleTimeUpdate}
+                      onSeeking={handleSeeking}
                       onEnded={handleEnded}
                       onClick={handlePlayPause}
                       controls={false}
                       playsInline
+                      preload="metadata"
+                      controlsList="nodownload noplaybackrate noremoteplayback"
+                      disablePictureInPicture
+                      disableRemotePlayback
                       onContextMenu={(e) => e.preventDefault()}
                     >
                       브라우저가 비디오 태그를 지원하지 않습니다.
                     </video>
 
-                    <div className="cb-edu-watch-overlay">
-                      <button
-                        type="button"
-                        className="cb-edu-watch-play-btn"
-                        onClick={handlePlayPause}
-                        aria-label={isPlaying ? "일시정지" : "재생"}
+                    {isResolvingSelected ? (
+                      <div
+                        className="cb-edu-empty"
+                        style={{
+                          position: "absolute",
+                          inset: 12,
+                          pointerEvents: "auto",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
                       >
-                        <span className="cb-edu-watch-play-icon">{isPlaying ? "❚❚" : "▶"}</span>
-                      </button>
-                      <span className="cb-edu-watch-progress-text">시청률 {roundedWatchPercent}%</span>
+                        <div>
+                          <div className="cb-edu-empty-title">영상 URL을 준비하는 중…</div>
+                          <div className="cb-edu-empty-desc">잠시만 기다려 주세요.</div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {isErrorSelected ? (
+                      <div
+                        className="cb-edu-empty"
+                        style={{
+                          position: "absolute",
+                          inset: 12,
+                          pointerEvents: "auto",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <div>
+                          <div className="cb-edu-empty-title">영상 재생 준비 실패</div>
+                          <div className="cb-edu-empty-desc">{selectedErrorMessage}</div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "center" }}>
+                            <button type="button" className="cb-btn cb-btn-primary" onClick={retryResolveSelected}>
+                              다시 시도
+                            </button>
+                            <button type="button" className="cb-btn" onClick={handleBackToList}>
+                              목록으로
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="cb-edu-watch-overlay">
+                      {!isResolvingSelected && !isErrorSelected ? (
+                        <>
+                          <button
+                            type="button"
+                            className="cb-edu-watch-play-btn"
+                            onClick={handlePlayPause}
+                            disabled={!canWatchPlay}
+                            aria-label={isPlaying ? "일시정지" : "재생"}
+                            title={!canWatchPlay ? "영상 URL 준비 중입니다." : undefined}
+                          >
+                            {isPlaying ? "❚❚" : "▶"}
+                          </button>
+
+                          <div className="cb-edu-watch-progress-text">
+                            {clamp(roundedWatchPercent, 0, 100)}%
+                          </div>
+                        </>
+                      ) : null}
                     </div>
                   </div>
 
-                  <div className="cb-edu-watch-footer">
-                    {onOpenQuizPanel ? (
-                      <button
-                        type="button"
-                        className={"cb-edu-watch-quiz-btn" + (roundedWatchPercent >= 100 ? " is-active" : "")}
-                        onClick={handleGoToQuiz}
-                        disabled={roundedWatchPercent < 100}
-                      >
-                        퀴즈 풀기
-                      </button>
-                    ) : null}
-                  </div>
+                  <footer className="cb-edu-watch-footer">
+                    <button
+                      type="button"
+                      className={`cb-edu-watch-quiz-btn ${canTakeQuizForSelected ? "is-active" : ""}`}
+                      onClick={handleGoToQuiz}
+                      disabled={!canTakeQuizForSelected}
+                      title={!canTakeQuizForSelected ? "교육 영상 전체를 시청 완료해야 퀴즈를 볼 수 있습니다." : undefined}
+                    >
+                      퀴즈 풀러가기
+                    </button>
+                  </footer>
                 </div>
               </div>
             ) : (
-              <>
-                <header className="cb-edu-header">
-                  <h2 className="cb-edu-title">교육 영상</h2>
+              // =========================
+              // LIST VIEW
+              // =========================
+              <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+                <header className="cb-edu-header cb-edu-header-row">
+                  <h2 className="cb-edu-title">교육</h2>
+
+                  <button
+                    type="button"
+                    className="cb-edu-nav-btn cb-edu-refresh-btn"
+                    onClick={() => setEduReloadKey((k) => k + 1)}
+                    disabled={eduLoading}
+                    aria-label="교육 목록 새로고침"
+                    title="새로고침"
+                  >
+                    ⟳
+                  </button>
                 </header>
 
                 <div className="cb-edu-body">
                   {eduLoading ? (
                     <div className="cb-edu-empty">
                       <div className="cb-edu-empty-title">교육 목록을 불러오는 중…</div>
+                      <div className="cb-edu-empty-desc">잠시만 기다려 주세요.</div>
                     </div>
                   ) : eduError ? (
                     <div className="cb-edu-empty">
-                      <div className="cb-edu-empty-title">{eduError}</div>
-                      <div className="cb-edu-empty-desc">education-service가 실행 중인지 확인해 주세요.</div>
+                      <div className="cb-edu-empty-title">교육 목록 로드 실패</div>
+                      <div className="cb-edu-empty-desc">{eduError}</div>
+                      <div style={{ marginTop: 12, display: "flex", justifyContent: "center" }}>
+                        <button type="button" className="cb-btn cb-btn-primary" onClick={() => setEduReloadKey((k) => k + 1)}>
+                          다시 시도
+                        </button>
+                      </div>
                     </div>
-                  ) : educations.length === 0 ? (
+                  ) : sections.length === 0 ? (
                     <div className="cb-edu-empty">
                       <div className="cb-edu-empty-title">표시할 교육이 없습니다.</div>
-                      <div className="cb-edu-empty-desc">배정된 교육이 있으면 이 화면에 표시됩니다.</div>
+                      <div className="cb-edu-empty-desc">배정된 교육이 없거나 아직 게시되지 않았습니다.</div>
                     </div>
                   ) : (
-                    <div className="cb-edu-sections">
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       {sections.map((section) => {
+                        const st = videosByEduId[section.id] ?? { status: "idle", videos: [] };
+
                         const pageSize = getPageSize(size.width);
-
-                        const st = videosByEduId[section.id];
-                        const status: VideoLoadState["status"] = st?.status ?? "idle";
-                        const videos = section.videos;
-
-                        const maxPage = Math.max(0, Math.ceil(videos.length / pageSize) - 1);
+                        const maxPage = Math.max(0, Math.ceil(section.videos.length / pageSize) - 1);
                         const currentPage = Math.min(sectionPages[section.id] ?? 0, maxPage);
 
                         const start = currentPage * pageSize;
-                        const visibleVideos = videos.slice(start, start + pageSize);
+                        const visible = section.videos.slice(start, start + pageSize);
 
-                        const canPrev = currentPage > 0;
-                        const canNext = currentPage < maxPage;
-
-                        const showLoading = status === "loading" || status === "idle";
-                        const showError = status === "error";
-                        const errorMessage =
-                          st && st.status === "error" ? st.message : "영상 목록을 불러오지 못했습니다.";
+                        const done = isSectionDone(section);
+                        const showPager = section.videos.length > pageSize;
 
                         return (
-                          <section key={section.id} className="cb-edu-section">
-                            <h3 className="cb-edu-section-title">
-                              {section.title}
-                              {section.completed ? (
-                                <span className="cb-edu-status cb-edu-status-completed" style={{ marginLeft: 8 }}>
-                                  이수완료
-                                </span>
-                              ) : null}
-                            </h3>
+                          <div key={section.id} className="cb-edu-section">
+                            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                              <div className="cb-edu-section-title">{section.title}</div>
+                              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                                {section.eduType ? section.eduType : "교육"} · {done ? "완료" : "진행 중"}
+                              </div>
 
-                            <div className="cb-edu-section-row">
-                              <button
-                                type="button"
-                                className="cb-edu-nav-btn cb-edu-nav-prev"
-                                onClick={() => handlePrevClick(section.id)}
-                                disabled={!canPrev}
-                                aria-label={`${section.title} 이전 영상`}
-                              >
-                                ◀
-                              </button>
+                              <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                                {onOpenQuizPanel ? (
+                                  <button
+                                    type="button"
+                                    className={`cb-edu-watch-quiz-btn ${done ? "is-active" : ""}`}
+                                    style={{ height: 34, padding: "0 14px", fontSize: 13 }}
+                                    disabled={!done}
+                                    onClick={() => onOpenQuizPanel(section.id)}
+                                    title={!done ? "교육 영상 전체를 시청 완료해야 퀴즈를 볼 수 있습니다." : undefined}
+                                  >
+                                    퀴즈
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
 
-                              <div className="cb-edu-videos-row">
-                                {showError ? (
-                                  <div className="cb-edu-empty">
-                                    <div className="cb-edu-empty-title">{errorMessage}</div>
+                            <div style={{ marginTop: 10 }}>
+                              {st.status === "loading" ? (
+                                <div className="cb-edu-empty" style={{ padding: 10 }}>
+                                  <div className="cb-edu-empty-title">영상 목록 로딩 중…</div>
+                                </div>
+                              ) : st.status === "error" ? (
+                                <div className="cb-edu-empty" style={{ padding: 10 }}>
+                                  <div className="cb-edu-empty-title">영상 목록 로드 실패</div>
+                                  <div className="cb-edu-empty-desc">{st.message}</div>
+                                  <div style={{ marginTop: 10, display: "flex", justifyContent: "center" }}>
                                     <button
                                       type="button"
-                                      className="cb-edu-watch-quiz-btn is-active"
-                                      style={{ marginTop: 10 }}
+                                      className="cb-btn cb-btn-primary"
                                       onClick={() => void ensureVideosLoaded(section.id)}
                                     >
                                       다시 시도
                                     </button>
                                   </div>
-                                ) : showLoading ? (
-                                  <div className="cb-edu-empty">
-                                    <div className="cb-edu-empty-title">영상 목록을 불러오는 중…</div>
-                                  </div>
-                                ) : visibleVideos.length === 0 ? (
-                                  <div className="cb-edu-empty">
-                                    <div className="cb-edu-empty-title">등록된 영상이 없습니다.</div>
-                                    <div className="cb-edu-empty-desc">이 교육에 게시된 영상이 없습니다.</div>
-                                  </div>
-                                ) : (
-                                  visibleVideos.map((video) => {
-                                    const progress = clamp(video.progress ?? 0, 0, 100);
-                                    const { label, key } = getVideoStatus(progress);
-                                    const canPlay = Boolean(video.videoUrl);
+                                </div>
+                              ) : visible.length === 0 ? (
+                                <div className="cb-edu-empty" style={{ padding: 10 }}>
+                                  <div className="cb-edu-empty-title">영상이 없습니다.</div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="cb-edu-section-row">
+                                    {showPager ? (
+                                      <button
+                                        type="button"
+                                        className="cb-edu-nav-btn"
+                                        onClick={() => handlePrevClick(section.id)}
+                                        disabled={currentPage <= 0}
+                                        aria-label="이전"
+                                        title="이전"
+                                      >
+                                        ◀
+                                      </button>
+                                    ) : (
+                                      <div style={{ width: 34, height: 34 }} />
+                                    )}
 
-                                    return (
-                                      <article key={video.id} className="cb-edu-video-card" aria-label={video.title}>
-                                        <button type="button" className="cb-edu-video-close" aria-label="영상 제거" disabled>
-                                          ✕
-                                        </button>
+                                    <div className="cb-edu-videos-row">
+                                      {visible.map((v) => {
+                                        const p = clamp(v.progress ?? 0, 0, 100);
+                                        const vs = getVideoStatus(p);
+                                        const isComplete = (v.completed ?? false) || p >= 100;
 
-                                        <div
-                                          className={
-                                            "cb-edu-video-thumbnail cb-edu-video-thumbnail-clickable" +
-                                            (canPlay ? "" : " is-disabled")
-                                          }
-                                          onClick={() => {
-                                            if (!canPlay) return;
-                                            handleVideoClick(section.id, section.title, video);
-                                          }}
-                                          role="button"
-                                          tabIndex={0}
-                                          onKeyDown={(e) => {
-                                            if (!canPlay) return;
-                                            if (e.key === "Enter" || e.key === " ") {
-                                              e.preventDefault();
-                                              handleVideoClick(section.id, section.title, video);
-                                            }
-                                          }}
-                                        >
-                                          {canPlay ? (
-                                            <>
-                                              <video
-                                                className="cb-edu-video-thumbnail-video"
-                                                src={video.videoUrl}
-                                                muted
-                                                preload="metadata"
-                                                playsInline
-                                                aria-hidden="true"
-                                              />
-                                              <div className="cb-edu-video-play-circle">
-                                                <span className="cb-edu-video-play-icon">▶</span>
-                                              </div>
-                                            </>
-                                          ) : (
-                                            <div className="cb-edu-empty" style={{ height: "100%" }}>
-                                              <div className="cb-edu-empty-title">파일 준비중</div>
+                                        return (
+                                          <button
+                                            key={v.id}
+                                            type="button"
+                                            className="cb-edu-video-card"
+                                            onClick={() => void handleVideoClick(section.id, section.title, v)}
+                                          >
+                                            {renderThumb(v)}
+
+                                            <div className="cb-edu-video-title" title={v.title}>
+                                              {v.title}
                                             </div>
-                                          )}
-                                        </div>
 
-                                        <div className="cb-edu-video-progress">
-                                          <div className="cb-edu-video-progress-track">
-                                            <div className="cb-edu-video-progress-fill" style={{ width: `${progress}%` }} />
-                                          </div>
-                                          <div className="cb-edu-video-meta">
-                                            <span className="cb-edu-progress-text">시청률 {progress}%</span>
-                                            <span className={`cb-edu-status cb-edu-status-${key}`}>{label}</span>
-                                          </div>
-                                        </div>
-                                      </article>
-                                    );
-                                  })
-                                )}
-                              </div>
+                                            <div className="cb-edu-video-progress">
+                                              <div className="cb-edu-video-progress-track">
+                                                <div className="cb-edu-video-progress-fill" style={{ width: `${p}%` }} />
+                                              </div>
+                                            </div>
 
-                              <button
-                                type="button"
-                                className="cb-edu-nav-btn cb-edu-nav-next"
-                                onClick={() => handleNextClick(section.id)}
-                                disabled={!canNext}
-                                aria-label={`${section.title} 다음 영상`}
-                              >
-                                ▶
-                              </button>
+                                            <div className="cb-edu-video-meta">
+                                              <div className="cb-edu-progress-text">{Math.round(p)}%</div>
+                                              <div className={`cb-edu-status ${isComplete ? "completed" : vs.key}`}>
+                                                {isComplete ? "완료" : vs.label}
+                                              </div>
+                                            </div>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+
+                                    {showPager ? (
+                                      <button
+                                        type="button"
+                                        className="cb-edu-nav-btn"
+                                        onClick={() => handleNextClick(section.id)}
+                                        disabled={currentPage >= maxPage}
+                                        aria-label="다음"
+                                        title="다음"
+                                      >
+                                        ▶
+                                      </button>
+                                    ) : (
+                                      <div style={{ width: 34, height: 34 }} />
+                                    )}
+                                  </div>
+
+                                  {showPager ? (
+                                    <div style={{ marginTop: 8, display: "flex", justifyContent: "center", fontSize: 12, opacity: 0.8 }}>
+                                      {currentPage + 1} / {maxPage + 1}
+                                    </div>
+                                  ) : null}
+                                </>
+                              )}
                             </div>
-                          </section>
+                          </div>
                         );
                       })}
                     </div>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </div>

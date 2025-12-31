@@ -25,7 +25,137 @@ import {
   softDelete,
   suggestNextVersion,
 } from "./policyStore";
-import ProjectFilesModal, { type ProjectFileItem } from "./ProjectFilesModal";
+import ProjectFilesModal, {
+  type ProjectFileItem,
+  type AddFilesOutcome,
+} from "./ProjectFilesModal";
+import { fetchJson, HttpError } from "./authHttp";
+
+const INFRA_BASE =
+  import.meta.env.VITE_INFRA_API_BASE?.toString().trim() || "/api-infra";
+
+type PresignUploadResp = {
+  url?: string;
+  putUrl?: string;
+  presignedUrl?: string;
+  uploadUrl?: string;
+  key?: string;
+  objectKey?: string;
+  headers?: Record<string, string> | null;
+  requiredHeaders?: Record<string, string> | null;
+};
+
+function pickPresignUrl(r: PresignUploadResp): string {
+  const u = r.url || r.putUrl || r.presignedUrl || r.uploadUrl;
+  if (!u) throw new Error("Presign 응답에 업로드 URL이 없습니다.");
+  return u;
+}
+
+function normalizeHeaderRecord(
+  v: PresignUploadResp["headers"] | PresignUploadResp["requiredHeaders"]
+): Record<string, string> | undefined {
+  if (!v) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === "string") out[k] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+async function putToPresignedUrlDirect(
+  url: string,
+  file: File,
+  headers?: Record<string, string>
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+    xhr.timeout = 120_000;
+
+    // S3 presigned PUT에는 Authorization 등 커스텀 헤더를 붙이지 않는다.
+    const forbidden = new Set(["authorization", "content-length", "host"]);
+
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) {
+        const lk = k.toLowerCase();
+        if (!k) continue;
+        if (forbidden.has(lk)) continue;
+
+        try {
+          xhr.setRequestHeader(k, v);
+        } catch {
+          // 브라우저가 금지한 헤더는 무시
+        }
+      }
+    }
+
+    xhr.onload = () => {
+      const ok = xhr.status >= 200 && xhr.status < 300;
+      if (ok) resolve();
+      else reject(new Error(`S3 PUT 실패 (status=${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("S3 PUT 네트워크 오류"));
+    xhr.ontimeout = () => reject(new Error("S3 PUT 타임아웃"));
+    xhr.send(file);
+  });
+}
+
+async function putToPresignedUrlViaProxy(url: string, file: File): Promise<void> {
+  // 백엔드가 “presigned url로 대신 PUT”해주는 폴백 엔드포인트
+  const proxy = `${INFRA_BASE}/infra/files/presign/upload/put?url=${encodeURIComponent(
+    url
+  )}`;
+  await fetchJson<unknown>(proxy, { method: "PUT", body: file });
+}
+
+async function uploadDocFileWithPresign(file: File): Promise<void> {
+  const endpoint = `${INFRA_BASE}/infra/files/presign/upload`;
+
+  // 백엔드 구현 흔들림을 흡수하기 위해 필드명은 넓게 보낸다.
+  const payload = {
+    type: "docs",
+    filename: file.name,
+    fileName: file.name,
+    contentType: file.type || undefined,
+    mimeType: file.type || undefined,
+    sizeBytes: file.size,
+    size: file.size,
+  };
+
+  const presign = await fetchJson<PresignUploadResp>(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const putUrl = pickPresignUrl(presign);
+  const headers = normalizeHeaderRecord(presign.headers ?? presign.requiredHeaders);
+
+  try {
+    await putToPresignedUrlDirect(putUrl, file, headers);
+  } catch {
+    // direct PUT 실패 시(주로 CORS/네트워크) 프록시 PUT 폴백
+    await putToPresignedUrlViaProxy(putUrl, file);
+  }
+}
+
+function makeFileKey(name: string, size: number) {
+  const s = Number.isFinite(size) ? size : 0;
+  return `${name}__${s}`;
+}
+
+function mapUploadErrorMessage(err: unknown): string {
+  if (err instanceof PolicyStoreError) {
+    return mapPolicyError(err).message;
+  }
+  if (err instanceof HttpError) {
+    // presign/proxy 호출 실패
+    if (typeof err.body === "string" && err.body.trim()) return err.body;
+    return `요청 실패: ${err.status} ${err.statusText}`;
+  }
+  if (err instanceof Error) return err.message;
+  return "업로드 실패(알 수 없음)";
+}
 
 function cx(...tokens: Array<string | false | null | undefined>) {
   return tokens.filter(Boolean).join(" ");
@@ -1434,22 +1564,74 @@ export default function AdminPolicyView() {
             setJumpToPreprocessOnClose(false);
           }
         }}
-        onAddFiles={(fs) => {
-          if (!selected || selected.status !== "DRAFT") return;
-          try {
-            attachFilesToDraft(selected.id, fs, actor);
-            runPreprocess(selected.id, actor);
+        onAddFiles={async (fs): Promise<AddFilesOutcome[]> => {
+          if (!selected || selected.status !== "DRAFT") return [];
 
-            setJumpToPreprocessOnClose(true);
+          const existedNames = new Set(
+            (policyFiles ?? []).map((f) => f.name.trim().toLowerCase())
+          );
 
+          const outcomes: AddFilesOutcome[] = [];
+          let okCount = 0;
+
+          for (const file of fs) {
+            const key = makeFileKey(file.name, file.size);
+            const lower = file.name.trim().toLowerCase();
+
+            // (1) 같은 모달 세션/현재 draft 기준 즉시 중복 차단(불필요한 presign/업로드 방지)
+            if (existedNames.has(lower)) {
+              outcomes.push({
+                key,
+                ok: false,
+                errorMessage: "동일한 파일이 이미 등록되어 있습니다.",
+              });
+              continue;
+            }
+
+            try {
+              // (2) presign 발급(토큰 포함) → S3 direct PUT(무토큰) → 실패 시 proxy PUT(토큰 포함)
+              await uploadDocFileWithPresign(file);
+
+              // (3) 스토어 메타 반영(모달이 files 갱신을 감지해 spinner→check 전환)
+              attachFilesToDraft(selected.id, [file], actor);
+              existedNames.add(lower);
+
+              okCount += 1;
+              outcomes.push({ key, ok: true });
+            } catch (e) {
+              outcomes.push({
+                key,
+                ok: false,
+                errorMessage: mapUploadErrorMessage(e),
+              });
+            }
+          }
+
+          const failCount = outcomes.length - okCount;
+
+          // preprocess는 “성공 1개라도” 있었을 때만 1회 실행
+          if (okCount > 0) {
+            try {
+              runPreprocess(selected.id, actor);
+              setJumpToPreprocessOnClose(true);
+            } catch (e) {
+              const t = mapPolicyError(e);
+              showToast(t.tone, t.message);
+            }
+          }
+
+          if (okCount > 0 && failCount === 0) {
             showToast(
               "neutral",
               "파일 업로드 완료 · 전처리를 시작했습니다. (닫으면 전처리 탭으로 이동)",
             );
-          } catch (e) {
-            const t = mapPolicyError(e);
-            showToast(t.tone, t.message);
+          } else if (okCount > 0 && failCount > 0) {
+            showToast("warn", `${okCount}개 업로드 성공 · ${failCount}개 실패`);
+          } else {
+            showToast("danger", "업로드에 실패했습니다. 잠시 후 재시도하세요.");
           }
+
+          return outcomes;
         }}
         onRemoveFile={(id) => {
           if (!selected || selected.status !== "DRAFT") return;

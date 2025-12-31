@@ -28,6 +28,23 @@ async function sleep(ms: number) {
 }
 
 /**
+ * updateToken / token-ready 단계에서 가끔 네트워크/키클락 문제로 "영원히 await" 되는 케이스 방어
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let t: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    t = window.setTimeout(() => reject(new Error(`${label}: timeout after ${ms}ms`)), ms);
+  });
+
+  return Promise.race([
+    p.finally(() => {
+      if (t !== undefined) window.clearTimeout(t);
+    }),
+    timeout,
+  ]);
+}
+
+/**
  * keycloak.authenticated=true인데 token이 아직 없는 초기 레이스 흡수
  */
 async function waitTokenReady(timeoutMs = 6_000, pollMs = 200): Promise<void> {
@@ -39,9 +56,9 @@ async function waitTokenReady(timeoutMs = 6_000, pollMs = 200): Promise<void> {
     }
     if (keycloak.token) return;
 
-    // token이 없으면 updateToken(0)로 유도
+    // token이 없으면 updateToken(0)로 유도 (단, 무한대기 방지)
     try {
-      await keycloak.updateToken(0);
+      await withTimeout(Promise.resolve(keycloak.updateToken(0)), 2_500, "keycloak.updateToken(0)");
       if (keycloak.token) return;
     } catch {
       // ignore
@@ -63,7 +80,12 @@ export async function getAccessToken(minValiditySeconds: number = 30): Promise<s
     if (!tokenRefreshInFlight) {
       tokenRefreshInFlight = (async () => {
         try {
-          await keycloak.updateToken(minValiditySeconds);
+          // updateToken 자체도 가끔 hang 가능 → 타임아웃 방어
+          await withTimeout(
+            Promise.resolve(keycloak.updateToken(minValiditySeconds)),
+            5_000,
+            `keycloak.updateToken(${minValiditySeconds})`
+          );
         } catch {
           // ignore
         }
@@ -125,7 +147,7 @@ export class HttpError extends Error {
 
 /**
  * (추가) 네트워크 중복 호출 dedupe
- * - GET/HEAD/PUT/PATCH/DELETE 는 동일 (method + url + body) 요청이 동시에 들어오면 1회만 수행
+ * - 동일 (method + url + body) 요청이 동시에 들어오면 1회만 수행
  */
 const inflight = new Map<string, Promise<unknown>>();
 
@@ -143,11 +165,24 @@ function bodyToKey(body: BodyInit | null | undefined): string {
 
 function makeDedupeKey(url: string, init: RequestInit): string | null {
   const method = normalizeMethod(init.method);
+
+  // “중복 호출 방지”를 위해 PUT/PATCH/DELETE도 포함
+  // (원치 않으면 여기서 GET/HEAD만 남기면 됨)
   const dedupeMethods = new Set(["GET", "HEAD", "PUT", "PATCH", "DELETE"]);
   if (!dedupeMethods.has(method)) return null;
 
   const b = bodyToKey(init.body ?? null);
   return `${method} ${url} ${b}`;
+}
+
+function canRetryWithSameBody(init: RequestInit): boolean {
+  // 401 재시도 시 body를 그대로 재사용할 수 있는지 판단
+  const b = init.body ?? null;
+  if (!b) return true;
+  if (typeof b === "string") return true;
+  if (b instanceof URLSearchParams) return true;
+  // FormData/Blob/ReadableStream 등은 안전하게 재시도 불가로 처리
+  return false;
 }
 
 export async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -161,12 +196,40 @@ export async function fetchJson<T>(url: string, init: RequestInit = {}): Promise
   }
 
   const runner = (async () => {
-    const headers = await withAuthHeaders(init.headers);
+    // 401이면 1회 강제 토큰 갱신 후 재시도(무한루프 방지)
+    let retried401 = false;
 
-    const res = await fetch(url, { ...init, headers });
-    const body = await readBodySafe(res);
+    const doFetchOnce = async (): Promise<{ res: Response; body: JsonLike }> => {
+      const headers = await withAuthHeaders(init.headers);
+      const res = await fetch(url, { ...init, headers });
+      const body = await readBodySafe(res);
+      return { res, body };
+    };
 
-    if (!res.ok) {
+    while (true) {
+      const { res, body } = await doFetchOnce();
+
+      if (res.ok) {
+        return body as T;
+      }
+
+      // 401 한 번은 토큰 갱신 후 재시도
+      if (
+        res.status === 401 &&
+        !retried401 &&
+        keycloak?.authenticated &&
+        canRetryWithSameBody(init)
+      ) {
+        retried401 = true;
+        try {
+          // 강제 갱신 (hang 방지 포함)
+          await withTimeout(Promise.resolve(keycloak.updateToken(0)), 5_000, "keycloak.updateToken(0) retry");
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+
       throw new HttpError({
         url,
         status: res.status,
@@ -174,8 +237,6 @@ export async function fetchJson<T>(url: string, init: RequestInit = {}): Promise
         body,
       });
     }
-
-    return body as T;
   })();
 
   if (dedupeKey) {

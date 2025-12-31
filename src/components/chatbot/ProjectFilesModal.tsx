@@ -17,6 +17,12 @@ export type ProjectFileItem = {
   meta?: string; // 예: "기본"
 };
 
+export type AddFilesOutcome = {
+  key: string; // 내부 매칭키(name__size)
+  ok: boolean;
+  errorMessage?: string;
+};
+
 type PendingStatus = "uploading" | "done" | "error";
 
 type PendingRow = {
@@ -33,6 +39,9 @@ type PendingRow = {
 
 const MIN_SPIN_MS = 3000; // 스피너 최소 노출 시간
 const DONE_HOLD_MS = 3000; // pending(done) 상태를 잠깐 보여주고 실제 파일 행으로 전환
+
+// 업로드가 “uploading” 상태에서 너무 오래 머무르면 error로 전환(무한 스피너 방지)
+const MAX_UPLOAD_WAIT_MS = 120_000;
 
 // 프론트 정책(백엔드 제한에 맞게 조정)
 // 예: 20MB = 20 * 1024 * 1024
@@ -180,7 +189,7 @@ export default function ProjectFilesModal(props: {
   files: ProjectFileItem[];
   disabled?: boolean;
   onClose: () => void;
-  onAddFiles: (files: File[]) => void | Promise<void>;
+  onAddFiles: (files: File[]) => void | Promise<void | AddFilesOutcome[]>;
   onRemoveFile: (id: string) => void | Promise<void>;
 }) {
   const {
@@ -223,14 +232,15 @@ export default function ProjectFilesModal(props: {
   // 업로드 완료 표시(모달 닫을 때까지 유지)
   const [recentDoneIds, setRecentDoneIds] = useState<Set<string>>(new Set());
 
-  const timersRef = useRef<Map<string, { done?: number; cleanup?: number }>>(
-    new Map()
-  );
+  const timersRef = useRef<
+    Map<string, { done?: number; cleanup?: number; watchdog?: number }>
+  >(new Map());
 
   const clearAllTimers = useCallback(() => {
     timersRef.current.forEach((t) => {
       if (t.done) window.clearTimeout(t.done);
       if (t.cleanup) window.clearTimeout(t.cleanup);
+      if (t.watchdog) window.clearTimeout(t.watchdog);
     });
     timersRef.current.clear();
   }, []);
@@ -239,6 +249,7 @@ export default function ProjectFilesModal(props: {
     const t = timersRef.current.get(tempId);
     if (t?.done) window.clearTimeout(t.done);
     if (t?.cleanup) window.clearTimeout(t.cleanup);
+    if (t?.watchdog) window.clearTimeout(t.watchdog);
     timersRef.current.delete(tempId);
   }, []);
 
@@ -394,19 +405,44 @@ export default function ProjectFilesModal(props: {
       if (validFiles.length === 0) return;
 
       try {
-        await Promise.resolve(onAddFiles(validFiles));
+        const out = await Promise.resolve(onAddFiles(validFiles));
+
+        // (추가) 파일 단위 실패 결과 반영
+        if (Array.isArray(out)) {
+          const byKey = new Map(out.map((x) => [x.key, x]));
+          setPending((prev) =>
+            prev.map((p) => {
+              if (!validTempIds.has(p.tempId)) return p;
+              if (p.status !== "uploading") return p;
+
+              const r = byKey.get(p.key);
+              if (!r) return p;
+
+              if (r.ok) return p;
+
+              return {
+                ...p,
+                status: "error",
+                errorMessage:
+                  r.errorMessage ||
+                  p.errorMessage ||
+                  "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
+              };
+            })
+          );
+        }
       } catch {
         // 업로드 호출 실패: 이번 배치의 uploading row를 error로 전환
         setPending((prev) =>
           prev.map((p) =>
             validTempIds.has(p.tempId)
               ? {
-                  ...p,
-                  status: "error",
-                  errorMessage:
-                    p.errorMessage ||
-                    "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
-                }
+                ...p,
+                status: "error",
+                errorMessage:
+                  p.errorMessage ||
+                  "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
+              }
               : p
           )
         );
@@ -425,10 +461,10 @@ export default function ProjectFilesModal(props: {
           prev.map((p) =>
             p.tempId === row.tempId
               ? {
-                  ...p,
-                  status: "error",
-                  errorMessage: "재시도할 파일 정보를 찾을 수 없습니다.",
-                }
+                ...p,
+                status: "error",
+                errorMessage: "재시도할 파일 정보를 찾을 수 없습니다.",
+              }
               : p
           )
         );
@@ -454,28 +490,48 @@ export default function ProjectFilesModal(props: {
         prev.map((p) =>
           p.tempId === row.tempId
             ? {
-                ...p,
-                status: "uploading",
-                createdAt: Date.now(),
-                linkedId: undefined,
-                errorMessage: undefined,
-              }
+              ...p,
+              status: "uploading",
+              createdAt: Date.now(),
+              linkedId: undefined,
+              errorMessage: undefined,
+            }
             : p
         )
       );
 
       try {
-        await Promise.resolve(onAddFiles([row.file]));
+        const out = await Promise.resolve(onAddFiles([row.file]));
+
+        if (Array.isArray(out)) {
+          const hit = out.find((x) => x.key === row.key) ?? out[0];
+          if (hit && hit.ok === false) {
+            setPending((prev) =>
+              prev.map((p) =>
+                p.tempId === row.tempId
+                  ? {
+                    ...p,
+                    status: "error",
+                    errorMessage:
+                      hit.errorMessage ||
+                      "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
+                  }
+                  : p
+              )
+            );
+            return;
+          }
+        }
       } catch {
         setPending((prev) =>
           prev.map((p) =>
             p.tempId === row.tempId
               ? {
-                  ...p,
-                  status: "error",
-                  errorMessage:
-                    "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
-                }
+                ...p,
+                status: "error",
+                errorMessage:
+                  "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
+              }
               : p
           )
         );
@@ -593,6 +649,55 @@ export default function ProjectFilesModal(props: {
     }
   }, [open, pending, dismissPending]);
 
+  // uploading 상태가 너무 오래 지속되면 error로 전환(무한 스피너 방지)
+  useEffect(() => {
+    if (!open) return;
+    if (pending.length === 0) return;
+
+    for (const p of pending) {
+      const existing = timersRef.current.get(p.tempId);
+
+      // uploading + 아직 linkedId 없음 => watchdog 예약
+      if (p.status === "uploading" && !p.linkedId) {
+        if (existing?.watchdog) continue;
+
+        const elapsed = Date.now() - p.createdAt;
+        const wait = Math.max(0, MAX_UPLOAD_WAIT_MS - elapsed);
+
+        const watchdog = window.setTimeout(() => {
+          setPending((prev) =>
+            prev.map((x) => {
+              if (x.tempId !== p.tempId) return x;
+              if (x.status !== "uploading") return x;
+              if (x.linkedId) return x;
+
+              return {
+                ...x,
+                status: "error",
+                errorMessage:
+                  x.errorMessage ||
+                  "업로드 처리 시간이 너무 오래 걸립니다. 네트워크/서버 상태를 확인 후 재시도하세요.",
+              };
+            })
+          );
+        }, wait);
+
+        timersRef.current.set(p.tempId, { ...(existing ?? {}), watchdog });
+        continue;
+      }
+
+      // uploading이 아니거나 linkedId가 생기면 watchdog 해제
+      if (existing?.watchdog) {
+        window.clearTimeout(existing.watchdog);
+        const next = { ...existing };
+        delete next.watchdog;
+
+        if (!next.done && !next.cleanup) timersRef.current.delete(p.tempId);
+        else timersRef.current.set(p.tempId, next);
+      }
+    }
+  }, [open, pending]);
+
   const hiddenIds = useMemo(() => {
     const s = new Set<string>();
     for (const p of pending) {
@@ -693,8 +798,8 @@ export default function ProjectFilesModal(props: {
                 disabled
                   ? "현재 상태에서는 파일을 변경할 수 없습니다."
                   : isUploadingNow
-                  ? "업로드 진행 중에는 파일을 추가할 수 없습니다."
-                  : "파일 추가"
+                    ? "업로드 진행 중에는 파일을 추가할 수 없습니다."
+                    : "파일 추가"
               }
             >
               파일 추가
@@ -756,8 +861,8 @@ export default function ProjectFilesModal(props: {
                       disabled
                         ? "편집 불가"
                         : isUploadingNow
-                        ? "업로드 진행 중에는 재시도할 수 없습니다."
-                        : "실패 항목 모두 재시도"
+                          ? "업로드 진행 중에는 재시도할 수 없습니다."
+                          : "실패 항목 모두 재시도"
                     }
                   >
                     실패 모두 재시도
@@ -812,8 +917,8 @@ export default function ProjectFilesModal(props: {
               {disabled
                 ? "편집 불가 상태"
                 : isUploadingNow
-                ? "업로드 진행 중… (추가 불가)"
-                : "클릭하거나 드래그 앤 드롭"}
+                  ? "업로드 진행 중… (추가 불가)"
+                  : "클릭하거나 드래그 앤 드롭"}
             </div>
           </div>
 
@@ -896,8 +1001,8 @@ export default function ProjectFilesModal(props: {
                               disabled
                                 ? "편집 불가"
                                 : isUploadingNow
-                                ? "업로드 진행 중에는 재시도할 수 없습니다."
-                                : "재시도"
+                                  ? "업로드 진행 중에는 재시도할 수 없습니다."
+                                  : "재시도"
                             }
                           >
                             재시도
@@ -914,8 +1019,8 @@ export default function ProjectFilesModal(props: {
                             disabled
                               ? "편집 불가"
                               : p.status === "uploading"
-                              ? "업로드 중에는 삭제할 수 없습니다."
-                              : "목록에서 제거"
+                                ? "업로드 중에는 삭제할 수 없습니다."
+                                : "목록에서 제거"
                           }
                         >
                           ×

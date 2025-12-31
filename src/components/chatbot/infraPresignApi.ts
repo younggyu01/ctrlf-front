@@ -1,11 +1,14 @@
 // src/components/chatbot/infraPresignApi.ts
-import { fetchJson } from "./authHttp";
 import keycloak from "../../keycloak";
+import { fetchJson } from "../common/api/authHttp";
 
 type EnvLike = Record<string, string | undefined>;
 const ENV = import.meta.env as unknown as EnvLike;
 
-const INFRA_BASE = String(ENV.VITE_INFRA_API_BASE ?? "/api-infra").replace(/\/$/, "");
+const INFRA_BASE = String(ENV.VITE_INFRA_API_BASE ?? "/api-infra").replace(
+  /\/$/,
+  ""
+);
 
 /**
  * Infra presign endpoints (Vite proxy로 infra-service로 라우팅)
@@ -42,13 +45,20 @@ export function extractS3ObjectKey(s3url: string): string {
  * - 입력이 bucket/key(objectKey) 형태면 s3://bucket/key로 승격
  * - bucket 없이 key만 들어오면 변환 불가 → 에러
  */
-function normalizeToFileUrl(input: string): { fileUrl: string; objectKey: string } {
+function normalizeToFileUrl(input: string): {
+  fileUrl: string;
+  objectKey: string;
+} {
   const raw = (input ?? "").trim();
-  if (!raw) throw new Error("[INFRA] presign(download): fileUrl required (empty input)");
+  if (!raw)
+    throw new Error(
+      "[INFRA] presign(download): fileUrl required (empty input)"
+    );
 
   if (isS3Url(raw)) {
     const objectKey = extractS3ObjectKey(raw);
-    if (!objectKey) throw new Error("[INFRA] presign(download): objectKey 추출 실패");
+    if (!objectKey)
+      throw new Error("[INFRA] presign(download): objectKey 추출 실패");
     return { fileUrl: raw, objectKey };
   }
 
@@ -58,7 +68,9 @@ function normalizeToFileUrl(input: string): { fileUrl: string; objectKey: string
     return { fileUrl: `s3://${objectKey}`, objectKey };
   }
 
-  throw new Error(`[INFRA] presign(download): cannot normalize to s3:// (input=${raw})`);
+  throw new Error(
+    `[INFRA] presign(download): cannot normalize to s3:// (input=${raw})`
+  );
 }
 
 function getCurrentAccessTokenOrNull(): string | null {
@@ -67,7 +79,10 @@ function getCurrentAccessTokenOrNull(): string | null {
   return null;
 }
 
-function mergeHeaders(base: HeadersInit | undefined, extra: Record<string, string>): Headers {
+function mergeHeaders(
+  base: HeadersInit | undefined,
+  extra: Record<string, string>
+): Headers {
   const h = new Headers(base ?? undefined);
   for (const [k, v] of Object.entries(extra)) {
     if (!h.has(k)) h.set(k, v);
@@ -95,13 +110,22 @@ function isTimeoutLikeError(err: unknown): boolean {
   if (!err) return false;
   if (err instanceof Error) {
     const msg = (err.message ?? "").toLowerCase();
-    return msg.includes("timeout") || msg.includes("timed out") || msg.includes("etimedout");
+    return (
+      msg.includes("timeout") ||
+      msg.includes("timed out") ||
+      msg.includes("etimedout")
+    );
   }
   if (typeof err === "object" && err !== null) {
     const rec = err as Record<string, unknown>;
     const code = typeof rec.code === "string" ? rec.code.toLowerCase() : "";
-    const msg = typeof rec.message === "string" ? rec.message.toLowerCase() : "";
-    return code.includes("etimedout") || msg.includes("timeout") || msg.includes("timed out");
+    const msg =
+      typeof rec.message === "string" ? rec.message.toLowerCase() : "";
+    return (
+      code.includes("etimedout") ||
+      msg.includes("timeout") ||
+      msg.includes("timed out")
+    );
   }
   return false;
 }
@@ -111,12 +135,19 @@ function isNetworkLikeError(err: unknown): boolean {
   if (err instanceof TypeError) return true;
   if (err instanceof Error) {
     const msg = (err.message ?? "").toLowerCase();
-    return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("network error");
+    return (
+      msg.includes("failed to fetch") ||
+      msg.includes("networkerror") ||
+      msg.includes("network error")
+    );
   }
   return false;
 }
 
-function attachParentAbort(parent: AbortSignal | null | undefined, ctrl: AbortController) {
+function attachParentAbort(
+  parent: AbortSignal | null | undefined,
+  ctrl: AbortController
+) {
   if (!parent) return;
   if (parent.aborted) {
     ctrl.abort();
@@ -154,9 +185,16 @@ function withHardTimeout<T>(
   ]);
 }
 
-async function directFetchJson<T>(url: string, init: RequestInit, context: string): Promise<T> {
+async function directFetchJson<T>(
+  url: string,
+  init: RequestInit,
+  context: string
+): Promise<T> {
   const token = getCurrentAccessTokenOrNull();
-  if (!token) throw new Error(`[INFRA] ${context}: fallback fetch 실패 (현재 토큰이 없습니다)`);
+  if (!token)
+    throw new Error(
+      `[INFRA] ${context}: fallback fetch 실패 (현재 토큰이 없습니다)`
+    );
 
   const headers = mergeHeaders(init.headers, {
     Authorization: `Bearer ${token}`,
@@ -183,7 +221,11 @@ async function directFetchJson<T>(url: string, init: RequestInit, context: strin
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new Error(`[INFRA] ${context}: JSON 아님. content-type=${ct || "unknown"} body=${text.slice(0, 200)}`);
+    throw new Error(
+      `[INFRA] ${context}: JSON 아님. content-type=${
+        ct || "unknown"
+      } body=${text.slice(0, 200)}`
+    );
   }
 }
 
@@ -217,19 +259,29 @@ function keysPreview(raw: unknown): string {
   return ks.length ? `keys=[${ks.join(", ")}]` : "";
 }
 
-function unwrapRecord(raw: unknown, keys: string[] = ["data", "result"]): Record<string, unknown> | null {
+function unwrapRecord(
+  raw: unknown,
+  keys: string[] = ["data", "result"]
+): Record<string, unknown> | null {
   if (!isRecord(raw)) return null;
   const top = raw as Record<string, unknown>;
   for (const k of keys) {
     const inner = top[k];
-    if (isRecord(inner)) return { ...top, ...(inner as Record<string, unknown>) };
+    if (isRecord(inner))
+      return { ...top, ...(inner as Record<string, unknown>) };
   }
   return top;
 }
 
-function normalizePresignDownloadDto(raw: unknown): { url: string; expiresAtMs: number } {
+function normalizePresignDownloadDto(raw: unknown): {
+  url: string;
+  expiresAtMs: number;
+} {
   const dto = unwrapRecord(raw);
-  if (!dto) throw new Error("[INFRA] presign(download): 응답 형식이 올바르지 않습니다.");
+  if (!dto)
+    throw new Error(
+      "[INFRA] presign(download): 응답 형식이 올바르지 않습니다."
+    );
 
   const url =
     (typeof dto.url === "string" && dto.url) ||
@@ -245,12 +297,21 @@ function normalizePresignDownloadDto(raw: unknown): { url: string; expiresAtMs: 
       String((dto as Record<string, unknown>)["signed_url"])) ||
     "";
 
-  if (!url) throw new Error(`[INFRA] presign(download): url 누락. ${keysPreview(dto)}`);
+  if (!url)
+    throw new Error(`[INFRA] presign(download): url 누락. ${keysPreview(dto)}`);
 
   const expiresAtMs =
-    toMsFromUnknown(dto.expiresAt ?? (dto as Record<string, unknown>)["expires_at"] ?? dto.expireAt) ??
+    toMsFromUnknown(
+      dto.expiresAt ??
+        (dto as Record<string, unknown>)["expires_at"] ??
+        dto.expireAt
+    ) ??
     (() => {
-      const sec = toNumOrNull(dto.expiresIn ?? (dto as Record<string, unknown>)["expires_in"] ?? dto.ttlSeconds);
+      const sec = toNumOrNull(
+        dto.expiresIn ??
+          (dto as Record<string, unknown>)["expires_in"] ??
+          dto.ttlSeconds
+      );
       if (sec !== null) return Date.now() + sec * 1000;
       return null;
     })() ??
@@ -259,9 +320,14 @@ function normalizePresignDownloadDto(raw: unknown): { url: string; expiresAtMs: 
   return { url, expiresAtMs };
 }
 
-function normalizePresignUploadDto(raw: unknown): { url: string; expiresAtMs: number; objectKey: string } {
+function normalizePresignUploadDto(raw: unknown): {
+  url: string;
+  expiresAtMs: number;
+  objectKey: string;
+} {
   const dto = unwrapRecord(raw);
-  if (!dto) throw new Error("[INFRA] presign(upload): 응답 형식이 올바르지 않습니다.");
+  if (!dto)
+    throw new Error("[INFRA] presign(upload): 응답 형식이 올바르지 않습니다.");
 
   const url =
     (typeof dto.uploadUrl === "string" && dto.uploadUrl) ||
@@ -278,13 +344,25 @@ function normalizePresignUploadDto(raw: unknown): { url: string; expiresAtMs: nu
     (typeof dto.key === "string" && dto.key) ||
     "";
 
-  if (!url) throw new Error(`[INFRA] presign(upload): url 누락. ${keysPreview(dto)}`);
-  if (!objectKey) throw new Error(`[INFRA] presign(upload): objectKey 누락. ${keysPreview(dto)}`);
+  if (!url)
+    throw new Error(`[INFRA] presign(upload): url 누락. ${keysPreview(dto)}`);
+  if (!objectKey)
+    throw new Error(
+      `[INFRA] presign(upload): objectKey 누락. ${keysPreview(dto)}`
+    );
 
   const expiresAtMs =
-    toMsFromUnknown(dto.expiresAt ?? (dto as Record<string, unknown>)["expires_at"] ?? dto.expireAt) ??
+    toMsFromUnknown(
+      dto.expiresAt ??
+        (dto as Record<string, unknown>)["expires_at"] ??
+        dto.expireAt
+    ) ??
     (() => {
-      const sec = toNumOrNull(dto.expiresIn ?? (dto as Record<string, unknown>)["expires_in"] ?? dto.ttlSeconds);
+      const sec = toNumOrNull(
+        dto.expiresIn ??
+          (dto as Record<string, unknown>)["expires_in"] ??
+          dto.ttlSeconds
+      );
       if (sec !== null) return Date.now() + sec * 1000;
       return null;
     })() ??
@@ -293,7 +371,11 @@ function normalizePresignUploadDto(raw: unknown): { url: string; expiresAtMs: nu
   return { url, expiresAtMs, objectKey };
 }
 
-async function infraFetch<T>(url: string, init: RequestInit, context: string): Promise<T> {
+async function infraFetch<T>(
+  url: string,
+  init: RequestInit,
+  context: string
+): Promise<T> {
   const method = String(init.method ?? "GET").toUpperCase();
   const PRIMARY_TIMEOUT_MS = method === "GET" ? 2500 : 5000;
   const FALLBACK_TIMEOUT_MS = method === "GET" ? 8000 : 12000;
@@ -309,7 +391,8 @@ async function infraFetch<T>(url: string, init: RequestInit, context: string): P
       () => ctrl1.abort()
     );
   } catch (e) {
-    const fallbackCandidate = isAbortLikeError(e) || isTimeoutLikeError(e) || isNetworkLikeError(e);
+    const fallbackCandidate =
+      isAbortLikeError(e) || isTimeoutLikeError(e) || isNetworkLikeError(e);
     if (!fallbackCandidate) throw e;
   }
 
@@ -345,7 +428,8 @@ export async function presignDownload(
 
   const now = Date.now();
   const cached = downloadCache.get(objectKey);
-  if (cached && cached.expiresAtMs - now > PRESIGN_CACHE_SAFETY_MS) return cached;
+  if (cached && cached.expiresAtMs - now > PRESIGN_CACHE_SAFETY_MS)
+    return cached;
 
   const type = opts?.type ?? "video";
 
@@ -370,13 +454,20 @@ export async function presignDownload(
 }
 
 export function buildProxyPutUrl(uploadUrl: string): string {
-  return `${PRESIGN_UPLOAD_PROXY_PUT_ENDPOINT}?url=${encodeURIComponent(uploadUrl)}`;
+  return `${PRESIGN_UPLOAD_PROXY_PUT_ENDPOINT}?url=${encodeURIComponent(
+    uploadUrl
+  )}`;
 }
 
 export async function presignUpload(
   params: { type: PresignFileType; fileName: string; contentType?: string },
   opts?: { signal?: AbortSignal | null }
-): Promise<{ objectKey: string; url: string; expiresAtMs: number; proxyPutUrl: string }> {
+): Promise<{
+  objectKey: string;
+  url: string;
+  expiresAtMs: number;
+  proxyPutUrl: string;
+}> {
   const body = {
     type: params.type,
     fileName: params.fileName,

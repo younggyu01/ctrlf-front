@@ -1,6 +1,6 @@
 // src/components/chatbot/educationServiceApi.ts
-import { fetchJson } from "./authHttp";
 import keycloak from "../../keycloak";
+import { fetchJson } from "../common/api/authHttp";
 import * as infraPresignApi from "./infraPresignApi";
 
 type EnvLike = Record<string, string | undefined>;

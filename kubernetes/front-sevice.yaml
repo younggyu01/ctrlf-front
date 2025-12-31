@@ -8,7 +8,7 @@ metadata:
   annotations:
     # 이 설정이 핵심입니다! 로드밸런서가 '퍼블릭 서브넷'을 찾아가게 만듭니다.
     service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-    # AWS Load Balancer Controller를 사용하는 경우 (필요 시 수정)
+    # AWS Load Balancer Controller를 사용하는 경우 (필요 시 수정).
     # service.beta.kubernetes.io/aws-load-balancer-type: "alb"
 spec:
   type: LoadBalancer

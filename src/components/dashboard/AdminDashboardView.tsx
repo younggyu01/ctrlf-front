@@ -6,7 +6,7 @@ import {
   type PanelSize,
 } from "../../utils/chat";
 import type { CommonFilterState } from "./adminFilterTypes";
-import AdminPolicyView from "./AdminPolicyView";
+import AdminPolicyTab from "./components/tabs/AdminPolicyTab";
 import type {
   AdminTabId,
   PeriodFilter,
@@ -899,31 +899,10 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           )}
           {activeTab === "policy" && (
             <div className="cb-admin-tab-panel cb-admin-tab-panel--policy">
-              <AdminPolicyView />
+              <AdminPolicyTab />
             </div>
           )}
-          {activeTab === "accounts" && (
-            <AdminAccountsTab
-              userList={userList}
-              selectedUserId={selectedUserId}
-              selectedRoles={selectedRoles}
-              creatorType={creatorType}
-              creatorDeptScope={creatorDeptScope}
-              accountMessage={accountMessage}
-              userSearchKeyword={userSearchKeyword}
-              userDeptFilter={userDeptFilter}
-              userRoleFilter={userRoleFilter}
-              onSelectUser={handleSelectUser}
-              onToggleRole={handleToggleRole}
-              onCreatorTypeChange={handleCreatorTypeChange}
-              onScopeToggle={handleScopeToggle}
-              onSave={handleSaveAccountRoles}
-              onReset={handleResetAccountRoles}
-              onUserSearchKeywordChange={setUserSearchKeyword}
-              onUserDeptFilterChange={setUserDeptFilter}
-              onUserRoleFilterChange={setUserRoleFilter}
-            />
-          )}
+          {activeTab === "accounts" && <AdminAccountsTab />}
         </div>
       </div>
     </div>

@@ -21,9 +21,25 @@ export default defineConfig({
 
       /**
        * 인프라 도메인 (infra-service: 9003)
-       * - S3 presigned
-       * - RAG upload 등
+       * - S3 presigned: /api-infra/files/* → /infra/files/*
+       * - S3 presigned (alternative): /api-infra/infra/* → /infra/*
+       * - RAG documents: /api-infra/rag/* → /rag/*
        */
+      "/api-infra/files": {
+        target: "http://localhost:9003",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-infra\/files/, "/infra/files"),
+      },
+      "/api-infra/infra": {
+        target: "http://localhost:9003",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-infra\/infra/, "/infra"),
+      },
+      "/api-infra/rag": {
+        target: "http://localhost:9003",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-infra\/rag/, "/rag"),
+      },
       "/api-infra": {
         target: "http://localhost:9003",
         changeOrigin: true,

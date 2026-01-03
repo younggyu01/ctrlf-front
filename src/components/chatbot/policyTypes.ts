@@ -35,13 +35,13 @@ export class PolicyStoreError extends Error {
       (code === "NOT_FOUND"
         ? 404
         : code === "FORBIDDEN"
-          ? 403
-          : code === "INVALID_STATE" ||
-              code.endsWith("_EXISTS") ||
-              code === "VERSION_REVERSE" ||
-              code === "FILE_DUPLICATE"
-            ? 409
-            : 500);
+        ? 403
+        : code === "INVALID_STATE" ||
+          code.endsWith("_EXISTS") ||
+          code === "VERSION_REVERSE" ||
+          code === "FILE_DUPLICATE"
+        ? 409
+        : 500);
   }
 }
 
@@ -104,13 +104,16 @@ export type PolicyDocVersion = {
   /** legacy(계속 유지): Primary(attachments[0])와 항상 동기화 */
   fileName?: string;
   fileSizeBytes?: number;
+  sourceUrl?: string; // S3 파일 URL
 
   preprocessStatus: PreprocessStatus;
   preprocessError?: string;
   preprocessPreview?: PolicyPreprocessPreview;
-
+  preprocessPages?: number;
   reviewRequestedAt?: string;
   reviewItemId?: string; // ReviewerDesk work item id
+  preprocessChars?: string;
+  preprocessExcerpt?: string;
 
   indexingStatus: IndexingStatus;
   indexingError?: string;

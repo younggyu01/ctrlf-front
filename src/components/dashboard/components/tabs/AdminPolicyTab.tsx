@@ -1,10 +1,10 @@
 // src/components/dashboard/components/tabs/AdminPolicyTab.tsx
 import React, {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import "../../../chatbot/chatbot.css";
 import {
@@ -12,22 +12,28 @@ import {
   type PolicyDocGroup,
   type PolicyDocStatus,
   type PolicyDocVersion,
-  subscribePolicyStore,
-  listPolicyGroupsSnapshot,
-  listPolicyVersionsSnapshot,
-  getPolicyVersionSnapshot,
-  createDraft,
-  updateDraft,
-  attachFilesToDraft,
-  removeFileFromDraft,
-  runPreprocess,
-  submitReviewRequest,
-  softDelete,
-  suggestNextVersion,
-} from "../../../chatbot/policyStore";
+  type PolicyAttachment,
+} from "../../../chatbot/policyTypes";
 import ProjectFilesModal, {
   type ProjectFileItem,
 } from "../../../chatbot/ProjectFilesModal";
+import {
+  listPolicies,
+  getPolicy,
+  getPolicyVersion,
+  createPolicy,
+  createVersion,
+  updateVersion,
+  updateStatus,
+  getS3PresignedUploadUrl,
+  uploadFileToS3,
+  retryPreprocess,
+  type PolicyListItem,
+  type VersionSummary,
+  type VersionDetail,
+  type PolicyDetailResponse,
+  type CreateVersionRequest,
+} from "../../api/ragApi";
 
 function cx(...tokens: Array<string | false | null | undefined>) {
   return tokens.filter(Boolean).join(" ");
@@ -36,10 +42,6 @@ function cx(...tokens: Array<string | false | null | undefined>) {
 type Toast =
   | { open: false }
   | { open: true; tone: "neutral" | "warn" | "danger"; message: string };
-
-type DeleteModalState =
-  | { open: false }
-  | { open: true; reason: string; error?: string };
 
 function statusLabel(s: PolicyDocStatus) {
   switch (s) {
@@ -157,7 +159,7 @@ function renderAttachmentSummary(v: PolicyDocVersion) {
 }
 
 type SortMode = "STATUS" | "DOCID_ASC";
-type RightTab = "OVERVIEW" | "DRAFT" | "PREPROCESS" | "REVIEW" | "HISTORY";
+type RightTab = "OVERVIEW" | "DRAFT" | "PREPROCESS" | "REVIEW";
 
 function safeTime(v?: string) {
   const t = v ? new Date(v).getTime() : 0;
@@ -393,20 +395,212 @@ function defaultRightTabForStatus(
   return "OVERVIEW";
 }
 
+/**
+ * API 상태를 PolicyDocStatus로 변환
+ */
+function mapApiStatusToPolicyStatus(status: string): PolicyDocStatus {
+  switch (status.toUpperCase()) {
+    case "DRAFT":
+      return "DRAFT";
+    case "PENDING":
+      return "PENDING_REVIEWER";
+    case "ACTIVE":
+      return "ACTIVE";
+    case "ARCHIVED":
+      return "ARCHIVED";
+    case "REJECTED":
+      return "REJECTED";
+    case "DELETED":
+      return "DELETED";
+    default:
+      return "DRAFT";
+  }
+}
+
+/**
+ * VersionDetail을 PolicyDocVersion으로 변환
+ */
+function convertVersionDetailToPolicyDocVersion(
+  v: VersionDetail
+): PolicyDocVersion {
+  // sourceUrl에서 파일명 추출
+  const fileName = v.sourceUrl
+    ? v.sourceUrl.split("/").pop() || undefined
+    : undefined;
+
+  // attachments 구성 (API에서 제공하지 않으면 기본값)
+  const attachments: PolicyAttachment[] = v.sourceUrl
+    ? [
+        {
+          id: v.id,
+          name: fileName || "파일",
+          sizeBytes: undefined,
+          mime: undefined,
+          uploadedAt: v.createdAt,
+        },
+      ]
+    : [];
+
+  // 전처리 미리보기 구성
+  const preprocessPreview =
+    v.preprocessStatus === "READY" &&
+    (v.preprocessPages !== undefined ||
+      v.preprocessChars !== undefined ||
+      v.preprocessExcerpt)
+      ? {
+          pages: v.preprocessPages || 0,
+          chars: v.preprocessChars || 0,
+          excerpt: v.preprocessExcerpt || "",
+        }
+      : undefined;
+
+  return {
+    id: v.id,
+    documentId: v.documentId,
+    title: v.title,
+    version: v.version,
+    changeSummary: v.changeSummary || "",
+    status: mapApiStatusToPolicyStatus(v.status),
+    attachments,
+    fileName,
+    fileSizeBytes: undefined,
+    sourceUrl: v.sourceUrl,
+    preprocessStatus: (v.preprocessStatus || "IDLE") as
+      | "IDLE"
+      | "PROCESSING"
+      | "READY"
+      | "FAILED",
+    preprocessError: v.preprocessError,
+    preprocessPreview,
+    reviewRequestedAt: v.reviewRequestedAt,
+    reviewItemId: v.reviewItemId,
+    indexingStatus: "IDLE",
+    indexingError: undefined,
+    createdAt: v.createdAt,
+    updatedAt: v.processedAt || v.createdAt,
+    archivedAt: v.status === "ARCHIVED" ? v.createdAt : undefined,
+    activatedAt: v.status === "ACTIVE" ? v.createdAt : undefined,
+    deletedAt: undefined,
+    rejectedAt: undefined,
+    rejectReason: undefined,
+    audit: [], // 히스토리는 별도 API로 조회
+  };
+}
+
+/**
+ * PolicyDetailResponse를 PolicyDocGroup으로 변환
+ */
+function convertPolicyDetailToGroup(
+  detail: PolicyDetailResponse
+): PolicyDocGroup {
+  const versions = detail.versions.map((v) =>
+    convertVersionDetailToPolicyDocVersion(v)
+  );
+
+  const active = versions.find((v) => v.status === "ACTIVE");
+  const draft = versions.find((v) => v.status === "DRAFT");
+  const pending = versions.find((v) => v.status === "PENDING_REVIEWER");
+  const rejected = versions.find((v) => v.status === "REJECTED");
+  const deleted = versions.find((v) => v.status === "DELETED");
+  const archived = versions.filter((v) => v.status === "ARCHIVED");
+
+  return {
+    documentId: detail.documentId,
+    title: detail.title,
+    active,
+    draft,
+    pending,
+    rejected,
+    archived,
+    deleted,
+    versions,
+  };
+}
+
+/**
+ * VersionSummary를 PolicyDocVersion으로 변환 (목록용, 최소 정보만)
+ */
+function convertVersionSummaryToPolicyDocVersion(
+  item: PolicyListItem,
+  vs: VersionSummary
+): PolicyDocVersion {
+  // VersionSummary에는 id가 없으므로 documentId와 version으로 임시 ID 생성
+  const tempId = `${item.documentId}-v${vs.version}`;
+
+  return {
+    id: tempId,
+    documentId: item.documentId,
+    title: item.title,
+    version: vs.version,
+    changeSummary: "",
+    status: mapApiStatusToPolicyStatus(vs.status),
+    attachments: [],
+    fileName: undefined,
+    fileSizeBytes: undefined,
+    preprocessStatus: "IDLE",
+    preprocessError: undefined,
+    preprocessPreview: undefined,
+    reviewRequestedAt: undefined,
+    reviewItemId: undefined,
+    indexingStatus: "IDLE",
+    indexingError: undefined,
+    createdAt: vs.createdAt,
+    updatedAt: vs.createdAt,
+    archivedAt: vs.status === "ARCHIVED" ? vs.createdAt : undefined,
+    activatedAt: vs.status === "ACTIVE" ? vs.createdAt : undefined,
+    deletedAt: undefined,
+    rejectedAt: undefined,
+    rejectReason: undefined,
+    audit: [],
+  };
+}
+
+/**
+ * PolicyListItem을 PolicyDocGroup으로 변환 (목록용, 최소 정보만)
+ */
+function convertPolicyListItemToGroup(item: PolicyListItem): PolicyDocGroup {
+  const versions = item.versions.map((vs) =>
+    convertVersionSummaryToPolicyDocVersion(item, vs)
+  );
+
+  const active = versions.find((v) => v.status === "ACTIVE");
+  const draft = versions.find((v) => v.status === "DRAFT");
+  const pending = versions.find((v) => v.status === "PENDING_REVIEWER");
+  const rejected = versions.find((v) => v.status === "REJECTED");
+  const deleted = versions.find((v) => v.status === "DELETED");
+  const archived = versions.filter((v) => v.status === "ARCHIVED");
+
+  return {
+    documentId: item.documentId,
+    title: item.title,
+    active,
+    draft,
+    pending,
+    rejected,
+    archived,
+    deleted,
+    versions,
+  };
+}
+
+/**
+ * PolicyListItem 배열을 PolicyDocGroup 배열로 변환
+ * 목록 정보만 사용 (각 사규마다 getPolicy 호출하지 않음)
+ */
+function convertPolicyListToGroups(items: PolicyListItem[]): PolicyDocGroup[] {
+  return items.map((item) => convertPolicyListItemToGroup(item));
+}
+
 export default function AdminPolicyTab() {
-  const groups = useSyncExternalStore(
-    subscribePolicyStore,
-    listPolicyGroupsSnapshot
-  );
-  const versions = useSyncExternalStore(
-    subscribePolicyStore,
-    listPolicyVersionsSnapshot
-  );
+  const [groups, setGroups] = useState<PolicyDocGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [toast, setToast] = useState<Toast>({ open: false });
   const toastTimerRef = useRef<number | null>(null);
 
-  const [q, setQ] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchQuery, setSearchQuery] = useState(""); // 실제 검색에 사용되는 쿼리 (debounced)
   const [statusFilter, setStatusFilter] = useState<PolicyDocStatus | "ALL">(
     "ALL"
   );
@@ -415,19 +609,118 @@ export default function AdminPolicyTab() {
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("STATUS");
 
+  // 페이징 상태
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize] = useState(10); // 페이지 크기 고정
+  const [totalItems, setTotalItems] = useState(0);
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedVersion, setSelectedVersion] =
+    useState<PolicyDocVersion | null>(null);
+  const [isNewVersionPending, setIsNewVersionPending] = useState(false);
 
-  const actor = "SYSTEM_ADMIN";
+  // 파일 업로드 관련 상태
+  const [filesModalOpen, setFilesModalOpen] = useState(false);
+  const [jumpToPreprocessOnClose, setJumpToPreprocessOnClose] = useState(false);
+  const [pendingFileUrl, setPendingFileUrl] = useState<string | null>(null);
+  const [pendingFileInfo, setPendingFileInfo] = useState<{
+    name: string;
+    sizeBytes: number;
+  } | null>(null);
 
-  // versions를 실제로 참조해서 selected를 계산 → store 변경 시 갱신 보장
-  const selected = useMemo<PolicyDocVersion | null>(() => {
-    if (!selectedId) return null;
+  // 검색어 debounce: 입력이 멈춘 후 300ms 후에 검색 실행
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(search);
+    }, 800);
 
-    const found = versions.find((v) => v.id === selectedId);
-    if (found) return found;
+    return () => clearTimeout(timer);
+  }, [search]);
 
-    return getPolicyVersionSnapshot(selectedId) ?? null;
-  }, [selectedId, versions]);
+  // 데이터 로드
+  const fetchPolicies = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const statusParam =
+        statusFilter === "ALL"
+          ? undefined
+          : statusFilter === "PENDING_REVIEWER"
+          ? "PENDING"
+          : statusFilter;
+
+      const response = await listPolicies({
+        search: searchQuery || undefined,
+        status: statusParam,
+        page: currentPage,
+        size: pageSize,
+      });
+
+      // 목록 정보만으로 그룹 구성 (각 사규마다 getPolicy 호출하지 않음)
+      const convertedGroups = convertPolicyListToGroups(response.items);
+      setGroups(convertedGroups);
+      setTotalItems(response.total);
+    } catch (err) {
+      console.error("Failed to fetch policies:", err);
+      setError("사규 목록을 불러오는데 실패했습니다.");
+      const t = mapPolicyError(err);
+      showToast(t.tone, t.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [searchQuery, statusFilter, currentPage, pageSize]);
+
+  useEffect(() => {
+    fetchPolicies();
+  }, [fetchPolicies]);
+
+  // 검색어나 필터 변경 시 첫 페이지로 리셋
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [searchQuery, statusFilter]);
+
+  // 선택된 버전 로드
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedVersion(null);
+      return;
+    }
+
+    // 임시 버전 ID인 경우 건너뛰기 (이미 selectedVersion에 설정되어 있음)
+    if (selectedId.startsWith("temp-")) {
+      return;
+    }
+
+    // groups에서 찾기
+    for (const group of groups) {
+      const found = group.versions.find((v) => v.id === selectedId);
+      if (found) {
+        setSelectedVersion(found);
+        return;
+      }
+    }
+
+    // groups에 없으면 API에서 직접 조회
+    const loadVersion = async () => {
+      try {
+        // selectedId에서 documentId와 version 추출
+        // selectedId는 "documentId-version" 형식일 수 있음
+        // 또는 UUID일 수 있음
+        // 일단 groups에서 찾지 못했으면 API로 조회 시도
+        // 하지만 documentId와 version을 알아야 함
+        // 일단 groups에서 찾지 못하면 null로 설정
+        setSelectedVersion(null);
+      } catch (err) {
+        console.error("Failed to load version:", err);
+        setSelectedVersion(null);
+      }
+    };
+
+    loadVersion();
+  }, [selectedId, groups]);
+
+  const selected = selectedVersion;
 
   const selectedGroup = useMemo<PolicyDocGroup | null>(() => {
     if (!selected) return null;
@@ -438,27 +731,34 @@ export default function AdminPolicyTab() {
   const policyFiles: ProjectFileItem[] = useMemo(() => {
     if (!selected) return [];
     const atts = selected.attachments ?? [];
-    return atts.map((a, idx) => ({
+    const files = atts.map((a, idx) => ({
       id: a.id,
       name: a.name,
       sizeBytes: a.sizeBytes,
       meta: idx === 0 ? "기본" : undefined,
     }));
-  }, [selected]);
 
+    // pendingFileUrl이 있으면 임시 파일 추가 (업로드 완료 표시용)
+    if (pendingFileUrl && pendingFileInfo) {
+      files.push({
+        id: `pending-${Date.now()}`, // 임시 ID
+        name: pendingFileInfo.name,
+        sizeBytes: pendingFileInfo.sizeBytes,
+        meta: "업로드 완료",
+      });
+    }
+
+    return files;
+  }, [selected, pendingFileUrl, pendingFileInfo]);
+
+  // 서버에서 이미 검색된 결과만 필터링 (클라이언트 사이드 추가 필터링은 없음)
   const filteredGroups = useMemo(() => {
-    const query = q.trim().toLowerCase();
-
     const excluded = new Set<PolicyDocStatus>();
     if (!includeArchived) excluded.add("ARCHIVED");
     if (!includeDeleted) excluded.add("DELETED");
 
     const base = groups
       .map((g) => {
-        const hay = `${g.documentId} ${g.title}`.toLowerCase();
-        const matchQ = !query || hay.includes(query);
-        if (!matchQ) return null;
-
         if (statusFilter === "ALL") {
           const hasAnyVisible = g.versions.some((v) => !excluded.has(v.status));
           return hasAnyVisible ? g : null;
@@ -486,7 +786,7 @@ export default function AdminPolicyTab() {
     });
 
     return sorted;
-  }, [groups, q, statusFilter, includeArchived, includeDeleted, sortMode]);
+  }, [groups, statusFilter, includeArchived, includeDeleted, sortMode]);
 
   const showToast = (tone: "neutral" | "warn" | "danger", message: string) => {
     setToast({ open: true, tone, message });
@@ -510,25 +810,26 @@ export default function AdminPolicyTab() {
     changeSummary: string;
   }>({ documentId: "", title: "", version: "", changeSummary: "" });
 
-  const [reviewCheck, setReviewCheck] = useState({
-    checkedBasics: false,
-    checkedPreview: false,
-  });
-
   // 우측: “섹션 탭”으로 길이 폭증 방지
   const [rightTab, setRightTab] = useState<RightTab>("OVERVIEW");
   const rightBodyRef = useRef<HTMLDivElement | null>(null);
   const selectVersion = (v: PolicyDocVersion | null) => {
     setSelectedId(v?.id ?? null);
+    setSelectedVersion(v);
 
     const nextTab = defaultRightTabForStatus(v?.status);
     setRightTab(nextTab);
+
+    // 새 버전이 아니면 isNewVersionPending 초기화
+    if (v && v.version !== 0) {
+      setIsNewVersionPending(false);
+    }
 
     if (v && v.status === "DRAFT") {
       setDraftForm({
         documentId: v.documentId,
         title: v.title,
-        version: String(v.version),
+        version: v.version === 0 ? "" : String(v.version),
         changeSummary: v.changeSummary,
       });
     } else {
@@ -539,9 +840,6 @@ export default function AdminPolicyTab() {
         changeSummary: "",
       });
     }
-
-    // 체크리스트는 선택 변경 시 초기화(요구사항)
-    setReviewCheck({ checkedBasics: false, checkedPreview: false });
   };
 
   const safeSelectFirstVersion = (g: PolicyDocGroup) => {
@@ -558,23 +856,47 @@ export default function AdminPolicyTab() {
     selectVersion(pick);
   };
 
-  const onClickGroup = (g: PolicyDocGroup) => {
-    safeSelectFirstVersion(g);
+  const onClickGroup = async (g: PolicyDocGroup) => {
+    try {
+      // API로 최신 사규 정보 조회
+      const detail = await getPolicy(g.documentId);
+      const updatedGroup = convertPolicyDetailToGroup(detail);
+
+      // groups 상태 업데이트
+      setGroups((prevGroups) =>
+        prevGroups.map((prevGroup) =>
+          prevGroup.documentId === g.documentId ? updatedGroup : prevGroup
+        )
+      );
+
+      // 업데이트된 그룹의 첫 번째 버전 선택
+      safeSelectFirstVersion(updatedGroup);
+    } catch (e) {
+      console.error("Failed to fetch policy:", e);
+      const t = mapPolicyError(e);
+      showToast(t.tone, t.message);
+      // 에러가 발생해도 기존 그룹으로 선택
+      safeSelectFirstVersion(g);
+    }
   };
 
-  const onCreateDraft = () => {
+  const onCreateDraft = async () => {
     try {
       const docId = nextPolicyDocumentId(groups);
 
-      const v = createDraft({
+      const response = await createPolicy({
         documentId: docId,
         title: "새 사규/정책",
-        version: 1,
+        domain: "POLICY", // 사규 문서는 항상 POLICY 도메인
         changeSummary: "초안 생성",
-        actor,
       });
 
-      selectVersion(v);
+      // 새로 생성된 버전 정보 가져오기
+      const detail = await getPolicyVersion(docId, response.version);
+      const version = convertVersionDetailToPolicyDocVersion(detail);
+
+      setSelectedVersion(version);
+      await fetchPolicies(); // 목록 새로고침
       showToast("neutral", "새 초안을 생성했습니다.");
     } catch (e) {
       const t = mapPolicyError(e);
@@ -582,7 +904,7 @@ export default function AdminPolicyTab() {
     }
   };
 
-  const onCreateNextDraftFromLifecycle = (g: PolicyDocGroup) => {
+  const onCreateNextDraftFromLifecycle = async (g: PolicyDocGroup) => {
     try {
       if (!canShowGroupActionButton(g)) {
         showToast(
@@ -597,12 +919,14 @@ export default function AdminPolicyTab() {
           "warn",
           "검토 대기(PENDING) 문서입니다. ‘검토안’으로 내용을 확인하세요."
         );
-        selectVersion(g.pending);
+        setSelectedVersion(g.pending);
+        setSelectedId(g.pending.id);
         return;
       }
 
       if (g.draft) {
-        selectVersion(g.draft);
+        setSelectedVersion(g.draft);
+        setSelectedId(g.draft.id);
         showToast(
           "warn",
           "이미 개정안(초안)이 있습니다. 해당 개정안을 수정해주세요."
@@ -610,21 +934,78 @@ export default function AdminPolicyTab() {
         return;
       }
 
-      const nextVer = suggestNextVersion(g.documentId);
-      const v = createDraft({
-        documentId: g.documentId,
-        title: g.title,
-        version: nextVer,
+      const response = await createVersion(g.documentId, {
         changeSummary: "변경 사항 요약을 입력하세요.",
-        actor,
       });
 
-      selectVersion(v);
+      // 새로 생성된 버전 정보 가져오기
+      const detail = await getPolicyVersion(g.documentId, response.version);
+      const version = convertVersionDetailToPolicyDocVersion(detail);
+
+      setSelectedVersion(version);
+      setSelectedId(version.id);
+      await fetchPolicies(); // 목록 새로고침
       showToast("neutral", "개정안(초안)을 생성했습니다.");
     } catch (e) {
       const t = mapPolicyError(e);
       showToast(t.tone, t.message);
     }
+  };
+
+  const onCreateNewVersion = () => {
+    if (!selectedGroup) return;
+
+    // 이미 DRAFT가 있으면 경고하고 해당 DRAFT로 이동
+    if (selectedGroup.draft) {
+      setSelectedVersion(selectedGroup.draft);
+      setSelectedId(selectedGroup.draft.id);
+      showToast(
+        "warn",
+        "이미 개정안(초안)이 있습니다. 해당 개정안을 수정해주세요."
+      );
+      return;
+    }
+
+    // 임시 버전 객체 생성 (API 호출 없이)
+    const tempVersion: PolicyDocVersion = {
+      id: `temp-${selectedGroup.documentId}-new`,
+      documentId: selectedGroup.documentId,
+      version: 0, // 임시 값
+      status: "DRAFT",
+      title: "",
+      changeSummary: "변경 사항 요약을 입력하세요.",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attachments: [],
+      preprocessStatus: "IDLE",
+      preprocessPages: undefined,
+      preprocessChars: undefined,
+      preprocessExcerpt: undefined,
+      preprocessError: undefined,
+      reviewRequestedAt: undefined,
+      reviewItemId: undefined,
+      indexingStatus: "IDLE",
+      indexingError: undefined,
+      audit: [],
+    };
+
+    setSelectedVersion(tempVersion);
+    setSelectedId(tempVersion.id);
+    setIsNewVersionPending(true);
+    setRightTab("DRAFT"); // 초안 탭으로 이동
+
+    // draftForm 초기화 (폼이 표시되도록)
+    setDraftForm({
+      documentId: tempVersion.documentId,
+      title: tempVersion.title,
+      version: "", // 새 버전이므로 빈 문자열
+      changeSummary: tempVersion.changeSummary,
+    });
+
+    showToast(
+      "neutral",
+      "새 버전을 작성해주세요. 저장 버튼을 눌러 생성됩니다."
+    );
   };
 
   const onOpenPendingReadOnly = (g: PolicyDocGroup) => {
@@ -655,33 +1036,133 @@ export default function AdminPolicyTab() {
     }
   };
 
-  const onSaveDraft = () => {
+  const onSaveDraft = async () => {
     if (!selected || selected.status !== "DRAFT") return;
 
+    console.log("onSaveDraft - pendingFileUrl:", pendingFileUrl);
+    console.log("onSaveDraft - isNewVersionPending:", isNewVersionPending);
+
     try {
-      const nextVersionNum = Number(draftForm.version);
-      if (!Number.isFinite(nextVersionNum) || nextVersionNum <= 0) {
-        showToast("warn", "버전은 1 이상의 숫자여야 합니다.");
-        return;
+      // 새 버전 생성 대기 중이면 createVersion 호출
+      if (isNewVersionPending) {
+        const requestData: CreateVersionRequest = {
+          title: draftForm.title || undefined,
+          changeSummary: draftForm.changeSummary || undefined,
+        };
+
+        // version이 입력되어 있으면 숫자로 변환하여 포함
+        if (draftForm.version && draftForm.version.trim()) {
+          const versionNum = parseInt(draftForm.version, 10);
+          if (!isNaN(versionNum)) {
+            requestData.version = versionNum;
+          }
+        }
+
+        console.log("pendingFileUrl data:", pendingFileUrl);
+
+        // pendingFileUrl이 있으면 fileUrl 포함 (빈 문자열 체크 포함)
+        if (pendingFileUrl && pendingFileUrl.trim()) {
+          requestData.fileUrl = pendingFileUrl;
+        }
+
+        console.log("Creating new version with data:", requestData);
+        const response = await createVersion(selected.documentId, requestData);
+
+        setIsNewVersionPending(false);
+
+        // 새 버전 생성 후 pendingFileUrl과 pendingFileInfo 초기화
+        setPendingFileUrl(null);
+        setPendingFileInfo(null);
+
+        // 목록 새로고침
+        await fetchPolicies();
+
+        // 저장한 사규가 계속 보이도록 선택 상태 유지
+        // 전체 사규 정보를 가져와서 업데이트하고 저장한 버전 선택
+        const detail = await getPolicy(selected.documentId);
+        const updatedGroup = convertPolicyDetailToGroup(detail);
+
+        // groups 상태 업데이트 (해당 사규가 현재 페이지에 있으면 업데이트)
+        setGroups((prevGroups) =>
+          prevGroups.map((prevGroup) =>
+            prevGroup.documentId === selected.documentId
+              ? updatedGroup
+              : prevGroup
+          )
+        );
+
+        // 저장한 버전 선택 (response.version 사용)
+        const savedVersion = updatedGroup.versions.find(
+          (v) => v.version === response.version
+        );
+        if (savedVersion) {
+          setSelectedVersion(savedVersion);
+          setSelectedId(savedVersion.id);
+        }
+
+        showToast("neutral", "새 버전을 생성했습니다.");
+      } else {
+        // 기존 버전 업데이트
+        const updateData: {
+          title?: string;
+          changeSummary?: string;
+          fileUrl?: string;
+        } = {
+          title: draftForm.title,
+          changeSummary: draftForm.changeSummary,
+        };
+
+        // pendingFileUrl이 있으면 fileUrl 포함
+        if (pendingFileUrl) {
+          updateData.fileUrl = pendingFileUrl;
+        }
+
+        await updateVersion(selected.documentId, selected.version, updateData);
+
+        // 업데이트된 버전 정보 가져오기
+        const detail = await getPolicyVersion(
+          selected.documentId,
+          selected.version
+        );
+        const updatedVersion = convertVersionDetailToPolicyDocVersion(detail);
+
+        setSelectedVersion(updatedVersion);
+
+        // pendingFileUrl과 pendingFileInfo 초기화
+        setPendingFileUrl(null);
+        setPendingFileInfo(null);
+
+        // 목록 새로고침
+        await fetchPolicies();
+
+        // 저장한 사규가 계속 보이도록 선택 상태 유지
+        // 전체 사규 정보를 가져와서 업데이트하고 저장한 버전 선택
+        const policyDetail = await getPolicy(selected.documentId);
+        const updatedGroup = convertPolicyDetailToGroup(policyDetail);
+        setGroups((prevGroups) =>
+          prevGroups.map((prevGroup) =>
+            prevGroup.documentId === selected.documentId
+              ? updatedGroup
+              : prevGroup
+          )
+        );
+
+        // 저장한 버전 선택
+        const savedVersion = updatedGroup.versions.find(
+          (v) => v.version === updatedVersion.version
+        );
+        if (savedVersion) {
+          setSelectedVersion(savedVersion);
+          setSelectedId(savedVersion.id);
+        }
+
+        showToast("neutral", "초안을 저장했습니다.");
       }
-
-      updateDraft(selected.id, {
-        actor,
-        title: draftForm.title,
-        changeSummary: draftForm.changeSummary,
-        version: nextVersionNum,
-      });
-
-      showToast("neutral", "초안을 저장했습니다.");
     } catch (e) {
       const t = mapPolicyError(e);
       showToast(t.tone, t.message);
     }
   };
-
-  // (2) fileInputRef / onFileSelected 제거 + 모달 open state
-  const [filesModalOpen, setFilesModalOpen] = useState(false);
-  const [jumpToPreprocessOnClose, setJumpToPreprocessOnClose] = useState(false);
 
   const onPickFile = () => {
     if (!selected || selected.status !== "DRAFT") return;
@@ -689,11 +1170,22 @@ export default function AdminPolicyTab() {
     setFilesModalOpen(true);
   };
 
-  const onRetryPreprocess = () => {
+  const onRetryPreprocess = async () => {
     if (!selected || selected.status !== "DRAFT") return;
     try {
-      runPreprocess(selected.id, actor);
+      await retryPreprocess(selected.documentId, selected.version);
       showToast("neutral", "전처리를 재시도합니다.");
+      // 데이터 새로고침
+      await fetchPolicies();
+      // 선택된 버전 다시 로드
+      if (selectedId) {
+        const version = await getPolicyVersion(
+          selected.documentId,
+          selected.version
+        );
+        const converted = convertVersionDetailToPolicyDocVersion(version);
+        setSelectedVersion(converted);
+      }
     } catch (e) {
       const t = mapPolicyError(e);
       showToast(t.tone, t.message);
@@ -701,19 +1193,27 @@ export default function AdminPolicyTab() {
   };
 
   const canSubmitReview =
-    selected?.status === "DRAFT" &&
-    selected.preprocessStatus === "READY" &&
-    reviewCheck.checkedBasics &&
-    reviewCheck.checkedPreview;
+    selected?.status === "DRAFT" && selected.preprocessStatus === "READY";
 
-  const onSubmitReview = () => {
+  const onSubmitReview = async () => {
+    console.log("f1");
     if (!selected || selected.status !== "DRAFT") return;
+    console.log("f2");
 
     try {
-      submitReviewRequest(selected.id, actor);
+      await updateStatus(selected.documentId, selected.version, {
+        status: "PENDING",
+      });
 
+      // 업데이트된 버전 정보 가져오기
+      const detail = await getPolicyVersion(
+        selected.documentId,
+        selected.version
+      );
+      const updatedVersion = convertVersionDetailToPolicyDocVersion(detail);
+
+      setSelectedVersion(updatedVersion);
       setRightTab("REVIEW");
-      setReviewCheck({ checkedBasics: false, checkedPreview: false });
       setDraftForm({
         documentId: "",
         title: "",
@@ -721,65 +1221,15 @@ export default function AdminPolicyTab() {
         changeSummary: "",
       });
 
+      // DRAFT에서 PENDING으로 변경했으므로, 필터가 DRAFT인 경우 PENDING_REVIEWER로 변경
+      // statusFilter 변경 시 useEffect가 자동으로 fetchPolicies를 호출하므로 명시적 호출 불필요
+      if (statusFilter === "DRAFT") {
+        setStatusFilter("PENDING_REVIEWER");
+      } else {
+        await fetchPolicies(); // 필터가 변경되지 않는 경우에만 명시적으로 새로고침
+      }
+
       showToast("neutral", "검토 요청을 전송했습니다.");
-    } catch (e) {
-      const t = mapPolicyError(e);
-      showToast(t.tone, t.message);
-    }
-  };
-
-  // (4) 삭제 사유 모달 (DoD)
-  const [deleteModal, setDeleteModal] = useState<DeleteModalState>({
-    open: false,
-  });
-  const deleteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  const openDeleteModal = () => {
-    if (!selected) return;
-    if (selected.status === "ACTIVE") return;
-    setDeleteModal({ open: true, reason: "", error: undefined });
-  };
-
-  const closeDeleteModal = () => setDeleteModal({ open: false });
-
-  // 모달 열릴 때 textarea 포커스 + ESC 전역 처리 보강
-  useEffect(() => {
-    if (!deleteModal.open) return;
-
-    const t = window.setTimeout(() => {
-      deleteTextareaRef.current?.focus();
-    }, 0);
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDeleteModal();
-    };
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.clearTimeout(t);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [deleteModal.open]);
-
-  const confirmDelete = () => {
-    if (!selected) return;
-    if (!deleteModal.open) return;
-
-    const reason = deleteModal.reason.trim();
-    if (!reason) {
-      setDeleteModal((prev) =>
-        prev.open ? { ...prev, error: "삭제 사유를 입력하세요." } : prev
-      );
-      return;
-    }
-
-    try {
-      softDelete(selected.id, actor, reason);
-      showToast("neutral", "삭제 처리했습니다.");
-
-      selectVersion(null);
-
-      closeDeleteModal();
     } catch (e) {
       const t = mapPolicyError(e);
       showToast(t.tone, t.message);
@@ -823,16 +1273,11 @@ export default function AdminPolicyTab() {
       { id: "DRAFT" as const, label: "초안", disabled: !isDraft },
       { id: "PREPROCESS" as const, label: "전처리" },
       { id: "REVIEW" as const, label: "검토" },
-      { id: "HISTORY" as const, label: "히스토리" },
     ];
   }, [right?.status]);
 
   const onChangeVersionSelect = (id: string) => {
-    const found =
-      sortedVersionsInGroup.find((v) => v.id === id) ??
-      versions.find((v) => v.id === id) ??
-      getPolicyVersionSnapshot(id) ??
-      null;
+    const found = sortedVersionsInGroup.find((v) => v.id === id) ?? null;
 
     // 선택이 가능한 상태에서만 호출되므로 대부분 found는 존재
     selectVersion(found);
@@ -902,6 +1347,56 @@ export default function AdminPolicyTab() {
             </div>
           </section>
 
+          {/* 전처리 미리보기가 있으면 표시 */}
+          {right.preprocessStatus === "READY" && right.preprocessPreview ? (
+            <section className="cb-policy-card">
+              <div className="cb-policy-card-title">사규 내용 미리보기</div>
+              <div className="cb-policy-preprocess">
+                <div className="row">
+                  <div className="k">요약</div>
+                  <div className="v">
+                    {right.preprocessPreview.pages}p /{" "}
+                    {right.preprocessPreview.chars.toLocaleString()} chars
+                  </div>
+                </div>
+                <pre className="cb-policy-excerpt">
+                  {right.preprocessPreview.excerpt}
+                </pre>
+              </div>
+            </section>
+          ) : null}
+
+          {/* 파일이 있으면 다운로드 링크 표시 */}
+          {right.fileName ||
+          right.sourceUrl ||
+          (right.attachments && right.attachments.length > 0) ? (
+            <section className="cb-policy-card">
+              <div className="cb-policy-card-title">파일</div>
+              <div className="cb-policy-detail-grid">
+                <div className="row">
+                  <div className="k">파일</div>
+                  <div className="v">
+                    {right.sourceUrl ? (
+                      <a
+                        href={right.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="cb-policy-file-link"
+                      >
+                        {right.fileName || "파일 다운로드"}
+                        {right.fileSizeBytes
+                          ? ` (${formatBytes(right.fileSizeBytes)})`
+                          : ""}
+                      </a>
+                    ) : (
+                      renderAttachmentSummary(right)
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           <section className="cb-policy-card">
             <div className="cb-policy-card-title">빠른 안내</div>
             <div className="cb-policy-empty">
@@ -911,7 +1406,7 @@ export default function AdminPolicyTab() {
                 <>
                   <br />
                   현재는 <b>검토 대기</b> 상태이므로 <b>검토</b> 탭에서
-                  “검토안(읽기 전용)”을 확인하세요.
+                  "검토안(읽기 전용)"을 확인하세요.
                 </>
               ) : null}
             </div>
@@ -1168,7 +1663,7 @@ export default function AdminPolicyTab() {
       if (right.status !== "DRAFT") {
         return (
           <section className="cb-policy-card">
-            <div className="cb-policy-card-title">1차 검토 / 검토요청</div>
+            <div className="cb-policy-card-title">검토요청</div>
             <div className="cb-policy-empty">
               초안(DRAFT)에서만 검토 요청이 가능합니다.
             </div>
@@ -1176,42 +1671,13 @@ export default function AdminPolicyTab() {
         );
       }
 
+      console.log(canSubmitReview);
+
       return (
         <section className="cb-policy-card">
-          <div className="cb-policy-card-title">1차 검토 / 검토요청</div>
+          <div className="cb-policy-card-title">검토요청</div>
 
           <div className="cb-policy-review-box">
-            <label className="cb-policy-check">
-              <input
-                type="checkbox"
-                checked={reviewCheck.checkedBasics}
-                onChange={(e) =>
-                  setReviewCheck((s) => ({
-                    ...s,
-                    checkedBasics: e.target.checked,
-                  }))
-                }
-              />
-              <span>
-                필수 입력(document_id/title/version/change_summary/파일) 확인
-              </span>
-            </label>
-
-            <label className="cb-policy-check">
-              <input
-                type="checkbox"
-                checked={reviewCheck.checkedPreview}
-                onChange={(e) =>
-                  setReviewCheck((s) => ({
-                    ...s,
-                    checkedPreview: e.target.checked,
-                  }))
-                }
-                disabled={right.preprocessStatus !== "READY"}
-              />
-              <span>전처리 미리보기 확인</span>
-            </label>
-
             <div className="cb-policy-review-actions">
               <button
                 type="button"
@@ -1220,7 +1686,7 @@ export default function AdminPolicyTab() {
                 disabled={!canSubmitReview}
                 title={
                   !canSubmitReview
-                    ? "체크/전처리 조건을 만족해야 합니다."
+                    ? "전처리 상태가 READY여야 합니다."
                     : "검토 요청"
                 }
               >
@@ -1238,34 +1704,26 @@ export default function AdminPolicyTab() {
       );
     }
 
-    // HISTORY
-    return (
-      <section className="cb-policy-card">
-        <div className="cb-policy-card-title">히스토리</div>
-        {right.audit.length === 0 ? (
-          <div className="cb-policy-empty">기록이 없습니다.</div>
-        ) : (
-          <div className="cb-policy-timeline">
-            {right.audit
-              .slice()
-              .sort((a, b) => (a.at < b.at ? 1 : -1))
-              .map((a) => (
-                <div key={a.id} className="cb-policy-timeline-row">
-                  <div className="t">{new Date(a.at).toLocaleString()}</div>
-                  <div className="a">{a.action}</div>
-                  <div className="m">
-                    <span className="actor">{a.actor}</span>
-                    {a.message ? (
-                      <span className="msg">{a.message}</span>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-          </div>
-        )}
-      </section>
-    );
+    return null;
   };
+
+  if (loading) {
+    return (
+      <div className="cb-policy-root">
+        <div style={{ padding: "2rem", textAlign: "center" }}>로딩 중...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="cb-policy-root">
+        <div style={{ padding: "2rem", textAlign: "center", color: "red" }}>
+          {error}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="cb-policy-root">
@@ -1300,10 +1758,11 @@ export default function AdminPolicyTab() {
             <div className="cb-policy-filters">
               <div className="cb-policy-filters-row">
                 <input
+                  key="policy-search-input"
                   className="cb-policy-input"
                   placeholder="document_id / 제목 검색"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
 
@@ -1336,48 +1795,41 @@ export default function AdminPolicyTab() {
                   <option value="DOCID_ASC">정렬: 문서ID</option>
                 </select>
               </div>
-
-              {statusFilter === "ALL" ? (
-                <>
-                  <div className="cb-policy-filters-row cb-policy-filters-row--toggles">
-                    <label className="cb-policy-toggle">
-                      <input
-                        type="checkbox"
-                        checked={includeArchived}
-                        onChange={(e) => setIncludeArchived(e.target.checked)}
-                      />
-                      <span>보관 포함</span>
-                    </label>
-                    <label className="cb-policy-toggle">
-                      <input
-                        type="checkbox"
-                        checked={includeDeleted}
-                        onChange={(e) => setIncludeDeleted(e.target.checked)}
-                      />
-                      <span>삭제 포함</span>
-                    </label>
-
-                    <div className="cb-policy-result-count">
-                      {filteredGroups.length.toLocaleString()}건
-                    </div>
-                  </div>
-
-                  <div className="cb-policy-filter-hint">
-                    보관/삭제 포함 옵션은 <b>상태: 전체</b>에서만 적용됩니다.
-                  </div>
-                </>
-              ) : (
-                <div className="cb-policy-filters-row cb-policy-filters-row--count-only">
-                  <div className="cb-policy-filter-hint">
-                    보관/삭제 포함 옵션은 <b>상태: 전체</b>에서만 적용됩니다.
-                  </div>
-                  <div className="cb-policy-result-count">
-                    {filteredGroups.length.toLocaleString()}건
-                  </div>
-                </div>
-              )}
             </div>
           </div>
+
+          {/* 페이징 컨트롤 (상단) */}
+          {!loading && totalItems > 0 && (
+            <div className="cb-policy-pagination">
+              <div className="cb-policy-pagination-controls">
+                <button
+                  type="button"
+                  className="cb-admin-ghost-btn"
+                  onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                  disabled={currentPage === 0}
+                  title="이전 페이지"
+                >
+                  «
+                </button>
+                <span className="cb-policy-pagination-page">
+                  {currentPage + 1} / {Math.ceil(totalItems / pageSize)}
+                </span>
+                <button
+                  type="button"
+                  className="cb-admin-ghost-btn"
+                  onClick={() =>
+                    setCurrentPage((p) =>
+                      Math.min(Math.ceil(totalItems / pageSize) - 1, p + 1)
+                    )
+                  }
+                  disabled={currentPage >= Math.ceil(totalItems / pageSize) - 1}
+                  title="다음 페이지"
+                >
+                  »
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="cb-policy-group-list">
             {filteredGroups.length === 0 ? (
@@ -1500,21 +1952,7 @@ export default function AdminPolicyTab() {
                     ) : null}
                   </div>
 
-                  <div className="cb-policy-right-head-actions">
-                    <button
-                      type="button"
-                      className="cb-admin-ghost-btn"
-                      onClick={openDeleteModal}
-                      disabled={right.status === "ACTIVE"}
-                      title={
-                        right.status === "ACTIVE"
-                          ? "현재 적용중 문서는 삭제할 수 없습니다."
-                          : "삭제(soft)"
-                      }
-                    >
-                      삭제
-                    </button>
-                  </div>
+                  <div className="cb-policy-right-head-actions"></div>
                 </div>
 
                 <div className="cb-policy-right-head-sub">
@@ -1534,6 +1972,21 @@ export default function AdminPolicyTab() {
                         </option>
                       ))}
                     </select>
+                    {selectedGroup ? (
+                      <button
+                        type="button"
+                        className="cb-admin-ghost-btn cb-policy-version-add-btn"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onCreateNewVersion();
+                        }}
+                        disabled={false}
+                        title="새 버전(DRAFT)을 생성합니다."
+                      >
+                        + 새 버전 추가
+                      </button>
+                    ) : null}
                   </div>
 
                   <div
@@ -1580,108 +2033,83 @@ export default function AdminPolicyTab() {
         accept=".pdf,.doc,.docx,.ppt,.pptx,.hwp,.hwpx"
         files={policyFiles}
         disabled={!selected || selected.status !== "DRAFT"}
-        onClose={() => {
+        onClose={async () => {
+          // 모달을 닫을 때는 파일 URL을 유지하고 모달만 닫기
+          // 실제 DB 반영은 저장 버튼을 눌렀을 때 수행됨
           setFilesModalOpen(false);
 
+          // jumpToPreprocessOnClose가 설정되어 있으면 전처리 탭으로 이동
           if (jumpToPreprocessOnClose) {
             setRightTab("PREPROCESS");
             setJumpToPreprocessOnClose(false);
           }
         }}
-        onAddFiles={(fs) => {
-          if (!selected || selected.status !== "DRAFT") return;
+        onAddFiles={async (fs) => {
+          if (!selected || selected.status !== "DRAFT") {
+            return fs.map((f) => ({
+              key: `${f.name}__${f.size}`,
+              ok: false,
+              errorMessage: "초안 상태가 아닙니다.",
+            }));
+          }
           try {
-            attachFilesToDraft(selected.id, fs, actor);
-            runPreprocess(selected.id, actor);
+            if (fs.length === 0) return [];
 
-            setJumpToPreprocessOnClose(true);
+            // 첫 번째 파일만 처리
+            const file = fs[0];
+
+            // 1. S3 Presigned URL 발급
+            const presignResponse = await getS3PresignedUploadUrl({
+              filename: file.name,
+              contentType: file.type || "application/octet-stream",
+              type: "docs", // 사규 문서는 docs 타입
+            });
+
+            // 2. Presigned URL로 S3에 파일 업로드
+            const res = await uploadFileToS3(presignResponse.uploadUrl, file);
+            console.log("res", res);
+
+            // 업로드된 파일 URL과 정보를 임시 저장 (모달 닫을 때 실제 DB에 반영)
+            setPendingFileUrl(presignResponse.fileUrl);
+            setPendingFileInfo({
+              name: file.name,
+              sizeBytes: file.size,
+            });
 
             showToast(
               "neutral",
-              "파일 업로드 완료 · 전처리를 시작했습니다. (닫으면 전처리 탭으로 이동)"
+              "파일이 업로드되었습니다. 모달을 닫으면 저장됩니다."
             );
+
+            // 성공 결과 반환 (ProjectFilesModal이 업로드 완료를 인식하도록)
+            return fs.map((f) => ({
+              key: `${f.name}__${f.size}`,
+              ok: true,
+            }));
           } catch (e) {
             const t = mapPolicyError(e);
             showToast(t.tone, t.message);
+
+            // 실패 결과 반환
+            return fs.map((f) => ({
+              key: `${f.name}__${f.size}`,
+              ok: false,
+              errorMessage: t.message,
+            }));
           }
         }}
-        onRemoveFile={(id) => {
+        onRemoveFile={async () => {
           if (!selected || selected.status !== "DRAFT") return;
           try {
-            removeFileFromDraft(selected.id, id, actor);
-            const next = getPolicyVersionSnapshot(selected.id);
-            const hasAny = (next?.attachments?.length ?? 0) > 0;
-            if (hasAny) {
-              runPreprocess(selected.id, actor);
-              setJumpToPreprocessOnClose(true);
-            }
-            showToast("neutral", "파일이 삭제되었습니다.");
+            // 파일 삭제는 API에서 지원하지 않을 수 있음
+            // 일단 빈 URL로 교체하거나 별도 API 필요
+            showToast("warn", "파일 삭제 기능은 아직 지원되지 않습니다.");
           } catch (e) {
             const t = mapPolicyError(e);
             showToast(t.tone, t.message);
           }
         }}
       />
-
-      {deleteModal.open && (
-        <div
-          className="cb-reviewer-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) closeDeleteModal();
-          }}
-        >
-          <div
-            className="cb-reviewer-modal"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div className="cb-reviewer-modal-title">삭제 사유 입력</div>
-            <div className="cb-reviewer-modal-desc">
-              삭제는 복구 정책에 따라 제한될 수 있습니다. 사유는 감사 로그에
-              남습니다. (필수)
-            </div>
-
-            <div style={{ marginTop: 10 }}>
-              <textarea
-                ref={deleteTextareaRef}
-                className="cb-reviewer-textarea"
-                value={deleteModal.reason}
-                onChange={(e) =>
-                  setDeleteModal((prev) =>
-                    prev.open
-                      ? { ...prev, reason: e.target.value, error: undefined }
-                      : prev
-                  )
-                }
-                placeholder="삭제 사유를 입력하세요. (필수)"
-              />
-            </div>
-
-            {deleteModal.error && (
-              <div className="cb-reviewer-error">{deleteModal.error}</div>
-            )}
-
-            <div className="cb-reviewer-modal-actions">
-              <button
-                type="button"
-                className="cb-reviewer-ghost-btn"
-                onClick={closeDeleteModal}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                className="cb-reviewer-danger-btn"
-                onClick={confirmDelete}
-                disabled={!deleteModal.reason.trim()}
-              >
-                삭제 실행
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

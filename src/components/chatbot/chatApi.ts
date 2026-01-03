@@ -504,6 +504,13 @@ type ChatSessionResponse = {
 type ChatMessageSendRequest = {
   sessionId: string; // uuid
   content: string;
+  /**
+   * A/B 테스트 임베딩 모델 선택 (선택)
+   * - "openai": text-embedding-3-large (기본값)
+   * - "sroberta": ko-sroberta-multitask
+   * - null/undefined: 기본값(openai) 사용
+   */
+  model?: string | null;
 };
 
 /**
@@ -665,10 +672,14 @@ export async function sendChatToAI(req: ChatRequest): Promise<ChatSendResult> {
     setSessionMap(userUuid, clientSessionKey, created.id);
   }
 
+  // A/B 테스트: req.model 추출
+  const abModel = (req as unknown as { model?: string | null }).model ?? null;
+
   const sent = await sendChatMessage(
     {
       sessionId: serverSessionId,
       content: lastUser,
+      model: abModel,
     },
     token
   );
@@ -1403,11 +1414,15 @@ export async function sendChatToAIStream(
     setSessionMap(userUuid, clientSessionKey, created.id);
   }
 
+  // A/B 테스트: req.model 추출
+  const abModel = (req as unknown as { model?: string | null }).model ?? null;
+
   // 2) 먼저 POST /chat/messages 로 messageId 확보
   const sent = await sendChatMessage(
     {
       sessionId: serverSessionId,
       content: lastUser,
+      model: abModel,
     },
     token
   );

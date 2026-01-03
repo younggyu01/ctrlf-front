@@ -122,6 +122,14 @@ export interface ChatRequest {
 
   /** 서버 세션 UUID(알고 있으면 전달) */
   serverSessionId?: string;
+
+  /**
+   * A/B 테스트 임베딩 모델 선택 (선택)
+   * - "openai": text-embedding-3-large (기본값)
+   * - "sroberta": ko-sroberta-multitask
+   * - null/undefined: 기본값(openai) 사용
+   */
+  model?: "openai" | "sroberta" | null;
 }
 
 /** sendChatToAI 결과(서버 UUID 포함) */

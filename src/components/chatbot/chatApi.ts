@@ -323,6 +323,16 @@ function getServiceDomainFromKeycloak(): ChatServiceDomain | null {
   return normalizeServiceDomain(parsed["domain"]);
 }
 
+/**
+ * Keycloak tokenParsed.department → 사용자 부서 정보
+ */
+function getDepartmentFromKeycloak(): string | null {
+  const parsed = keycloak?.tokenParsed as unknown;
+  if (!isRecord(parsed)) return null;
+  const dept = parsed["department"];
+  return typeof dept === "string" && dept.trim() ? dept.trim() : null;
+}
+
 async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit,
@@ -485,6 +495,7 @@ type ChatSessionCreateRequest = {
   userUuid: string;
   title: string;
   domain: string;
+  department?: string | null;
 };
 
 /**
@@ -512,6 +523,7 @@ type ChatMessageSendRequest = {
    * - null/undefined: 기본값(openai) 사용
    */
   model?: string | null;
+  department?: string | null;
 };
 
 /**
@@ -764,11 +776,13 @@ export async function sendChatToAI(req: ChatRequest): Promise<ChatSendResult> {
 
   if (!serverSessionId) {
     const title = makeSessionTitleFromUserText(lastUser);
+    const department = getDepartmentFromKeycloak();
     const created = await createChatSession(
       {
         userUuid,
         title,
         domain: String(serviceDomain),
+        department: department ?? undefined,
       },
       token
     );
@@ -779,12 +793,14 @@ export async function sendChatToAI(req: ChatRequest): Promise<ChatSendResult> {
 
   // A/B 테스트: req.model 추출
   const abModel = (req as unknown as { model?: string | null }).model ?? null;
+  const department = getDepartmentFromKeycloak();
 
   const sent = await sendChatMessage(
     {
       sessionId: serverSessionId,
       content: lastUser,
       model: abModel,
+      department: department ?? undefined,
     },
     token
   );
@@ -1511,9 +1527,10 @@ export async function sendChatToAIStream(
     const uiDomain = pickUiDomain(req) ?? "general";
     const tokenDomain = getServiceDomainFromKeycloak();
     const serviceDomain = toChatServiceDomain(uiDomain, tokenDomain ?? "POLICY");
+    const department = getDepartmentFromKeycloak();
 
     const created = await createChatSession(
-      { userUuid, title, domain: String(serviceDomain) },
+      { userUuid, title, domain: String(serviceDomain), department: department ?? undefined },
       token
     );
     serverSessionId = created.id;
@@ -1522,6 +1539,7 @@ export async function sendChatToAIStream(
 
   // A/B 테스트: req.model 추출
   const abModel = (req as unknown as { model?: string | null }).model ?? null;
+  const department = getDepartmentFromKeycloak();
 
   // 2) 먼저 POST /chat/messages 로 messageId 확보
   const sent = await sendChatMessage(
@@ -1529,6 +1547,7 @@ export async function sendChatToAIStream(
       sessionId: serverSessionId,
       content: lastUser,
       model: abModel,
+      department: department ?? undefined,
     },
     token
   );

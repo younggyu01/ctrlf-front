@@ -14,7 +14,7 @@ export default defineConfig({
        * (주의) /education 을 API prefix로 쓰면 SPA 라우트(/education 페이지)와 충돌 가능
        */
       "/api-edu": {
-        target: "http://localhost:9002",
+        target: "http://education-service:9002",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-edu/, ""),
       },
@@ -26,22 +26,22 @@ export default defineConfig({
        * - RAG documents: /api-infra/rag/* → /rag/*
        */
       "/api-infra/files": {
-        target: "http://localhost:9003",
+        target: "http://infra-service:9003",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-infra\/files/, "/infra/files"),
       },
       "/api-infra/infra": {
-        target: "http://localhost:9003",
+        target: "http://infra-service:9003",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-infra\/infra/, "/infra"),
       },
       "/api-infra/rag": {
-        target: "http://localhost:9003",
+        target: "http://infra-service:9003",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-infra\/rag/, "/rag"),
       },
       "/api-infra": {
-        target: "http://localhost:9003",
+        target: "http://infra-service:9003",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-infra/, ""),
       },
@@ -56,18 +56,18 @@ export default defineConfig({
        */
       // 대시보드 API: /api/chat/admin/* → /admin/*
       "/api/chat/admin": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api\/chat\/admin/, "/admin"),
       },
       "/api/chat": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
       },
       "/chat": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
         ws: true,
@@ -78,7 +78,7 @@ export default defineConfig({
        * FE: /api/faq/* → BE: /faq/*
        */
       "/api/faq": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api\/faq/, "/faq"),
@@ -88,17 +88,17 @@ export default defineConfig({
        * (선택) FAQ/ADMIN FAQ를 프론트에서 직접 호출할 경우를 대비한 프록시
        */
       "/faq": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
       },
       "/admin/faq": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
       },
       "/admin/faqs": {
-        target: "http://localhost:9005",
+        target: "http://chat-service:9005",
         changeOrigin: true,
         secure: false,
       },

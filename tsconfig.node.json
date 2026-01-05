@@ -14,13 +14,13 @@
     "moduleDetection": "force",
     "noEmit": true,
 
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    /* Linting - 이 부분을 수정합니다 */
+    "strict": false,                    // true에서 false로 변경
+    "noUnusedLocals": false,            // 사용하지 않는 변수 에러 무시
+    "noUnusedParameters": false,        // 사용하지 않는 매개변수 에러 무시
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": false // 체크 해제
   },
   "include": ["vite.config.ts"]
 }

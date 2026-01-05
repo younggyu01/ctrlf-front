@@ -11,7 +11,8 @@ export type AdminTabId =
   | "metrics"
   | "accounts"
   | "logs"
-  | "policy";
+  | "policy"
+  | "faq";
 
 // adminFilterTypes 의 PeriodPreset 을 그대로 사용
 export type PeriodFilter = PeriodPreset;

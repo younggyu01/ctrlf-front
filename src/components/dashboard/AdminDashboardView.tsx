@@ -30,6 +30,7 @@ import AdminQuizTab from "./components/tabs/AdminQuizTab";
 import AdminMetricsTab from "./components/tabs/AdminMetricsTab";
 import AdminLogsTab from "./components/tabs/AdminLogsTab";
 import AdminAccountsTab from "./components/tabs/AdminAccountsTab";
+import AdminFAQTab from "./components/tabs/AdminFAQTab";
 
 /**
  * 패널 사이즈 / 드래그 / 리사이즈 타입
@@ -851,6 +852,15 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           >
             <span className="cb-admin-tab-label">사규 관리</span>
           </button>
+          <button
+            type="button"
+            className={`cb-admin-tab-btn ${
+              activeTab === "faq" ? "is-active" : ""
+            }`}
+            onClick={() => setActiveTab("faq")}
+          >
+            <span className="cb-admin-tab-label">FAQ</span>
+          </button>
         </nav>
 
         <div className="cb-admin-content">
@@ -901,6 +911,11 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           {activeTab === "policy" && (
             <div className="cb-admin-tab-panel cb-admin-tab-panel--policy">
               <AdminPolicyTab />
+            </div>
+          )}
+          {activeTab === "faq" && (
+            <div className="cb-admin-tab-panel cb-admin-tab-panel--faq">
+              <AdminFAQTab />
             </div>
           )}
           {activeTab === "accounts" && <AdminAccountsTab />}

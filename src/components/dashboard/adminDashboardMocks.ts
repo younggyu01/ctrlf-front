@@ -62,6 +62,7 @@ export const TAB_LABELS: Record<AdminTabId, string> = {
   accounts: "계정 / 역할 관리",
   policy: "사규 / 정책 관리",
   logs: "세부 로그 조회",
+  faq: "FAQ 관리",
 };
 
 /**

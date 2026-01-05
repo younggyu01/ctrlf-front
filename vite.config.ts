@@ -3,15 +3,17 @@ import react from "@vitejs/plugin-react";
 
 // https://vite.dev/config/
 export default defineConfig({
+  // 빌드 시 자산(assets) 경로를 상대 경로로 설정하여 
+  // 인그레스 경로가 꼬여도 파일을 찾을 수 있게 합니다.
+  base: "./", 
   plugins: [react()],
   server: {
     port: 5173,
-    open: true,
+    // open: true, // CI/CD 환경이나 컨테이너에서는 false로 두는 것이 에러 방지에 좋습니다.
     proxy: {
       /**
        * 교육 도메인 (education-service: 9002)
        * FE는 /api-edu/* 로 호출 → BE는 /* 로 받도록 rewrite
-       * (주의) /education 을 API prefix로 쓰면 SPA 라우트(/education 페이지)와 충돌 가능
        */
       "/api-edu": {
         target: "http://education-service:9002",
@@ -21,9 +23,6 @@ export default defineConfig({
 
       /**
        * 인프라 도메인 (infra-service: 9003)
-       * - S3 presigned: /api-infra/files/* → /infra/files/*
-       * - S3 presigned (alternative): /api-infra/infra/* → /infra/*
-       * - RAG documents: /api-infra/rag/* → /rag/*
        */
       "/api-infra/files": {
         target: "http://infra-service:9003",
@@ -48,13 +47,7 @@ export default defineConfig({
 
       /**
        * 채팅 도메인 (Chat Service: 9005)
-       * Swagger 기준 실제 경로:
-       * - /api/chat/sessions...
-       * - /chat/messages...
-       * - /chat/sessions/.../feedback ...
-       * - /admin/dashboard/... (대시보드 API)
        */
-      // 대시보드 API: /api/chat/admin/* → /admin/*
       "/api/chat/admin": {
         target: "http://chat-service:9005",
         changeOrigin: true,
@@ -74,8 +67,7 @@ export default defineConfig({
       },
 
       /**
-       * FAQ (중요)
-       * FE: /api/faq/* → BE: /faq/*
+       * FAQ
        */
       "/api/faq": {
         target: "http://chat-service:9005",
@@ -84,9 +76,6 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/faq/, "/faq"),
       },
 
-      /**
-       * (선택) FAQ/ADMIN FAQ를 프론트에서 직접 호출할 경우를 대비한 프록시
-       */
       "/faq": {
         target: "http://chat-service:9005",
         changeOrigin: true,

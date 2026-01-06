@@ -6369,6 +6369,58 @@
   overflow: auto;
 }
 
+/* 확대 보기 모달 내부의 CreatorScriptSceneEditor 크기 조정 */
+.cb-reviewer-preview-body .cb-creator-scene-editor {
+  height: 100%;
+  min-height: 600px;
+  max-height: none;
+  resize: none; /* 모달에서는 리사이즈 비활성화 */
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-list {
+  width: 35%;
+  min-width: 300px;
+  max-width: 400px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-edit {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 모달 내부 폰트 크기 조정 */
+.cb-reviewer-preview-body .cb-creator-scene-list-head {
+  font-size: 14px;
+}
+
+.cb-reviewer-preview-body .cb-creator-chapter-title {
+  font-size: 13px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-purpose {
+  font-size: 13px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-edit-title {
+  font-size: 14px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-field-label {
+  font-size: 13px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-ro-label {
+  font-size: 12px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-ro-value {
+  font-size: 13px;
+}
+
+.cb-reviewer-preview-body .cb-creator-scene-ro-hint {
+  font-size: 13px;
+}
+
 .cb-reviewer-preview-media {
   border-radius: 14px;
   border: 1px solid #e5e7eb;

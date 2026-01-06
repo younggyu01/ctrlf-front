@@ -22,8 +22,14 @@ export type ListMode = "paged" | "virtual";
 export type ReviewStageFilter = "all" | "stage1" | "stage2" | "docs";
 type StageCounts = { all: number; stage1: number; stage2: number; docs: number };
 
-function getReviewStage(it: ReviewWorkItem): 1 | 2 | null {
+export function getReviewStage(it: ReviewWorkItem): 1 | 2 | null {
   if (it.contentType !== "VIDEO") return null; // 문서/정책 등
+  
+  // reviewStage 필드를 우선 확인 (백엔드에서 명시적으로 설정한 값 사용)
+  if (it.reviewStage === "FINAL") return 2;
+  if (it.reviewStage === "SCRIPT") return 1;
+  
+  // reviewStage가 없으면 videoUrl로 판단 (하위 호환성)
   return it.videoUrl?.trim() ? 2 : 1; // VIDEO: videoUrl 있으면 2차(최종)
 }
 
@@ -868,13 +874,57 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
     return filtered.findIndex((f) => f.id === selectedId);
   }, [filtered, selectedId]);
 
-  const selectedItem = useMemo((): ReviewWorkItemExt | null => {
-    if (!selectedId) return null;
-    return items.find((i) => i.id === selectedId) ?? null;
-  }, [items, selectedId]);
-
   // 백엔드 API에서 감사 이력 조회 (selectedItem 변경 시)
   const [auditHistoryById, setAuditHistoryById] = useState<Record<string, ReviewWorkItemExt["audit"]>>({});
+  
+  // 백엔드 API에서 상세 정보 조회 (selectedItem 변경 시) - fileUrl 등 상세 정보를 가져오기 위해
+  const [detailLoadedById, setDetailLoadedById] = useState<Record<string, boolean>>({});
+  
+  useEffect(() => {
+    if (!selectedId) return;
+    
+    const api = apiRef.current;
+    if (!api || !("getWorkItem" in api) || typeof api.getWorkItem !== "function") return;
+
+    // 이미 상세 정보를 조회한 항목이면 스킵
+    if (detailLoadedById[selectedId]) return;
+
+    void (async () => {
+      try {
+        const detail = await api.getWorkItem!(selectedId);
+        
+        // items 배열을 업데이트하여 상세 정보 반영 (fileUrl, videoUrl 등)
+        setItems((prev) =>
+          prev.map((it) => {
+            if (it.id !== selectedId) return it;
+            // 상세 정보로 병합 (기존 정보는 유지하되 상세 정보로 업데이트)
+            return { ...it, ...detail };
+          })
+        );
+        
+        setDetailLoadedById((prev) => ({
+          ...prev,
+          [selectedId]: true,
+        }));
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn("[ReviewerDesk] getWorkItem failed", err);
+      }
+    })();
+  }, [selectedId, detailLoadedById]);
+
+  const selectedItem = useMemo((): ReviewWorkItemExt | null => {
+    if (!selectedId) return null;
+    const item = items.find((i) => i.id === selectedId);
+    if (!item) return null;
+    
+    // auditHistoryById에 감사 이력이 있으면 병합
+    const auditHistory = auditHistoryById[selectedId];
+    if (auditHistory && auditHistory.length > 0) {
+      return { ...item, audit: auditHistory };
+    }
+    
+    return item;
+  }, [items, selectedId, auditHistoryById]);
   
   useEffect(() => {
     if (!selectedId) return;
@@ -1231,10 +1281,11 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
       const next = normalizeDecisionResult(res.item as ReviewWorkItemExt, "approve");
       patchItemInState(next);
 
-      const isFinal =
-        selectedItem.contentType !== "VIDEO"
-          ? true
-          : Boolean(selectedItem.videoUrl && selectedItem.videoUrl.trim().length > 0);
+      // reviewStage를 사용하여 1차/2차 승인 구분
+      const reviewStage = getReviewStage(selectedItem);
+      const isFinal = selectedItem.contentType !== "VIDEO"
+        ? true
+        : reviewStage === 2; // 2차 검토 단계인지 확인
 
       // 감사 이력은 백엔드에서 자동으로 기록됨
 
@@ -1247,6 +1298,11 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
               ? "2차(최종) 승인 완료 (공개됨)"
               : "1차 승인 완료 (비공개: 제작자가 영상 생성 가능)"
       );
+
+      // 승인 성공 후 목록 갱신 (optimistic update로 즉시 제거)
+      setItems((prev) => prev.filter((it) => it.id !== selectedItem.id));
+      // 백엔드에서 최신 상태로 재조회
+      await refreshAllFromApi({ silent: true, force: true });
 
       setDecisionModal({ open: false, kind: null });
       decisionCtxRef.current = null;
@@ -1321,6 +1377,12 @@ export function useReviewerDeskController(options: UseReviewerDeskControllerOpti
       // 감사 이력은 백엔드에서 자동으로 기록됨
 
       toastStd.ok(isPolicyDocItem(selectedItem) ? "사규/정책 반려 완료" : "반려 완료");
+      
+      // 반려 성공 후 목록 갱신 (optimistic update로 즉시 제거)
+      setItems((prev) => prev.filter((it) => it.id !== selectedItem.id));
+      // 백엔드에서 최신 상태로 재조회
+      await refreshAllFromApi({ silent: true, force: true });
+
       setDecisionModal({ open: false, kind: null });
       decisionCtxRef.current = null;
     } catch (err: unknown) {

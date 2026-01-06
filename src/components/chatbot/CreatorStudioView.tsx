@@ -479,11 +479,15 @@ function isScriptApprovedByPolicy(it: CreatorWorkItem): boolean {
 }
 
 /**
- * 반려 판정: 문서 상태(REJECTED) + review-history 내 REJECTED 태깅
+ * 반려 판정: 문서 상태(REJECTED) + review-history 내 REJECTED 태깅 + rejectedComment/rejectedStage 필드
  */
 function isRejectedByHistory(it: CreatorWorkItem): boolean {
   const st = statusKey((it as unknown as { status?: unknown }).status);
   if (st === "REJECTED") return true;
+
+  // rejectedComment나 rejectedStage 필드가 있으면 반려된 것으로 판단
+  if (it.rejectedComment && it.rejectedComment.trim().length > 0) return true;
+  if (it.rejectedStage) return true;
 
   const history = (it as unknown as { reviewHistory?: unknown }).reviewHistory;
   if (!Array.isArray(history)) return false;
@@ -823,6 +827,7 @@ type CreatorFlowInput = {
   hasVideo: boolean;
   isScriptApproved: boolean;
   isPipelineRunning: boolean;
+  scriptId?: string;
 };
 
 function buildCreatorFlowSteps(input: CreatorFlowInput): {
@@ -836,12 +841,14 @@ function buildCreatorFlowSteps(input: CreatorFlowInput): {
     hasVideo,
     isScriptApproved,
     isPipelineRunning,
+    scriptId,
   } = input;
 
   const st = statusText;
 
   const doneUpload = hasSourceFile;
-  const doneScript = hasScript;
+  // scriptId가 있거나, 1차 승인 이후 상태라면 스크립트가 생성된 것으로 간주
+  const doneScript = hasScript || isScriptApproved || Boolean(scriptId && scriptId.trim().length > 0);
   const doneReview1 = isScriptApproved;
   const doneVideo = hasVideo;
   const doneReview2 = st === "PUBLISHED" || st === "APPROVED";
@@ -1146,13 +1153,23 @@ function readSourceFileSize(it: CreatorWorkItem | null): number | null {
 
 function readScriptId(it: CreatorWorkItem | null): string {
   if (!it) return "";
+  
+  // 1. 메타데이터에서 scriptId 확인 (우선순위 높음)
+  const meta = it as unknown as Record<string, unknown>;
+  const metaScriptId = meta["scriptId"];
+  if (typeof metaScriptId === "string" && metaScriptId.trim().length > 0) {
+    return metaScriptId.trim();
+  }
+  
+  // 2. 직접 필드에서 확인
   const direct = (it as unknown as { scriptId?: unknown }).scriptId;
-  if (typeof direct === "string") return direct;
+  if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
 
+  // 3. assets에서 확인
   const assets = (it as unknown as { assets?: unknown }).assets;
   if (assets && typeof assets === "object") {
     const v = (assets as Record<string, unknown>)["scriptId"];
-    if (typeof v === "string") return v;
+    if (typeof v === "string" && v.trim().length > 0) return v.trim();
   }
 
   return "";
@@ -1184,7 +1201,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canOpen]);
 
-  // 컨트롤러가 undefined를 “필터 적용/허용 없음”으로 해석하는 케이스 방어
+  // 컨트롤러가 undefined를 "필터 적용/허용 없음"으로 해석하는 케이스 방어
   const safeAllowedDeptIds = allowedDeptIds ?? null;
 
   const controller = useCreatorStudioController({
@@ -1211,6 +1228,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     selectItem,
     createDraft,
     updateSelectedMeta,
+    updateSelected,
 
     addSourceFilesToSelected,
     removeSourceFileFromSelected,
@@ -1218,14 +1236,30 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     runPipelineForSelected,
     runVideoOnlyForSelected,
     retryPipelineForSelected,
-    updateSelectedScript,
     showToast,
     requestReviewForSelected,
     reopenRejectedToDraft,
     deleteDraft,
     selectedValidation,
     toast,
+    refreshItems,
   } = controller;
+
+  // 화면 포커스 시 목록 갱신 (승인 후 복귀 시 상태 동기화)
+  useEffect(() => {
+    if (!canOpen) return;
+    
+    const handleFocus = () => {
+      if (refreshItems) {
+        void refreshItems({ silent: true });
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [canOpen, refreshItems]);
 
   // 뷰 → 컨트롤러 patch 전달 래퍼(타입 유연성 유지)
   const updateSelectedMetaCompat = useCallback(
@@ -2028,7 +2062,15 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     onClose();
   };
 
-  const selectedStatusText = selectedItem ? statusKey(selectedItem.status) : "";
+  // videoStatusRaw를 우선 확인하고, 없으면 status 사용
+  const getVideoStatusRaw = (item: CreatorWorkItem | null): string => {
+    if (!item) return "";
+    const raw = (item as unknown as Record<string, unknown>)["videoStatusRaw"];
+    if (typeof raw === "string" && raw.trim().length > 0) return raw.trim().toUpperCase();
+    return statusKey(item.status);
+  };
+
+  const selectedStatusText = selectedItem ? getVideoStatusRaw(selectedItem) : "";
   const scriptApprovedAt = selectedItem ? getScriptApprovedAt(selectedItem) : null;
   const selectedIsScriptApproved = selectedItem ? isScriptApprovedByPolicy(selectedItem) : false;
 
@@ -2167,7 +2209,9 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     : false;
 
   const scriptText = readScriptText(selectedItem ?? null);
-  const hasScript = scriptText.trim().length > 0;
+  const scriptId = selectedItem ? readScriptId(selectedItem) : "";
+  // scriptId가 있거나 scriptText가 있으면 스크립트가 생성된 것으로 간주
+  const hasScript = scriptText.trim().length > 0 || Boolean(scriptId && scriptId.trim().length > 0);
 
   const sourceFilesCount = selectedItem ? readSourceFiles(selectedItem).length : 0;
   const hasSourceFile = sourceFilesCount > 0 || readSourceFileName(selectedItem ?? null).trim().length > 0;
@@ -2176,18 +2220,18 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
 
   const canGenerateScript =
     !!selectedItem &&
-    (selectedStatusText === "DRAFT" || selectedStatusText === "SCRIPT_READY") &&
+    (selectedStatusText === "DRAFT" || selectedStatusText === "SCRIPT_READY" || selectedStatusText === "SCRIPT_GENERATING") &&
     !isHardLocked &&
     hasSourceFile &&
     !selectedIsScriptApproved;
 
   const canGenerateVideo =
     !!selectedItem &&
-    (selectedStatusText === "SCRIPT_APPROVED" || selectedStatusText === "READY" || selectedStatusText === "DRAFT") &&
+    (selectedStatusText === "SCRIPT_APPROVED" || selectedStatusText === "READY" || selectedStatusText === "DRAFT" || selectedIsScriptApproved) &&
     !isHardLocked &&
     selectedIsScriptApproved &&
     hasSourceFile &&
-    hasScript;
+    (hasScript || Boolean(scriptId && scriptId.trim().length > 0));
 
   const scriptGenLabel = hasScript ? "스크립트 재생성" : "스크립트 생성";
   const videoGenLabel = hasVideo ? "영상 재생성" : "영상 생성";
@@ -2197,7 +2241,12 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   function phaseHintFor(item: CreatorWorkItem | null) {
     if (!item) return "";
 
-    const st = statusKey(item.status);
+    // videoStatusRaw를 우선 확인하고, 없으면 status 사용
+    const rawStatus = (item as unknown as Record<string, unknown>)["videoStatusRaw"];
+    const rawStatusUpper = typeof rawStatus === "string" && rawStatus.trim().length > 0 
+      ? rawStatus.trim().toUpperCase() 
+      : "";
+    const st = rawStatusUpper || statusKey(item.status);
     const sa = isScriptApprovedByPolicy(item);
 
     if (st === "PUBLISHED" || st === "APPROVED") return "게시됨(최종 승인 완료)";
@@ -2212,6 +2261,11 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     const _hasSource = readSourceFiles(item).length > 0 || readSourceFileName(item).trim().length > 0;
     const _hasScript = readScriptText(item).trim().length > 0;
     const _hasVideo = readVideoUrl(item).trim().length > 0;
+
+    // SCRIPT_READY 상태이면 스크립트 준비 완료로 표시
+    if (st === "SCRIPT_READY" || (rawStatusUpper === "SCRIPT_READY")) {
+      return "스크립트 준비(1차 요청 가능)";
+    }
 
     if (!_hasSource) return "자료 업로드 대기";
     if (!_hasScript && !sa) return "스크립트 생성 대기";
@@ -2243,6 +2297,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
       hasVideo,
       isScriptApproved: selectedIsScriptApproved,
       isPipelineRunning,
+      scriptId: resolvedScriptId,
     });
   }, [
     selectedItem,
@@ -2252,6 +2307,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     hasVideo,
     selectedIsScriptApproved,
     isPipelineRunning,
+    resolvedScriptId,
   ]);
 
   const flowMetaText = selectedItem
@@ -2631,187 +2687,203 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                               />
                             </label>
 
-                            <label className="cb-creator-field">
-                              <div className="cb-creator-field-label">카테고리</div>
-                              <select
-                                className="cb-admin-select"
-                                value={selectedItem.categoryId}
-                                disabled={disableMeta}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                onChange={(e) => {
-                                  const id = e.target.value;
-                                  const label = categoryNameById.get(id) ?? id;
-                                  updateSelectedMeta({
-                                    categoryId: id,
-                                    categoryLabel: label,
-                                  });
-                                }}
-                              >
-                                {normalizedCategories.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          </div>
-
-                          {/* row B */}
-                          <div className="cb-creator-meta-grid2 cb-creator-meta-grid2--mt">
-                            <label className="cb-creator-field">
-                              <div className="cb-creator-field-label">영상 템플릿</div>
-                              <select
-                                className="cb-admin-select"
-                                value={selectedItem.templateId ?? ""}
-                                disabled={disableMeta}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                onChange={(e) =>
-                                  updateSelectedMeta({ templateId: e.target.value })
-                                }
-                              >
-                                {normalizedTemplates.map((t) => (
-                                  <option key={t.id} value={t.id}>
-                                    {t.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label className="cb-creator-field">
-                              <div className="cb-creator-field-label">
-                                직무교육(Training)
-                              </div>
-
-                              {isJob ? (
-                                <CreatorTrainingSelect
-                                  value={selectedItem.jobTrainingId ?? ""}
-                                  options={trainingOptions}
-                                  disabled={disableMeta}
-                                  onChange={(nextId) =>
-                                    updateSelectedMeta({ jobTrainingId: nextId })
-                                  }
-                                />
-                              ) : (
-                                <select
-                                  className="cb-admin-select"
-                                  value=""
-                                  disabled
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                >
-                                  <option value="">
-                                    해당 없음 (4대 의무교육 카테고리)
-                                  </option>
-                                </select>
-                              )}
-                            </label>
-                          </div>
-
-                          {/* row C */}
-                          <div className="cb-creator-meta-grid2 cb-creator-meta-grid2--mt">
-                            <label className="cb-creator-field">
-                              <div className="cb-creator-field-label">대상 부서</div>
-
-                              <div className="cb-creator-checkbox-box">
-                                <label className="cb-creator-checkitem">
-                                  <input
-                                    type="checkbox"
-                                    checked={isAllCompany}
-                                    disabled={
-                                      disableMeta ||
-                                      creatorType === "DEPT_CREATOR" ||
-                                      boundDeptLocked ||
-                                      (isAllCompany && selectableDepartments.length === 0)
-                                    }
+                            {/* 카테고리 필드 숨김 처리 (데이터/타입은 유지) - 나중에 다시 사용할 수 있도록 주석 처리 */}
+                            {(() => {
+                              const SHOW_CATEGORY_FIELD = false; // 나중에 다시 사용할 수 있도록 플래그로 제어
+                              return SHOW_CATEGORY_FIELD && selectedItem ? (
+                                <label className="cb-creator-field">
+                                  <div className="cb-creator-field-label">카테고리</div>
+                                  <select
+                                    className="cb-admin-select"
+                                    value={selectedItem.categoryId}
+                                    disabled={disableMeta}
                                     onMouseDown={(e) => e.stopPropagation()}
                                     onChange={(e) => {
-                                      if (!selectedItem) return;
-
-                                      const nextChecked = e.target.checked;
-
-                                      // 전사 ON: targetDeptIds = []
-                                      if (nextChecked) {
-                                        const cleaned = cleanDeptIds(selectedItem.targetDeptIds, allDeptIdSet);
-                                        if (cleaned.length > 0) {
-                                          deptSelectionMemoryRef.current.set(selectedItem.id, [...cleaned]);
-                                        }
-                                        updateSelectedMetaCompat({ targetDeptIds: [] });
-                                        return;
-                                      }
-
-                                      // 전사 OFF: 기억해둔 개별 선택 or 첫 부서로 복원
-                                      const rememberedRaw = deptSelectionMemoryRef.current.get(selectedItem.id) ?? [];
-                                      const remembered = rememberedRaw.filter((id) => !allDeptIdSet.has(id));
-                                      const fallbackFirst = selectableDepartments[0]?.id ? [selectableDepartments[0].id] : [];
-                                      const nextDeptIds = remembered.length > 0 ? remembered : fallbackFirst;
-
-                                      if (nextDeptIds.length === 0) {
-                                        showToast("info", "부서 목록이 아직 로딩되지 않아 전사 설정을 해제할 수 없습니다.");
-                                        return;
-                                      }
-
-                                      updateSelectedMetaCompat({ targetDeptIds: nextDeptIds });
+                                      const id = e.target.value;
+                                      const label = categoryNameById.get(id) ?? id;
+                                      updateSelectedMeta({
+                                        categoryId: id,
+                                        categoryLabel: label,
+                                      });
                                     }}
-                                  />
-                                  전사 대상(전체)
+                                  >
+                                    {normalizedCategories.map((c) => (
+                                      <option key={c.id} value={c.id}>
+                                        {c.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              ) : null;
+                            })()}
+                          </div>
+
+                          {/* row B - 숨김 처리 (데이터/타입은 유지) - 나중에 다시 사용할 수 있도록 주석 처리 */}
+                          {(() => {
+                            const SHOW_TEMPLATE_TRAINING_FIELDS = false; // 나중에 다시 사용할 수 있도록 플래그로 제어
+                            return SHOW_TEMPLATE_TRAINING_FIELDS && selectedItem ? (
+                              <div className="cb-creator-meta-grid2 cb-creator-meta-grid2--mt">
+                                <label className="cb-creator-field">
+                                  <div className="cb-creator-field-label">영상 템플릿</div>
+                                  <select
+                                    className="cb-admin-select"
+                                    value={selectedItem.templateId ?? ""}
+                                    disabled={disableMeta}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onChange={(e) =>
+                                      updateSelectedMeta({ templateId: e.target.value })
+                                    }
+                                  >
+                                    {normalizedTemplates.map((t) => (
+                                      <option key={t.id} value={t.id}>
+                                        {t.name}
+                                      </option>
+                                    ))}
+                                  </select>
                                 </label>
 
-                                {creatorType === "DEPT_CREATOR" && (
-                                  <span className="cb-creator-muted">
-                                    부서 제작자는 전사 대상으로 설정할 수 없습니다.
-                                  </span>
-                                )}
+                                <label className="cb-creator-field">
+                                  <div className="cb-creator-field-label">
+                                    직무교육(Training)
+                                  </div>
 
-                                <div className="cb-creator-spacer-8" />
-
-                                {/* 전사(전체)일 때는 개별 부서 체크박스를 숨김 */}
-                                {!isAllCompany && (
-                                  <>
-                                    {selectableDepartments.map((d) => {
-                                      const checked = selectedItem.targetDeptIds.includes(d.id);
-                                      const disabled = disableMeta || boundDeptLocked;
-
-                                      return (
-                                        <label key={d.id} className="cb-creator-checkitem">
-                                          <input
-                                            type="checkbox"
-                                            checked={checked}
-                                            disabled={disabled}
-                                            onMouseDown={(e) => e.stopPropagation()}
-                                            onChange={(e) => {
-                                              if (!selectedItem) return;
-
-                                              const base = selectedItem.targetDeptIds.filter((id) => !allDeptIdSet.has(id));
-                                              const next = e.target.checked
-                                                ? Array.from(new Set([...base, d.id]))
-                                                : base.filter((x) => x !== d.id);
-
-                                              updateSelectedMetaCompat({ targetDeptIds: next });
-                                            }}
-                                          />
-                                          {d.name}
-                                        </label>
-                                      );
-                                    })}
-                                  </>
-                                )}
-
-                                {isAllCompany && (
-                                  <span className="cb-creator-muted">
-                                    전사 대상으로 지정되어 개별 부서 선택은 숨김 처리됩니다.
-                                  </span>
-                                )}
+                                  {isJob ? (
+                                    <CreatorTrainingSelect
+                                      value={selectedItem.jobTrainingId ?? ""}
+                                      options={trainingOptions}
+                                      disabled={disableMeta}
+                                      onChange={(nextId) =>
+                                        updateSelectedMeta({ jobTrainingId: nextId })
+                                      }
+                                    />
+                                  ) : (
+                                    <select
+                                      className="cb-admin-select"
+                                      value=""
+                                      disabled
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                      <option value="">
+                                        해당 없음 (4대 의무교육 카테고리)
+                                      </option>
+                                    </select>
+                                  )}
+                                </label>
                               </div>
-                            </label>
+                            ) : null;
+                          })()}
 
-                            <label className="cb-creator-field">
-                              <div className="cb-creator-field-label">대상 안내</div>
-                              <div className="cb-creator-inline-box">
-                                <span className="cb-creator-inline-text">
-                                  필수/선택 구분 없이 “대상 부서”만 설정합니다.
-                                </span>
+                          {/* row C - 숨김 처리 (데이터/타입은 유지) - 나중에 다시 사용할 수 있도록 주석 처리 */}
+                          {(() => {
+                            const SHOW_DEPT_FIELDS = false; // 나중에 다시 사용할 수 있도록 플래그로 제어
+                            return SHOW_DEPT_FIELDS && selectedItem ? (
+                              <div className="cb-creator-meta-grid2 cb-creator-meta-grid2--mt">
+                                <label className="cb-creator-field">
+                                  <div className="cb-creator-field-label">대상 부서</div>
+
+                                  <div className="cb-creator-checkbox-box">
+                                    <label className="cb-creator-checkitem">
+                                      <input
+                                        type="checkbox"
+                                        checked={isAllCompany}
+                                        disabled={
+                                          disableMeta ||
+                                          creatorType === "DEPT_CREATOR" ||
+                                          boundDeptLocked ||
+                                          (isAllCompany && selectableDepartments.length === 0)
+                                        }
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onChange={(e) => {
+                                          if (!selectedItem) return;
+
+                                          const nextChecked = e.target.checked;
+
+                                          // 전사 ON: targetDeptIds = []
+                                          if (nextChecked) {
+                                            const cleaned = cleanDeptIds(selectedItem.targetDeptIds, allDeptIdSet);
+                                            if (cleaned.length > 0) {
+                                              deptSelectionMemoryRef.current.set(selectedItem.id, [...cleaned]);
+                                            }
+                                            updateSelectedMetaCompat({ targetDeptIds: [] });
+                                            return;
+                                          }
+
+                                          // 전사 OFF: 기억해둔 개별 선택 or 첫 부서로 복원
+                                          const rememberedRaw = deptSelectionMemoryRef.current.get(selectedItem.id) ?? [];
+                                          const remembered = rememberedRaw.filter((id) => !allDeptIdSet.has(id));
+                                          const fallbackFirst = selectableDepartments[0]?.id ? [selectableDepartments[0].id] : [];
+                                          const nextDeptIds = remembered.length > 0 ? remembered : fallbackFirst;
+
+                                          if (nextDeptIds.length === 0) {
+                                            showToast("info", "부서 목록이 아직 로딩되지 않아 전사 설정을 해제할 수 없습니다.");
+                                            return;
+                                          }
+
+                                          updateSelectedMetaCompat({ targetDeptIds: nextDeptIds });
+                                        }}
+                                      />
+                                      전사 대상(전체)
+                                    </label>
+
+                                    {creatorType === "DEPT_CREATOR" && (
+                                      <span className="cb-creator-muted">
+                                        부서 제작자는 전사 대상으로 설정할 수 없습니다.
+                                      </span>
+                                    )}
+
+                                    <div className="cb-creator-spacer-8" />
+
+                                    {/* 전사(전체)일 때는 개별 부서 체크박스를 숨김 */}
+                                    {!isAllCompany && (
+                                      <>
+                                        {selectableDepartments.map((d) => {
+                                          const checked = selectedItem.targetDeptIds.includes(d.id);
+                                          const disabled = disableMeta || boundDeptLocked;
+
+                                          return (
+                                            <label key={d.id} className="cb-creator-checkitem">
+                                              <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                disabled={disabled}
+                                                onMouseDown={(e) => e.stopPropagation()}
+                                                onChange={(e) => {
+                                                  if (!selectedItem) return;
+
+                                                  const base = selectedItem.targetDeptIds.filter((id) => !allDeptIdSet.has(id));
+                                                  const next = e.target.checked
+                                                    ? Array.from(new Set([...base, d.id]))
+                                                    : base.filter((x) => x !== d.id);
+
+                                                  updateSelectedMetaCompat({ targetDeptIds: next });
+                                                }}
+                                              />
+                                              {d.name}
+                                            </label>
+                                          );
+                                        })}
+                                      </>
+                                    )}
+
+                                    {isAllCompany && (
+                                      <span className="cb-creator-muted">
+                                        전사 대상으로 지정되어 개별 부서 선택은 숨김 처리됩니다.
+                                      </span>
+                                    )}
+                                  </div>
+                                </label>
+
+                                <label className="cb-creator-field">
+                                  <div className="cb-creator-field-label">대상 안내</div>
+                                  <div className="cb-creator-inline-box">
+                                    <span className="cb-creator-inline-text">
+                                      필수/선택 구분 없이 "대상 부서"만 설정합니다.
+                                    </span>
+                                  </div>
+                                </label>
                               </div>
-                            </label>
-                          </div>
+                            ) : null;
+                          })()}
 
                           {selectedIsScriptApproved && (
                             <div className="cb-creator-muted cb-creator-mt-8">
@@ -2981,12 +3053,14 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                                     disabled={disableMeta}
                                     showToast={showToast}
                                     onCommitScriptText={(next) => {
-                                      // A안: scriptId 확정 후 editor 전달, 저장은 controller가 담당
-                                      if (typeof updateSelectedScript === "function") {
-                                        updateSelectedScript(next);
-                                        return;
-                                      }
-                                      updateSelectedMeta({ script: next } as unknown as Record<string, unknown>);
+                                      // 씬 저장 후에는 로컬 상태만 업데이트 (이미 PUT /scripts/{scriptId}로 저장됨)
+                                      // updateSelectedScript는 불필요한 API 호출을 하므로 직접 updateSelected 사용
+                                      // updateSelected는 함수형 업데이트를 사용하므로 최신 selectedItem 자동 반영
+                                      updateSelected({
+                                        assets: {
+                                          script: next,
+                                        },
+                                      });
                                     }}
                                     onDirtyChange={setScriptSceneDirty}
                                   />

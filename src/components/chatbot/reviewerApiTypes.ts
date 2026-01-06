@@ -74,6 +74,8 @@ export interface ReviewDetailResponse {
   // 백엔드에서 제공할 수 있는 추가 필드 (optional)
   fileUrl?: string; // 영상 파일 URL (2차 검토 시 필요)
   duration?: number; // 영상 길이(초)
+  rejectedComment?: string; // 반려 사유
+  rejectedStage?: "SCRIPT" | "VIDEO" | string; // 반려된 단계
 }
 
 /**

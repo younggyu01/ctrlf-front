@@ -1,11 +1,13 @@
 // src/components/chatbot/ReviewerDetail.tsx
-import React, { useState, useSyncExternalStore } from "react";
+import React, { useState, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { DetailTabId } from "./useReviewerDeskController";
 import type { ReviewWorkItem } from "./reviewerDeskTypes";
 import { formatDateTime, formatDuration } from "./creatorStudioUtils";
 
 import { listPolicyVersionsSnapshot, subscribePolicyStore } from "./policyStore";
 import type { PolicyDocVersion } from "./policyTypes";
+import { getScript } from "./creatorApi";
+import CreatorScriptSceneEditor from "./CreatorScriptSceneEditor";
 
 function cx(...tokens: Array<string | false | null | undefined>) {
   return tokens.filter(Boolean).join(" ");
@@ -86,7 +88,43 @@ function renderPiiPill(autoCheck: ReviewWorkItem["autoCheck"] | undefined) {
 
 function getVideoStage(it: ReviewWorkItem): 1 | 2 | null {
   if (it.contentType !== "VIDEO") return null;
+  
+  // reviewStage 필드를 우선 확인 (백엔드에서 명시적으로 설정한 값 사용)
+  if (it.reviewStage === "FINAL") return 2;
+  if (it.reviewStage === "SCRIPT") return 1;
+  
+  // reviewStage가 없으면 videoUrl로 판단 (하위 호환성)
   return it.videoUrl?.trim() ? 2 : 1;
+}
+
+function formatAuditAction(action: string): string {
+  const actionMap: Record<string, string> = {
+    // 기본 이벤트 타입
+    "CREATED": "생성됨",
+    "SUBMITTED": "제출됨",
+    "AUTO_CHECKED": "자동 점검",
+    "COMMENTED": "댓글 작성",
+    "APPROVED": "승인됨",
+    "REJECTED": "반려됨",
+    "PUBLISHED": "공개됨",
+    "UPDATED_BY_OTHER": "외부 변경",
+    // 백엔드 상태 값 (video status)
+    "DRAFT": "초안 생성",
+    "SCRIPT_GENERATING": "스크립트 생성 중",
+    "SCRIPT_READY": "스크립트 생성 완료",
+    "SCRIPT_REVIEW_REQUESTED": "1차 검토 요청",
+    "SCRIPT_APPROVED": "1차 승인",
+    "PROCESSING": "영상 생성 중",
+    "READY": "영상 생성 완료",
+    "FINAL_REVIEW_REQUESTED": "2차 검토 요청",
+    "DISABLED": "비활성화됨",
+    // 추가 이벤트 타입
+    "SCRIPT_GENERATED": "스크립트 생성",
+    "VIDEO_GENERATED": "영상 생성",
+    "FINAL_APPROVED": "2차 승인",
+  };
+  
+  return actionMap[action] || action;
 }
 
 function stageLabelShort(stage: 1 | 2) {
@@ -216,6 +254,20 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
     });
   };
 
+  // scriptId 추출 - Hook은 early return 이전에 호출되어야 함
+  const isPolicy = selectedItem ? isPolicyDoc(selectedItem) : false;
+  
+  // scriptId 추출 (VIDEO 타입에서 스크립트 표시용)
+  const scriptId = useMemo(() => {
+    if (!selectedItem || isPolicy || selectedItem.contentType !== "VIDEO") {
+      return "";
+    }
+    const any = selectedItem as unknown as Record<string, unknown>;
+    return typeof any.scriptId === "string" && any.scriptId.trim() 
+      ? any.scriptId.trim() 
+      : "";
+  }, [selectedItem, isPolicy]);
+
   // Hook들 호출 이후 early return
   if (!selectedItem) {
     return (
@@ -224,8 +276,6 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
       </div>
     );
   }
-
-  const isPolicy = isPolicyDoc(selectedItem);
 
   const any = selectedItem as unknown as Record<string, unknown>;
   const linkedVersionId =
@@ -374,18 +424,6 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
         >
           자동 점검
         </button>
-
-        <button
-          type="button"
-          className={cx(
-            "cb-reviewer-detail-tab",
-            detailTab === "audit" && "cb-reviewer-detail-tab--active"
-          )}
-          onClick={() => setDetailTab("audit")}
-          disabled={isOverlayOpen || isBusy}
-        >
-          감사 이력
-        </button>
       </div>
 
       <div className="cb-reviewer-detail-content">
@@ -409,14 +447,41 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
               selectedItem.videoUrl && selectedItem.videoUrl.trim().length > 0 ? (
                 <div className="cb-reviewer-media-wrap">
                   <video className="cb-reviewer-video" src={selectedItem.videoUrl} controls />
+                  {/* 2차 검토 시 영상과 함께 스크립트도 표시 */}
+                  {stage === 2 && scriptId && scriptId.trim().length > 0 ? (
+                    <div style={{ marginTop: 16 }}>
+                      <CreatorScriptSceneEditor
+                        scriptId={scriptId}
+                        videoId={selectedItem.id}
+                        scriptText={selectedItem.scriptText}
+                        disabled={true}
+                        showToast={() => {}}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : (
-                <div className="cb-reviewer-doc-preview">
-                  <div className="cb-reviewer-doc-preview-title">1차(스크립트) 검토 단계</div>
-                  <div className="cb-reviewer-doc-preview-body">
-                    현재는 스크립트만 검토합니다. 1차 승인 후 제작자가 영상을 생성하면 2차 검토 요청이 올라옵니다.
+                // 1차 검토 시 스크립트와 씬 표시
+                scriptId && scriptId.trim().length > 0 ? (
+                  <CreatorScriptSceneEditor
+                    scriptId={scriptId}
+                    videoId={selectedItem.id}
+                    scriptText={selectedItem.scriptText}
+                    disabled={true}
+                    showToast={() => {}}
+                  />
+                ) : (
+                  <div className="cb-reviewer-doc-preview">
+                    <div className="cb-reviewer-doc-preview-title">
+                      {stage === 2 ? "2차(최종) 검토 단계" : "1차(스크립트) 검토 단계"}
+                    </div>
+                    <div className="cb-reviewer-doc-preview-body">
+                      {stage === 2 
+                        ? "현재는 영상과 스크립트를 모두 검토합니다. 2차 승인 시 즉시 공개(PUBLISHED) 처리됩니다."
+                        : "스크립트가 아직 생성되지 않았습니다. 제작자가 스크립트를 생성한 후 검토 요청이 올라옵니다."}
+                    </div>
                   </div>
-                </div>
+                )
               )
             ) : (
               <div className="cb-reviewer-doc-preview">
@@ -583,41 +648,22 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
               </div>
             ) : (
               <>
-                <pre className="cb-reviewer-script">
-                  {selectedItem.scriptText ??
-                    "(스크립트가 없습니다. 제작자가 스크립트를 포함해 제출했는지 확인하세요.)"}
-                </pre>
-
-                <div className="cb-reviewer-note">
-                  <div className="cb-reviewer-note-head">
-                    <div>
-                      <strong>Reviewer Notes</strong>
-                      <span className="cb-reviewer-note-sub">
-                        (내부 메모 · 저장 시 감사 이력에 기록)
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="cb-reviewer-ghost-btn"
-                      onClick={onSaveNote}
-                      disabled={isOverlayOpen || isBusy || !(notesById[selectedItem.id] ?? "").trim()}
-                    >
-                      메모 저장
-                    </button>
-                  </div>
-                  <textarea
-                    className="cb-reviewer-textarea"
-                    value={notesById[selectedItem.id] ?? ""}
-                    onChange={(e) =>
-                      setNotesById((prev) => ({
-                        ...prev,
-                        [selectedItem.id]: e.target.value,
-                      }))
-                    }
-                    placeholder="검토 시 발견한 리스크/수정 요청/승인 근거 등을 기록하세요."
-                    disabled={isOverlayOpen || isBusy}
+                {scriptId && scriptId.trim().length > 0 ? (
+                  <CreatorScriptSceneEditor
+                    scriptId={scriptId}
+                    videoId={selectedItem.id}
+                    scriptText={selectedItem.scriptText}
+                    disabled={true}
+                    showToast={() => {}}
                   />
-                </div>
+                ) : (
+                  <div className="cb-reviewer-doc-preview">
+                    <div className="cb-reviewer-doc-preview-body">
+                      {selectedItem.scriptText || 
+                        "(스크립트가 없습니다. 제작자가 스크립트를 생성하고 검토 요청을 제출했는지 확인하세요.)"}
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -666,30 +712,6 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
                   <div className="cb-reviewer-muted">경고 없음</div>
                 )}
               </div>
-            </div>
-          </div>
-        )}
-
-        {detailTab === "audit" && (
-          <div className="cb-reviewer-section">
-            <div className="cb-reviewer-section-title">감사 이력</div>
-            <div className="cb-reviewer-timeline">
-              {[...selectedItem.audit]
-                .sort((a, b) => (a.at > b.at ? -1 : 1))
-                .map((a) => (
-                  <div key={a.id} className="cb-reviewer-timeline-item">
-                    <div className="cb-reviewer-timeline-dot" />
-                    <div className="cb-reviewer-timeline-body">
-                      <div className="cb-reviewer-timeline-row">
-                        <strong className="cb-reviewer-timeline-action">{a.action}</strong>
-                        <span className="cb-reviewer-timeline-meta">
-                          {formatDateTime(a.at)} · {a.actor}
-                        </span>
-                      </div>
-                      {a.detail && <div className="cb-reviewer-timeline-detail">{a.detail}</div>}
-                    </div>
-                  </div>
-                ))}
             </div>
           </div>
         )}

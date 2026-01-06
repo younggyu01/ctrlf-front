@@ -45,6 +45,12 @@ function categoryLabel(c: ReviewWorkItem["contentCategory"]) {
 
 function getVideoStage(it: ReviewWorkItem): 1 | 2 | null {
     if (it.contentType !== "VIDEO") return null;
+    
+    // reviewStage 필드를 우선 확인 (백엔드에서 명시적으로 설정한 값 사용)
+    if (it.reviewStage === "FINAL") return 2;
+    if (it.reviewStage === "SCRIPT") return 1;
+    
+    // reviewStage가 없으면 videoUrl로 판단 (하위 호환성)
     return it.videoUrl?.trim() ? 2 : 1;
 }
 

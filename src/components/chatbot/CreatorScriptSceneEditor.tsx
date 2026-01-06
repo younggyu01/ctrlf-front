@@ -337,8 +337,13 @@ function extractFieldErrors(payload: unknown): CreatorScriptScenePatchErrors {
 type EnvLike = Record<string, string | undefined>;
 const ENV = import.meta.env as unknown as EnvLike;
 const EDU_BASE = String(ENV.VITE_EDU_API_BASE ?? "/api-edu").replace(/\/$/, "");
-const SCRIPT_DETAIL_ENDPOINT = (scriptId: string) =>
-  `${EDU_BASE}/scripts/${encodeURIComponent(scriptId)}`;
+const SCRIPT_DETAIL_ENDPOINT = (scriptId: string) => {
+  const sid = scriptId?.trim() ?? "";
+  if (!sid || sid.length === 0) {
+    throw new Error("SCRIPT_DETAIL_ENDPOINT: scriptId가 필요합니다.");
+  }
+  return `${EDU_BASE}/scripts/${encodeURIComponent(sid)}`;
+};
 
 export default function CreatorScriptSceneEditor({
   scriptId,
@@ -363,6 +368,11 @@ export default function CreatorScriptSceneEditor({
   const [loadingError, setLoadingError] = useState<string | null>(null);
 
   const [script, setScript] = useState<CreatorScriptDetail | null>(null);
+  
+  // 현재 실행 중인 loadScript 요청을 추적하기 위한 ref
+  const loadScriptAbortControllerRef = useRef<AbortController | null>(null);
+  // 현재 로드 중인 scriptId를 추적 (React Strict Mode 이중 실행 방지)
+  const loadingScriptIdRef = useRef<string | null>(null);
 
   const scenes = useMemo(() => flattenScenes(script?.chapters ?? []), [script]);
 
@@ -418,14 +428,15 @@ export default function CreatorScriptSceneEditor({
       setLoadingError(null);
 
       try {
-        const raw = await fetchJson<unknown>(SCRIPT_DETAIL_ENDPOINT(scriptId), {
+        const endpoint = SCRIPT_DETAIL_ENDPOINT(scriptId);
+        const raw = await fetchJson<unknown>(endpoint, {
           method: "GET",
           signal,
         });
 
         const detail = normalizeScriptDetail(raw);
 
-        // 서버 스크립트가 비어있거나 실패해도, 상위에서 내려준 scriptText는 “표시용”으로만 유지 가능
+        // 서버 스크립트가 비어있거나 실패해도, 상위에서 내려준 scriptText는 "표시용"으로만 유지 가능
         // (여기서는 API 데이터 우선)
         setScript(detail);
 
@@ -464,10 +475,99 @@ export default function CreatorScriptSceneEditor({
   );
 
   useEffect(() => {
+    if (!scriptId || scriptId.trim().length === 0) {
+      // 이전 요청 취소
+      if (loadScriptAbortControllerRef.current) {
+        loadScriptAbortControllerRef.current.abort();
+        loadScriptAbortControllerRef.current = null;
+      }
+      loadingScriptIdRef.current = null;
+      setLoading(false);
+      setLoadingError("scriptId가 없습니다.");
+      setScript(null);
+      setSelectedSceneId(null);
+      return;
+    }
+    
+    // 이미 같은 scriptId를 로드 중이면 중복 요청 방지
+    if (loadingScriptIdRef.current === scriptId && loadScriptAbortControllerRef.current) {
+      return;
+    }
+    
+    // 이전 요청이 있으면 취소
+    if (loadScriptAbortControllerRef.current) {
+      loadScriptAbortControllerRef.current.abort();
+    }
+    
+    // 새로운 AbortController 생성
     const ctrl = new AbortController();
-    void loadScript(ctrl.signal);
-    return () => ctrl.abort();
-  }, [loadScript]);
+    loadScriptAbortControllerRef.current = ctrl;
+    loadingScriptIdRef.current = scriptId;
+    
+    // loadScript 실행
+    const currentScriptId = scriptId; // 클로저로 scriptId 캡처
+    void loadScript(ctrl.signal)
+      .then(() => {
+        // 요청이 성공적으로 완료되면 ref 정리 (같은 scriptId에 대한 요청인 경우에만)
+        if (loadScriptAbortControllerRef.current === ctrl && loadingScriptIdRef.current === currentScriptId) {
+          loadScriptAbortControllerRef.current = null;
+          loadingScriptIdRef.current = null;
+        }
+      })
+      .catch((err) => {
+        // AbortError는 정상적인 취소이므로 무시
+        if (err instanceof Error && err.name === "AbortError") {
+          // cleanup에서 취소된 경우이므로 ref는 cleanup에서 정리됨
+          return;
+        }
+        // 다른 에러인 경우 ref 정리
+        if (loadScriptAbortControllerRef.current === ctrl && loadingScriptIdRef.current === currentScriptId) {
+          loadScriptAbortControllerRef.current = null;
+          loadingScriptIdRef.current = null;
+        }
+      });
+    
+    return () => {
+      // React Strict Mode 이중 실행 방지: cleanup을 약간 지연시켜 두 번째 실행이 완료될 시간을 줌
+      // 같은 scriptId에 대한 요청은 취소하지 않음
+      const timeoutId = setTimeout(() => {
+        const currentScriptIdInRef = loadingScriptIdRef.current;
+        
+        // scriptId가 변경되지 않았는데 cleanup이 호출되는 경우는 React Strict Mode 이중 실행
+        // 이 경우 cleanup하지 않고 두 번째 실행이 완료되도록 함
+        if (loadScriptAbortControllerRef.current === ctrl && currentScriptIdInRef === currentScriptId) {
+          // cleanup하지 않음 - 두 번째 실행이 완료되도록 함
+          clearTimeout(timeoutId);
+          return;
+        }
+        
+        // scriptId가 실제로 변경되었거나 컴포넌트가 unmount된 경우에만 취소
+        if (loadScriptAbortControllerRef.current === ctrl) {
+          ctrl.abort();
+          if (loadingScriptIdRef.current === currentScriptId) {
+            loadScriptAbortControllerRef.current = null;
+            loadingScriptIdRef.current = null;
+          }
+        }
+        clearTimeout(timeoutId);
+      }, 50); // 50ms 지연으로 React Strict Mode 이중 실행 완화
+    };
+  }, [loadScript, scriptId]);
+
+  // script가 업데이트되면 selectedSceneId를 유효한 씬으로 업데이트
+  useEffect(() => {
+    if (!script) return;
+    const currentScenes = flattenScenes(script.chapters);
+    setSelectedSceneId((prev) => {
+      // 현재 선택된 씬이 여전히 유효하면 유지
+      if (prev && currentScenes.some((s) => s.sceneId === prev)) {
+        return prev;
+      }
+      // 현재 선택된 씬이 없거나 유효하지 않으면 첫 번째 씬 선택
+      const first = currentScenes[0];
+      return first?.sceneId ?? null;
+    });
+  }, [script]);
 
   const markDirty = (sceneId: string) => {
     setDirtyIds((prev) => (prev[sceneId] ? prev : { ...prev, [sceneId]: true }));
@@ -492,6 +592,7 @@ export default function CreatorScriptSceneEditor({
   };
 
   const canSaveSelected =
+    !disabled && // disabled prop 체크 추가
     !hardDisabled &&
     selectedScene != null &&
     Boolean(dirtyIds[selectedScene.sceneId]) &&
@@ -499,6 +600,7 @@ export default function CreatorScriptSceneEditor({
     script != null;
 
   const saveSelectedScene = async () => {
+    if (disabled) return; // disabled일 때는 저장 불가
     if (!script || !selectedScene || !selectedDraft) return;
     if (!dirtyIds[selectedScene.sceneId]) return;
 
@@ -552,13 +654,46 @@ export default function CreatorScriptSceneEditor({
       let updated: CreatorScriptDetail | null = null;
       try {
         updated = normalizeScriptDetail(raw);
+        // 서버 응답에 chapters가 없거나 비어있으면 로컬 상태 사용
+        if (!updated.chapters || updated.chapters.length === 0) {
+          updated = null;
+        }
       } catch {
         updated = null;
       }
 
       const finalDetail = updated ?? nextDetail;
 
+      // script 상태를 업데이트 (이것이 scenes useMemo를 트리거하고, useEffect에서 selectedSceneId도 자동 업데이트됨)
+      // finalDetail.chapters가 비어있지 않은지 확인 (로컬 상태를 사용하므로 항상 있어야 함)
+      if (!finalDetail.chapters || finalDetail.chapters.length === 0) {
+        showToastRef.current("error", "저장된 스크립트에 챕터가 없습니다.", 3500);
+        setSaving(false);
+        return;
+      }
+
+      // finalDetail이 유효한지 확인 (scriptId가 있어야 함)
+      if (!finalDetail.scriptId || finalDetail.scriptId.trim().length === 0) {
+        showToastRef.current("error", "저장된 스크립트에 scriptId가 없습니다.", 3500);
+        setSaving(false);
+        return;
+      }
+
+      // script 상태를 업데이트 (React의 배치 업데이트를 고려하여 즉시 업데이트)
       setScript(finalDetail);
+      
+      // draftById도 업데이트된 씬 정보로 갱신
+      if (selectedScene?.sceneId && selectedDraft) {
+        setDraftById((prev) => {
+          const updated = { ...prev };
+          updated[selectedScene.sceneId] = {
+            narration: selectedDraft.narration,
+            caption: selectedDraft.caption,
+            durationSec: selectedDraft.durationSec,
+          };
+          return updated;
+        });
+      }
 
       setDirtyIds((prev) => {
         const next = { ...prev };
@@ -611,7 +746,7 @@ export default function CreatorScriptSceneEditor({
             type="button"
             className="cb-creator-scene-reload"
             onClick={() => void loadScript(undefined)}
-            disabled={loading}
+            disabled={loading || disabled}
           >
             새로고침
           </button>
@@ -706,7 +841,7 @@ export default function CreatorScriptSceneEditor({
             <button
               type="button"
               className="cb-admin-primary-btn cb-creator-scene-save"
-              disabled={!canSaveSelected}
+              disabled={!canSaveSelected || disabled}
               onClick={() => void saveSelectedScene()}
             >
               {saving ? "저장 중…" : "저장(씬)"}

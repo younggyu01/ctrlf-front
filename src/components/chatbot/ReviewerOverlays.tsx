@@ -1,8 +1,20 @@
 // src/components/chatbot/ReviewerOverlays.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import type { DecisionModalState } from "./useReviewerDeskController";
 import type { ReviewWorkItem } from "./reviewerDeskTypes";
 import { useStableEvent } from "./useStableEvent";
+import CreatorScriptSceneEditor from "./CreatorScriptSceneEditor";
+
+function getVideoStage(it: ReviewWorkItem): 1 | 2 | null {
+  if (it.contentType !== "VIDEO") return null;
+  
+  // reviewStage 필드를 우선 확인 (백엔드에서 명시적으로 설정한 값 사용)
+  if (it.reviewStage === "FINAL") return 2;
+  if (it.reviewStage === "SCRIPT") return 1;
+  
+  // reviewStage가 없으면 videoUrl로 판단 (하위 호환성)
+  return it.videoUrl?.trim() ? 2 : 1;
+}
 
 function cx(...tokens: Array<string | false | null | undefined>) {
   return tokens.filter(Boolean).join(" ");
@@ -51,61 +63,57 @@ const RejectModalBody: React.FC<{
   onReject,
 }) => {
   const [reason, setReason] = useState(initialReason);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // decisionModal.reason이 바뀌는 케이스(다른 항목으로 전환)에서 초기값 동기화
   useEffect(() => {
-    setReason(initialReason);
-  }, [initialReason]);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, []);
 
-  const trimmed = reason.trim();
-  const showError = !!error && trimmed.length === 0;
+  const handleSubmit = useStableEvent(() => {
+    if (!reason.trim()) return;
+    onReject(reason.trim());
+  });
 
   return (
-    <>
-      <div id={rejectTitleId} className="cb-reviewer-modal-title">
-        반려
+    <div className="cb-reviewer-reject-body">
+      <div className="cb-reviewer-reject-form">
+        <label htmlFor={rejectDescId} className="cb-reviewer-label">
+          반려 사유 <span className="cb-reviewer-required">*</span>
+        </label>
+        <textarea
+          id={rejectDescId}
+          ref={textareaRef}
+          className="cb-reviewer-textarea"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="반려 사유를 입력하세요. (필수)"
+          disabled={isBusy || rejectProcessing}
+          rows={4}
+        />
+        {error && <div className="cb-reviewer-error">{error}</div>}
       </div>
-      <div id={rejectDescId} className="cb-reviewer-modal-desc">
-        반려 사유는 필수이며, 제작자에게 전달됩니다.
-      </div>
 
-      <textarea
-        className={cx(
-          "cb-reviewer-textarea",
-          "cb-reviewer-textarea--modal",
-          showError && "cb-reviewer-textarea--error"
-        )}
-        value={reason}
-        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-          setReason(e.target.value)
-        }
-        placeholder="예) 개인정보 마스킹이 필요합니다. 전화번호/사번이 노출됩니다."
-        disabled={isBusy}
-      />
-
-      {showError && <div className="cb-reviewer-error">{error}</div>}
-
-      <div className="cb-reviewer-modal-actions">
+      <div className="cb-reviewer-reject-actions">
         <button
           type="button"
           className="cb-reviewer-ghost-btn"
           onClick={onCloseDecision}
-          disabled={isBusy}
+          disabled={isBusy || rejectProcessing}
         >
           취소
         </button>
-
         <button
           type="button"
           className="cb-reviewer-danger-btn"
-          onClick={() => onReject(reason)}
-          disabled={isBusy || trimmed.length === 0}
-          title={trimmed.length === 0 ? "반려 사유를 입력하세요." : undefined}
+          onClick={handleSubmit}
+          disabled={isBusy || rejectProcessing || !reason.trim()}
         >
           {rejectProcessing ? "반려 처리 중…" : "반려하기"}
         </button>
       </div>
-    </>
+    </div>
   );
 };
 
@@ -156,142 +164,124 @@ const ReviewerOverlays: React.FC<{
   const previewTitleId = `cb-reviewer-preview-title-${uid}`;
   const previewDescId = `cb-reviewer-preview-desc-${uid}`;
 
-  const decisionRootRef = useRef<HTMLDivElement | null>(null);
-  const lastDecisionFocusRef = useRef<HTMLElement | null>(null);
+  const decisionModalRef = useRef<HTMLDivElement>(null);
+  const previewModalRef = useRef<HTMLDivElement>(null);
 
-  const previewRootRef = useRef<HTMLDivElement | null>(null);
-  const lastPreviewFocusRef = useRef<HTMLElement | null>(null);
-
-  // stable handlers (리스너 재바인딩/스테일 클로저 방지)
-  const onCloseDecisionEv = useStableEvent(onCloseDecision);
-  const onClosePreviewEv = useStableEvent(onClosePreview);
-  const onApproveEv = useStableEvent(onApprove);
-  const onRejectEv = useStableEvent(onReject);
-
-  const isAnyOpen = decisionModal.open || previewOpen;
-
-  // ===== focus init / restore (Decision) =====
+  // Decision Modal: ESC 키로 닫기
   useEffect(() => {
-    if (!decisionModal.open) {
-      window.setTimeout(() => lastDecisionFocusRef.current?.focus?.(), 0);
-      return;
-    }
-
-    lastDecisionFocusRef.current = document.activeElement as HTMLElement | null;
-
-    window.setTimeout(() => {
-      const root = decisionRootRef.current;
-      if (!root) return;
-
-      const focusables = getFocusable(root);
-
-      if (decisionModal.kind === "reject") {
-        const ta = root.querySelector<HTMLTextAreaElement>("textarea");
-        if (ta) {
-          ta.focus();
-          return;
+    if (decisionModal.open && decisionModalRef.current) {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape" && !isBusy) {
+          onCloseDecision();
         }
-      }
-
-      focusables[0]?.focus();
-    }, 0);
-  }, [decisionModal.open, decisionModal.kind]);
-
-  // ===== focus init / restore (Preview) =====
-  useEffect(() => {
-    if (!previewOpen) {
-      window.setTimeout(() => lastPreviewFocusRef.current?.focus?.(), 0);
-      return;
+      };
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
     }
+  }, [decisionModal.open, isBusy, onCloseDecision]);
 
-    lastPreviewFocusRef.current = document.activeElement as HTMLElement | null;
+  // Preview Modal: ESC 키로 닫기
+  useEffect(() => {
+    if (previewOpen && previewModalRef.current) {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape" && !isBusy) {
+          onClosePreview();
+        }
+      };
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }
+  }, [previewOpen, isBusy, onClosePreview]);
 
-    window.setTimeout(() => {
-      const root = previewRootRef.current;
-      if (!root) return;
+  // Decision Modal: 포커스 트랩
+  useEffect(() => {
+    if (decisionModal.open && decisionModalRef.current) {
+      const container = decisionModalRef.current;
+      const focusable = getFocusable(container);
+      if (focusable.length === 0) return;
 
-      const focusables = getFocusable(root);
-      focusables[0]?.focus();
-    }, 0);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      const handleTab = (e: KeyboardEvent) => {
+        if (e.key !== "Tab") return;
+
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      };
+
+      container.addEventListener("keydown", handleTab);
+      first.focus();
+
+      return () => {
+        container.removeEventListener("keydown", handleTab);
+      };
+    }
+  }, [decisionModal.open]);
+
+  // Preview Modal: 포커스 트랩
+  useEffect(() => {
+    if (previewOpen && previewModalRef.current) {
+      const container = previewModalRef.current;
+      const focusable = getFocusable(container);
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      const handleTab = (e: KeyboardEvent) => {
+        if (e.key !== "Tab") return;
+
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      };
+
+      container.addEventListener("keydown", handleTab);
+      first.focus();
+
+      return () => {
+        container.removeEventListener("keydown", handleTab);
+      };
+    }
   }, [previewOpen]);
 
-  /**
-   * ===== 글로벌 keydown 리스너는 “1개만” =====
-   * - 우선순위: Decision > Preview
-   * - Escape: busy면 닫기 무시
-   * - Tab: focus trap은 busy여도 유지(포커스 이탈 방지)
-   * - Enter: 승인 모달에서 Enter → 승인 (단, canApprove && !busy)
-   */
-  useEffect(() => {
-    if (!isAnyOpen) return;
+  const onCloseDecisionEv = useStableEvent(() => {
+    if (isBusy) return;
+    onCloseDecision();
+  });
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      const decisionOpen = decisionModal.open;
-      const previewIsOpen = previewOpen;
+  const onClosePreviewEv = useStableEvent(() => {
+    if (isBusy) return;
+    onClosePreview();
+  });
 
-      const activeRoot = decisionOpen
-        ? decisionRootRef.current
-        : previewIsOpen
-          ? previewRootRef.current
-          : null;
+  const onApproveEv = useStableEvent(() => {
+    if (isBusy || !canApprove) return;
+    onApprove();
+  });
 
-      if (e.key === "Escape") {
-        if (isBusy) return;
-        e.preventDefault();
-        if (decisionOpen) onCloseDecisionEv();
-        else if (previewIsOpen) onClosePreviewEv();
-        return;
-      }
-
-      if (e.key === "Enter") {
-        if (
-          decisionOpen &&
-          decisionModal.kind === "approve" &&
-          !isBusy &&
-          canApprove
-        ) {
-          e.preventDefault();
-          onApproveEv();
-        }
-        return;
-      }
-
-      if (e.key !== "Tab") return;
-      if (!activeRoot) return;
-
-      const focusables = getFocusable(activeRoot);
-      if (focusables.length === 0) return;
-
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      const active = document.activeElement as HTMLElement | null;
-
-      if (e.shiftKey) {
-        if (!active || active === first) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (active === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
-    isAnyOpen,
-    isBusy,
-    canApprove,
-    decisionModal.open,
-    decisionModal.kind,
-    previewOpen,
-    onCloseDecisionEv,
-    onClosePreviewEv,
-    onApproveEv,
-  ]);
+  const onRejectEv = useStableEvent((reason: string) => {
+    if (isBusy) return;
+    onReject(reason);
+  });
 
   return (
     <>
@@ -299,61 +289,70 @@ const ReviewerOverlays: React.FC<{
       {decisionModal.open && (
         <div
           className="cb-reviewer-modal-overlay"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (isBusy) return;
-            if (e.target === e.currentTarget) onCloseDecisionEv();
-          }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={
+            decisionModal.type === "approve"
+              ? approveTitleId
+              : rejectTitleId
+          }
+          ref={decisionModalRef}
         >
-          <div
-            className="cb-reviewer-modal"
-            ref={decisionRootRef}
-            role="dialog"
-            aria-modal="true"
-            aria-busy={isBusy}
-            aria-labelledby={
-              decisionModal.kind === "approve" ? approveTitleId : rejectTitleId
-            }
-            aria-describedby={
-              decisionModal.kind === "approve" ? approveDescId : rejectDescId
-            }
-          >
-            {decisionModal.kind === "approve" ? (
-              <>
-                <div id={approveTitleId} className="cb-reviewer-modal-title">
-                  {approveLabelText} 확인
-                </div>
-                <div id={approveDescId} className="cb-reviewer-modal-desc">
-                  {decisionModal.message}
-                </div>
-                <div className="cb-reviewer-modal-actions">
+          <div className="cb-reviewer-modal">
+            <div className="cb-reviewer-modal-head">
+              <h2
+                id={
+                  decisionModal.type === "approve"
+                    ? approveTitleId
+                    : rejectTitleId
+                }
+                className="cb-reviewer-modal-title"
+              >
+                {decisionModal.type === "approve"
+                  ? `${approveLabelText} 확인`
+                  : "반려 확인"}
+              </h2>
+              <button
+                type="button"
+                className="cb-reviewer-close-btn"
+                onClick={onCloseDecisionEv}
+                aria-label="close modal"
+                disabled={isBusy}
+                title={isBusy ? "처리 중에는 닫을 수 없습니다." : undefined}
+              >
+                ✕
+              </button>
+            </div>
+
+            {decisionModal.type === "approve" ? (
+              <div className="cb-reviewer-approve-body">
+                <p id={approveDescId} className="cb-reviewer-muted">
+                  이 항목을 {approveLabelText}하시겠습니까?
+                </p>
+                <div className="cb-reviewer-approve-actions">
                   <button
                     type="button"
                     className="cb-reviewer-ghost-btn"
                     onClick={onCloseDecisionEv}
-                    disabled={isBusy}
+                    disabled={isBusy || approveProcessing}
                   >
                     취소
                   </button>
                   <button
                     type="button"
                     className="cb-reviewer-primary-btn"
-                    onClick={() => {
-                      if (!canApprove || isBusy) return;
-                      onApproveEv();
-                    }}
-                    disabled={!canApprove || isBusy}
-                    title={!canApprove ? "승인 권한/조건을 확인하세요." : undefined}
+                    onClick={onApproveEv}
+                    disabled={isBusy || !canApprove || approveProcessing}
                   >
                     {approveBtnText}
                   </button>
                 </div>
-              </>
+              </div>
             ) : (
               <RejectModalBody
                 rejectTitleId={rejectTitleId}
                 rejectDescId={rejectDescId}
-                initialReason={decisionModal.reason ?? ""}
+                initialReason={decisionModal.initialReason ?? ""}
                 error={decisionModal.error}
                 isBusy={isBusy}
                 rejectProcessing={rejectProcessing}
@@ -369,25 +368,16 @@ const ReviewerOverlays: React.FC<{
       {previewOpen && previewItem && (
         <div
           className="cb-reviewer-modal-overlay cb-reviewer-modal-overlay--preview"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (isBusy) return;
-            if (e.target === e.currentTarget) onClosePreviewEv();
-          }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={previewTitleId}
+          ref={previewModalRef}
         >
-          <div
-            className="cb-reviewer-preview-modal"
-            ref={previewRootRef}
-            role="dialog"
-            aria-modal="true"
-            aria-busy={isBusy}
-            aria-labelledby={previewTitleId}
-            aria-describedby={previewDescId}
-          >
+          <div className="cb-reviewer-preview-modal">
             <div className="cb-reviewer-preview-head">
-              <div id={previewTitleId} className="cb-reviewer-preview-title">
-                미리보기 확대
-              </div>
+              <h2 id={previewTitleId} className="cb-reviewer-preview-title">
+                {previewItem.title}
+              </h2>
               <button
                 type="button"
                 className="cb-reviewer-close-btn"
@@ -404,16 +394,66 @@ const ReviewerOverlays: React.FC<{
             </div>
 
             <div className="cb-reviewer-preview-body">
-              {previewItem.contentType === "VIDEO" ? (
-                <div className="cb-reviewer-preview-media">
-                  <video
-                    className="cb-reviewer-preview-video"
-                    src={previewItem.videoUrl}
-                    controls
-                  />
-                </div>
-              ) : (
-                <div className="cb-reviewer-preview-doc">
+              {previewItem.contentType === "VIDEO" ? (() => {
+                const stage = getVideoStage(previewItem);
+                const any = previewItem as unknown as Record<string, unknown>;
+                const scriptId = typeof any.scriptId === "string" && any.scriptId.trim() 
+                  ? any.scriptId.trim() 
+                  : "";
+                
+                // 1차 검토(스크립트 검토)일 때는 스크립트 표시
+                if (stage === 1 && scriptId) {
+                  return (
+                    <CreatorScriptSceneEditor
+                      scriptId={scriptId}
+                      videoId={previewItem.id}
+                      scriptText={previewItem.scriptText}
+                      disabled={true}
+                      showToast={() => {}}
+                    />
+                  );
+                }
+                
+                // 2차 검토(영상 검토)일 때는 영상 표시
+                if (stage === 2 && previewItem.videoUrl && previewItem.videoUrl.trim().length > 0) {
+                  return (
+                    <div className="cb-reviewer-preview-media">
+                      <video
+                        className="cb-reviewer-preview-video"
+                        src={previewItem.videoUrl}
+                        controls
+                      />
+                      {/* 2차 검토 시 영상과 함께 스크립트도 표시 */}
+                      {scriptId ? (
+                        <div style={{ marginTop: 16 }}>
+                          <CreatorScriptSceneEditor
+                            scriptId={scriptId}
+                            videoId={previewItem.id}
+                            scriptText={previewItem.scriptText}
+                            disabled={true}
+                            showToast={() => {}}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                }
+                
+                // 스크립트나 영상이 없는 경우
+                return (
+                  <div className="cb-reviewer-doc-preview">
+                    <div className="cb-reviewer-doc-preview-title">
+                      {stage === 2 ? "2차(최종) 검토 단계" : "1차(스크립트) 검토 단계"}
+                    </div>
+                    <div className="cb-reviewer-doc-preview-body">
+                      {stage === 2 
+                        ? "영상이 아직 생성되지 않았습니다."
+                        : "스크립트가 아직 생성되지 않았습니다."}
+                    </div>
+                  </div>
+                );
+              })() : (
+                <div className="cb-reviewer-doc-preview">
                   <div className="cb-reviewer-doc-preview-title">
                     {previewItem.title}
                   </div>

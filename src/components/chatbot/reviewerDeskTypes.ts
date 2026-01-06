@@ -18,7 +18,12 @@ export type AuditAction =
   | "APPROVED"
   | "REJECTED"
   | "PUBLISHED"
-  | "UPDATED_BY_OTHER"; // 충돌/외부 변경 시뮬레이션용
+  | "UPDATED_BY_OTHER" // 충돌/외부 변경 시뮬레이션용
+  | "SCRIPT_GENERATED" // 스크립트 생성
+  | "SCRIPT_REVIEW_REQUESTED" // 1차 검토 요청
+  | "FINAL_REVIEW_REQUESTED" // 2차 검토 요청
+  | "VIDEO_GENERATED" // 영상 생성
+  | string; // 백엔드에서 추가 이벤트 타입이 올 수 있음
 
 export interface AuditEvent {
   id: string;

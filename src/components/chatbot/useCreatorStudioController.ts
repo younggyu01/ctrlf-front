@@ -518,6 +518,11 @@ function normalizePipelineFromVideoStatus(videoStatusRaw: unknown): CreatorWorkI
     return { mode, state: "RUNNING", stage, progress: 0, rawStage: upper };
   }
 
+  // DRAFT 상태는 진행률 0으로 설정 (파일 업로드 후 스크립트 생성 대기 상태)
+  if (upper === "DRAFT" || upper === "" || !upper) {
+    return { mode, state: "IDLE", stage, progress: 0, rawStage: upper || "DRAFT" };
+  }
+
   // 스크립트 준비/승인: 단계 성공으로 표시(UX 일관성)
   if (upper === "SCRIPT_READY" || upper === "SCRIPT_APPROVED") {
     return { mode, state: "SUCCESS", stage: "SCRIPT", progress: 100, rawStage: upper };
@@ -565,6 +570,74 @@ function normalizeCreatorSourceFilesForItem(it: CreatorWorkItem): CreatorWorkIte
 
 function normalizeCreatorSourceFiles(items: CreatorWorkItem[]): CreatorWorkItem[] {
   return items.map(normalizeCreatorSourceFilesForItem);
+}
+
+// 세션 스토리지에 파일 정보 저장/복원 (브라우저 종료 시 자동 정리)
+// TODO: 장기적으로는 서버 응답에 파일 정보가 포함되어야 함 (백엔드 협업 필요)
+const STORAGE_PREFIX = "creator-source-files";
+
+function getStorageKey(videoId: string): string {
+  return `${STORAGE_PREFIX}:${videoId}`;
+}
+
+function saveSourceFilesToStorage(videoId: string, sourceFiles: CreatorSourceFile[], sourceFileName: string, sourceFileSize: number, sourceFileMime: string): void {
+  try {
+    const data = {
+      sourceFiles,
+      sourceFileName,
+      sourceFileSize,
+      sourceFileMime,
+      savedAt: Date.now(),
+    };
+    // 세션 스토리지 사용 (브라우저 종료 시 자동 정리)
+    sessionStorage.setItem(getStorageKey(videoId), JSON.stringify(data));
+  } catch {
+    // sessionStorage 실패는 조용히 무시
+  }
+}
+
+function loadSourceFilesFromStorage(videoId: string): {
+  sourceFiles: CreatorSourceFile[];
+  sourceFileName: string;
+  sourceFileSize: number;
+  sourceFileMime: string;
+} | null {
+  try {
+    const raw = sessionStorage.getItem(getStorageKey(videoId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    
+    const sourceFiles = Array.isArray(parsed.sourceFiles) ? parsed.sourceFiles : [];
+    const sourceFileName = typeof parsed.sourceFileName === "string" ? parsed.sourceFileName : "";
+    const sourceFileSize = typeof parsed.sourceFileSize === "number" ? parsed.sourceFileSize : 0;
+    const sourceFileMime = typeof parsed.sourceFileMime === "string" ? parsed.sourceFileMime : "";
+    
+    // 실제 documentId가 있는 파일만 반환 (레거시나 임시 ID 제외)
+    const realFiles = sourceFiles.filter(
+      (f: CreatorSourceFile) => f && typeof f === "object" && "id" in f && typeof f.id === "string" && 
+            !f.id.startsWith("src-legacy-") && !f.id.startsWith("SRC_TMP")
+    );
+    
+    if (realFiles.length === 0 && !sourceFileName) return null;
+    
+    return {
+      sourceFiles: realFiles.length > 0 ? realFiles : sourceFiles,
+      sourceFileName,
+      sourceFileSize,
+      sourceFileMime,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function removeSourceFilesFromStorage(videoId: string): void {
+  try {
+    sessionStorage.removeItem(getStorageKey(videoId));
+  } catch {
+    // sessionStorage 실패는 조용히 무시
+  }
 }
 
 type EduSummary = {
@@ -840,7 +913,12 @@ function normalizeCreatorWorkItemFromEduVideoPair(
   if (!videoId) return null;
 
   const videoStatusRaw = readStr(videoRaw, "status") ?? readStr(videoRaw, "videoStatus") ?? "DRAFT";
-  const status = normalizeVideoStatusToLegacyStatus(videoStatusRaw);
+  const reviewStage = readStr(videoRaw, "reviewStage") ?? "";
+  
+  // reviewStage가 "1차 반려" 또는 "2차 반려"로 나오면 반려 상태로 설정
+  const status = (reviewStage === "1차 반려" || reviewStage === "2차 반려")
+    ? "REJECTED"
+    : normalizeVideoStatusToLegacyStatus(videoStatusRaw);
 
   const createdAt = parseTimeLike((videoRaw as Record<string, unknown>)["createdAt"]) ?? Date.now();
   const updatedAt = parseTimeLike((videoRaw as Record<string, unknown>)["updatedAt"]) ?? createdAt;
@@ -908,12 +986,75 @@ function normalizeCreatorWorkItemFromEduVideoPair(
     parseTimeLike((videoRaw as Record<string, unknown>)["approvedAt"]) ??
     undefined;
 
-  if (!scriptApprovedAt && upperStatus === "SCRIPT_APPROVED") {
+  // READY, VIDEO_READY 상태는 이미 1차 승인이 완료된 상태이므로 scriptApprovedAt 설정
+  // (서버가 timestamp를 보내주지 않는 경우를 대비)
+  if (!scriptApprovedAt && (upperStatus === "SCRIPT_APPROVED" || upperStatus === "READY" || upperStatus === "VIDEO_READY")) {
     // 서버가 timestamp를 누락하면 updatedAt을 최소 보정값으로 사용
-    scriptApprovedAt = updatedAt;
+    // 단, READY 상태는 영상 생성 완료 후 상태이므로 createdAt을 사용 (더 정확한 시간)
+    scriptApprovedAt = upperStatus === "READY" || upperStatus === "VIDEO_READY" ? createdAt : updatedAt;
   }
 
   const failedReason = readStr(videoRaw, "failedReason") ?? readStr(videoRaw, "errorMessage") ?? undefined;
+
+  // rejectedComment와 rejectedStage 필드 확인
+  const rejectedComment = readStr(videoRaw, "rejectedComment") ?? undefined;
+  const rejectedStage = (readStr(videoRaw, "rejectedStage") as CreatorWorkItem["rejectedStage"]) ?? undefined;
+  
+  // rejectedComment나 rejectedStage가 있으면 status를 "REJECTED"로 설정
+  const finalStatus = (rejectedComment && rejectedComment.trim().length > 0) || rejectedStage
+    ? "REJECTED"
+    : status;
+
+  // 서버 응답에서 sourceFiles 배열 읽기 (있는 경우)
+  const sourceFilesRaw = readArr(videoRaw, "sourceFiles") ?? readArr(videoRaw, "attachments") ?? [];
+  const sourceFileName = readStr(videoRaw, "sourceFileName") ?? "";
+  const sourceFileSize = readNum(videoRaw, "sourceFileSize") ?? 0;
+  const sourceFileMime = readStr(videoRaw, "sourceFileMime") ?? "";
+  
+  // 서버 응답에서 documentId 또는 documentIds 읽기
+  const documentId = readStr(videoRaw, "documentId") ?? readStr(videoRaw, "sourceDocumentId") ?? "";
+  const documentIds = readArr(videoRaw, "documentIds") ?? readArr(videoRaw, "sourceDocumentIds") ?? [];
+  
+  // sourceFiles 재구성
+  let sourceFiles: CreatorSourceFile[] = [];
+  
+  // 1. 서버가 sourceFiles 배열을 제공한 경우
+  if (Array.isArray(sourceFilesRaw) && sourceFilesRaw.length > 0) {
+    sourceFiles = sourceFilesRaw
+      .map((f): CreatorSourceFile | null => {
+        if (!f || typeof f !== "object") return null;
+        const id = readStr(f, "id") ?? readStr(f, "documentId") ?? "";
+        const name = readStr(f, "name") ?? readStr(f, "fileName") ?? "";
+        const size = readNum(f, "size") ?? readNum(f, "sizeBytes") ?? 0;
+        const mime = readStr(f, "mime") ?? readStr(f, "mimeType") ?? undefined;
+        if (!id || !name) return null;
+        return {
+          id,
+          name,
+          size,
+          mime,
+          addedAt: parseTimeLike((f as Record<string, unknown>)["addedAt"]) ?? parseTimeLike((f as Record<string, unknown>)["uploadedAt"]) ?? updatedAt,
+        };
+      })
+      .filter((f): f is CreatorSourceFile => f !== null);
+  }
+  
+  // 2. sourceFiles가 없고 documentId/documentIds가 있는 경우
+  if (sourceFiles.length === 0 && (documentId || documentIds.length > 0)) {
+    const ids = documentId ? [documentId] : (Array.isArray(documentIds) ? documentIds.map((x) => (typeof x === "string" ? x : "")) : []);
+    const validIds = ids.filter((id) => id.trim().length > 0);
+    
+    if (validIds.length > 0 && sourceFileName) {
+      // documentId가 있고 sourceFileName이 있으면 sourceFiles 재구성
+      sourceFiles = validIds.map((id) => ({
+        id: id.trim(),
+        name: sourceFileName,
+        size: sourceFileSize,
+        mime: sourceFileMime || undefined,
+        addedAt: updatedAt,
+      }));
+    }
+  }
 
   const item: CreatorWorkItem = {
     id: videoId,
@@ -927,24 +1068,36 @@ function normalizeCreatorWorkItemFromEduVideoPair(
     jobTrainingId: jobTrainingId || undefined,
     isMandatory,
     targetDeptIds,
-    status,
+    status: finalStatus,
     createdAt,
     updatedAt,
     createdByName,
     assets: {
-      sourceFiles: [],
-      sourceFileName: readStr(videoRaw, "sourceFileName") ?? "",
-      sourceFileSize: readNum(videoRaw, "sourceFileSize") ?? 0,
-      sourceFileMime: readStr(videoRaw, "sourceFileMime") ?? "",
+      sourceFiles,
+      sourceFileName,
+      sourceFileSize,
+      sourceFileMime,
       script: scriptPreview,
       videoUrl: fileUrl,
       thumbnailUrl,
     },
     pipeline: normalizePipelineFromVideoStatus(videoStatusRaw),
     failedReason,
-    rejectedComment: readStr(videoRaw, "rejectedComment") ?? undefined,
-    reviewStage: (readStr(videoRaw, "reviewStage") as CreatorWorkItem["reviewStage"]) ?? undefined,
-    rejectedStage: (readStr(videoRaw, "rejectedStage") as CreatorWorkItem["rejectedStage"]) ?? undefined,
+    rejectedComment,
+    reviewStage: (() => {
+      const rawReviewStage = readStr(videoRaw, "reviewStage") ?? "";
+      // "1차 반려" 또는 "2차 반려"를 적절한 ReviewStage로 변환
+      if (rawReviewStage === "1차 반려") return "SCRIPT";
+      if (rawReviewStage === "2차 반려") return "FINAL";
+      return (rawReviewStage as CreatorWorkItem["reviewStage"]) || undefined;
+    })(),
+    rejectedStage: (() => {
+      // reviewStage가 "1차 반려" 또는 "2차 반려"이면 rejectedStage 설정
+      const rawReviewStage = readStr(videoRaw, "reviewStage") ?? "";
+      if (rawReviewStage === "1차 반려") return "SCRIPT";
+      if (rawReviewStage === "2차 반려") return "FINAL";
+      return rejectedStage;
+    })(),
     scriptApprovedAt: scriptApprovedAt || undefined,
   };
 
@@ -1623,11 +1776,12 @@ function validateForReview(
 
   if (!item.title || item.title.trim().length < 3) issues.push("제목을 3자 이상 입력해주세요.");
   if (!item.categoryId) issues.push("카테고리를 선택해주세요.");
-  if (!item.templateId) issues.push("영상 템플릿을 선택해주세요.");
+  // 영상 템플릿과 직무교육 필드는 UI에서 숨김 처리되었으므로 검증에서 제외
+  // if (!item.templateId) issues.push("영상 템플릿을 선택해주세요.");
 
-  if (isJobCategory(item.categoryId)) {
-    if (!item.jobTrainingId) issues.push("직무교육(Training ID)을 선택해주세요.");
-  }
+  // if (isJobCategory(item.categoryId)) {
+  //   if (!item.jobTrainingId) issues.push("직무교육(Training ID)을 선택해주세요.");
+  // }
 
   // 자료 파일: 업로드 + 문서등록(documentId)까지 완료되어야 소스셋 생성 가능
   const srcFiles = Array.isArray(item.assets.sourceFiles) ? item.assets.sourceFiles : [];
@@ -2029,6 +2183,188 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
 
   const selectedItem = useMemo(() => items.find((it) => it.id === selectedId) ?? null, [items, selectedId]);
 
+  // 선택된 아이템이 변경될 때 최신 상태 확인 (스웨거에서 직접 완료 처리한 경우 대응)
+  useEffect(() => {
+    if (!selectedItem || !selectedId) return;
+
+    // scriptId가 있고 스크립트 텍스트가 없으면 스크립트를 로드 (스크립트 생성 완료 후 자동 표시)
+    const currentScriptId = readMetaStrFromItem(selectedItem, "scriptId");
+    const currentScriptText = selectedItem.assets.script || "";
+    const videoStatusRaw = getVideoStatusRawOfItem(selectedItem);
+    const upperStatus = String(videoStatusRaw ?? "").toUpperCase();
+    const isScriptReady = upperStatus === "SCRIPT_READY" || upperStatus === "SCRIPT_APPROVED";
+    
+    // scriptId가 있거나 SCRIPT_READY 상태일 때 스크립트 로드 (스웨거로 완료 처리한 경우 대응)
+    if (isScriptReady && (!currentScriptText || currentScriptText.trim().length === 0)) {
+      void (async () => {
+        try {
+          // scriptId가 없으면 lookup으로 조회
+          let scriptIdToLoad = currentScriptId;
+          if (!scriptIdToLoad) {
+            const educationId = getEducationIdOfItem(selectedItem);
+            if (educationId) {
+              const resolved = await resolveScriptIdForEducationOrVideo({
+                educationId,
+                videoId: selectedId,
+              });
+              if (resolved.scriptId) {
+                scriptIdToLoad = resolved.scriptId;
+                // scriptId를 메타데이터에 저장
+                setItems((prev) =>
+                  prev.map((item) => {
+                    if (item.id !== selectedId) return item;
+                    const updated = { ...item };
+                    (updated as unknown as Record<string, unknown>)["scriptId"] = resolved.scriptId;
+                    return updated;
+                  })
+                );
+              }
+            }
+          }
+          
+          if (!scriptIdToLoad) return;
+          
+          const { getScript } = await import("./creatorApi");
+          const script = await getScript(scriptIdToLoad);
+          // chapters → scenes → narration 또는 caption을 합쳐서 텍스트 추출
+          const parts: string[] = [];
+          for (const chapter of script.chapters || []) {
+            for (const scene of chapter.scenes || []) {
+              const text = scene.narration || scene.caption || "";
+              if (text.trim()) {
+                parts.push(text.trim());
+              }
+            }
+          }
+          const extractedText = parts.join("\n\n");
+          
+          // 스크립트 텍스트 업데이트
+          setItems((prev) =>
+            prev.map((item) => {
+              if (item.id !== selectedId) return item;
+              return {
+                ...item,
+                assets: {
+                  ...item.assets,
+                  script: extractedText || item.assets.script || "",
+                },
+              };
+            })
+          );
+        } catch (err) {
+          console.warn(`Failed to fetch script:`, err);
+        }
+      })();
+    }
+
+    // 폴링이 실행 중이 아니면 최신 상태 확인 (스웨거에서 직접 완료 처리한 경우 대응)
+    if (!pollRef.current) {
+      void (async () => {
+        try {
+          const url = expandEndpoint(VIDEO_GET_ENDPOINT, { videoId: selectedId });
+          const raw = await safeFetchJson<unknown>(url, { method: "GET" });
+
+          const statusRaw = readStr(raw, "status") ?? readStr(raw, "videoStatus") ?? "";
+          const currentStatusRaw = getVideoStatusRawOfItem(selectedItem);
+          const upperCurrent = currentStatusRaw.toUpperCase();
+          const upperNew = String(statusRaw ?? "").toUpperCase();
+          
+          // scriptId 확인 (상태 변경 여부와 관계없이)
+          const newScriptId = readStr(raw, "scriptId") ?? readMetaStrFromItem(selectedItem, "scriptId");
+          const currentScriptId = readMetaStrFromItem(selectedItem, "scriptId");
+          const scriptIdChanged = newScriptId && newScriptId !== currentScriptId;
+          
+          // 상태가 변경되었거나 scriptId가 변경되었으면 업데이트 (특히 DRAFT → SCRIPT_READY 등)
+          if (upperNew !== upperCurrent || scriptIdChanged) {
+            const legacy = normalizeVideoStatusToLegacyStatus(statusRaw);
+            const pipeline = normalizePipelineFromVideoStatus(statusRaw);
+            
+            setItems((prev) =>
+              prev.map((it) => {
+                if (it.id !== selectedId) return it;
+                
+                // sourceFiles 정보 보존 (기존 sourceFiles가 있으면 유지)
+                const existingSourceFiles = Array.isArray(it.assets.sourceFiles) ? it.assets.sourceFiles : [];
+                const sourceFileName = readStr(raw, "sourceFileName") ?? it.assets.sourceFileName ?? "";
+                const sourceFileSize = readNum(raw, "sourceFileSize") ?? it.assets.sourceFileSize ?? 0;
+                const sourceFileMime = readStr(raw, "sourceFileMime") ?? it.assets.sourceFileMime ?? "";
+                
+                const next: CreatorWorkItem = {
+                  ...it,
+                  status: legacy,
+                  pipeline: { ...it.pipeline, ...pipeline },
+                  assets: {
+                    ...it.assets,
+                    // sourceFiles는 기존 것을 유지 (없으면 sourceFileName으로 재생성되도록 normalizeCreatorSourceFilesForItem에서 처리)
+                    sourceFiles: existingSourceFiles.length > 0 ? existingSourceFiles : it.assets.sourceFiles,
+                    sourceFileName: sourceFileName || it.assets.sourceFileName || "",
+                    sourceFileSize: sourceFileSize || it.assets.sourceFileSize || 0,
+                    sourceFileMime: sourceFileMime || it.assets.sourceFileMime || "",
+                    script: readStr(raw, "scriptText") ?? it.assets.script,
+                    videoUrl: readStr(raw, "fileUrl") ?? readStr(raw, "videoUrl") ?? it.assets.videoUrl,
+                    thumbnailUrl: readStr(raw, "thumbnailUrl") ?? it.assets.thumbnailUrl,
+                  },
+                  updatedAt: Date.now(),
+                };
+
+                (next as unknown as Record<string, unknown>)["videoStatusRaw"] = String(statusRaw ?? "");
+                // scriptId는 위에서 이미 확인했으므로 여기서는 업데이트만
+                const finalScriptId = readStr(raw, "scriptId") ?? readMetaStrFromItem(it, "scriptId") ?? newScriptId;
+                if (finalScriptId) {
+                  (next as unknown as Record<string, unknown>)["scriptId"] = finalScriptId;
+                }
+                
+                // scriptId가 있고 스크립트 텍스트가 없으면 스크립트 상세를 조회하여 텍스트 가져오기
+                const validScriptId = typeof finalScriptId === "string" && finalScriptId.trim().length > 0 ? finalScriptId.trim() : null;
+                if (validScriptId && (!next.assets.script || next.assets.script.trim().length === 0)) {
+                  void (async () => {
+                    try {
+                      const { getScript } = await import("./creatorApi");
+                      const script = await getScript(validScriptId);
+                      // chapters → scenes → narration 또는 caption을 합쳐서 텍스트 추출
+                      const parts: string[] = [];
+                      for (const chapter of script.chapters || []) {
+                        for (const scene of chapter.scenes || []) {
+                          const text = scene.narration || scene.caption || "";
+                          if (text.trim()) {
+                            parts.push(text.trim());
+                          }
+                        }
+                      }
+                      const extractedText = parts.join("\n\n");
+                      
+                      // 스크립트 텍스트 업데이트
+                      setItems((prev) =>
+                        prev.map((item) => {
+                          if (item.id !== selectedId) return item;
+                          return {
+                            ...item,
+                            assets: {
+                              ...item.assets,
+                              script: extractedText || item.assets.script || "",
+                            },
+                          };
+                        })
+                      );
+                    } catch (err) {
+                      console.warn(`Failed to fetch script ${newScriptId}:`, err);
+                    }
+                  })();
+                }
+                
+                // normalizeCreatorSourceFilesForItem을 적용하여 일관성 유지 (sourceFileName이 있으면 sourceFiles 재생성)
+                return normalizeCreatorSourceFilesForItem(next);
+              })
+            );
+          }
+        } catch {
+          // 조용히 무시 (폴링이 곧 처리할 것)
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
   const filteredItems = useMemo(() => {
     const q = normalizeQuery(query);
     const qTokens = q ? q.split(/\s+/).filter(Boolean) : [];
@@ -2109,11 +2445,245 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
       const raw = await getEducationsWithVideos({ signal: ac.signal });
 
       const { educations: edus, videos } = normalizeEduWithVideosResponse(raw, creatorName);
+      
+      // 기존 items의 sourceFiles와 script 정보 보존 (로컬에 저장된 파일 정보 유지)
+      // items 상태를 직접 참조하여 merged 계산 (setItems 콜백과 동일한 로직)
+      // normalizeCreatorSourceFiles 호출 전에 prevMap을 생성하여 기존 파일 정보를 보존
+      const prevMap = new Map(items.map((it) => [it.id, it]));
+      
       const normalized = normalizeCreatorSourceFiles(videos);
+      
+      // scriptId가 없는 아이템들에 대해 lookup 시도 (스크립트가 생성되었을 수 있음)
+      // getEducationIdOfItem과 getVideoStatusRawOfItem은 hook 내부에 정의되어 있으므로
+      // 여기서는 직접 메타데이터를 읽어야 함
+      const itemsNeedingScriptIdLookup = normalized
+        .filter((item) => {
+          const scriptId = readMetaStrFromItem(item, "scriptId");
+          const educationId = readMetaStrFromItem(item, "educationId") ?? item.educationId;
+          const videoStatusRaw = (item as unknown as Record<string, unknown>)["videoStatusRaw"] as string | undefined;
+          // scriptId가 없고, 스크립트가 생성되었을 수 있는 상태인 경우
+          return !scriptId && educationId && videoStatusRaw && (
+            videoStatusRaw === "SCRIPT_READY" || 
+            videoStatusRaw === "SCRIPT_GENERATING" ||
+            videoStatusRaw === "SCRIPT_APPROVED" ||
+            videoStatusRaw === "VIDEO_GENERATING" ||
+            videoStatusRaw === "VIDEO_READY"
+          );
+        })
+        .map((item) => ({
+          item,
+          educationId: readMetaStrFromItem(item, "educationId") ?? item.educationId ?? "",
+          videoId: item.id,
+        }))
+        .filter(({ educationId }) => educationId && educationId.trim().length > 0);
+      
+      // scriptId lookup을 병렬로 수행
+      const scriptIdLookupResults = await Promise.allSettled(
+        itemsNeedingScriptIdLookup.map(async ({ item, educationId, videoId }) => {
+          try {
+            const resolved = await resolveScriptIdForEducationOrVideo({
+              educationId,
+              videoId,
+              signal: ac.signal,
+            });
+            return { itemId: item.id, scriptId: resolved.scriptId };
+          } catch {
+            return { itemId: item.id, scriptId: null };
+          }
+        })
+      );
+      
+      // lookup 결과를 맵으로 변환
+      const scriptIdMap = new Map<string, string>();
+      for (const result of scriptIdLookupResults) {
+        if (result.status === "fulfilled" && result.value.scriptId) {
+          scriptIdMap.set(result.value.itemId, result.value.scriptId);
+        }
+      }
+      
+      // lookup으로 찾은 scriptId를 아이템에 추가
+      const normalizedWithScriptIds = normalized.map((item) => {
+        const lookedUpScriptId = scriptIdMap.get(item.id);
+        if (lookedUpScriptId) {
+          (item as unknown as Record<string, unknown>)["scriptId"] = lookedUpScriptId;
+        }
+        return item;
+      });
+      
+      const merged = normalizedWithScriptIds.map((newItem) => {
+        const prevItem = prevMap.get(newItem.id);
+        
+        // prevItem이 없는 경우 (페이지를 처음 열거나 닫았다가 다시 열었을 때)
+        // 로컬 스토리지에서 파일 정보 복원 시도
+        if (!prevItem) {
+          const stored = loadSourceFilesFromStorage(newItem.id);
+          if (stored && stored.sourceFiles.length > 0) {
+            // 로컬 스토리지에 저장된 파일 정보가 있으면 복원
+            const restored: CreatorWorkItem = {
+              ...newItem,
+              assets: {
+                ...newItem.assets,
+                sourceFiles: stored.sourceFiles,
+                sourceFileName: stored.sourceFileName,
+                sourceFileSize: stored.sourceFileSize,
+                sourceFileMime: stored.sourceFileMime,
+              },
+            };
+            return normalizeCreatorSourceFilesForItem(restored);
+          }
+          // 로컬 스토리지에도 없으면 normalizeCreatorSourceFilesForItem 적용
+          return normalizeCreatorSourceFilesForItem(newItem);
+        }
+        
+        // 기존 sourceFiles가 있고 새 아이템의 sourceFiles가 비어있으면 보존
+        const prevSourceFiles = Array.isArray(prevItem.assets.sourceFiles) ? prevItem.assets.sourceFiles : [];
+        const newSourceFiles = Array.isArray(newItem.assets.sourceFiles) ? newItem.assets.sourceFiles : [];
+        
+        // 기존 sourceFiles 중 실제 업로드된 파일(레거시가 아닌, 임시 ID가 아닌) 확인
+        // SRC_TMP로 시작하는 것은 업로드 진행 중인 임시 파일이므로 제외
+        // src-legacy-로 시작하는 것은 서버에서 받은 레거시 파일이므로 제외
+        const prevRealSourceFiles = prevSourceFiles.filter(
+          (f) => f && typeof f === "object" && "id" in f && typeof f.id === "string" && 
+                !f.id.startsWith("src-legacy-") && !f.id.startsWith("SRC_TMP")
+        );
+        
+        // 새 sourceFiles 중 실제 업로드된 파일(레거시가 아닌, 임시 ID가 아닌) 확인
+        const newRealSourceFiles = newSourceFiles.filter(
+          (f) => f && typeof f === "object" && "id" in f && typeof f.id === "string" && 
+                !f.id.startsWith("src-legacy-") && !f.id.startsWith("SRC_TMP")
+        );
+        
+        // 기존 script와 scriptId 보존
+        const prevScript = prevItem.assets.script || "";
+        const prevScriptId = readMetaStrFromItem(prevItem, "scriptId");
+        const newScriptId = readMetaStrFromItem(newItem, "scriptId");
+        const newScript = newItem.assets.script || "";
+        
+        // sourceFiles 보존 여부 확인
+        // 기존에 실제 업로드된 파일이 있고, 새 것에는 실제 업로드된 파일이 없으면 보존
+        // 서버 응답에 sourceFiles 정보가 없을 수 있으므로, 기존에 실제 파일이 있으면 보존
+        // 또는 기존에 sourceFileName이 있고 새 것에는 없으면 보존 (파일이 업로드되었음을 의미)
+        const prevHasSourceFileName = Boolean(prevItem.assets.sourceFileName && prevItem.assets.sourceFileName.trim().length > 0);
+        const newHasSourceFileName = Boolean(newItem.assets.sourceFileName && newItem.assets.sourceFileName.trim().length > 0);
+        const shouldPreserveSourceFiles = 
+          (prevRealSourceFiles.length > 0 && newRealSourceFiles.length === 0) ||
+          (prevHasSourceFileName && !newHasSourceFileName && prevRealSourceFiles.length > 0);
+        // script 보존 여부 확인 (기존 script가 있으면 항상 보존, 새 것이 없거나 비어있으면 보존)
+        // scriptId가 있으면 scriptText도 보존 (스크립트가 생성되었음을 의미)
+        const shouldPreserveScript = (prevScript.trim().length > 0 || prevScriptId) && 
+                                     (!newScript || newScript.trim().length === 0);
+        
+        // scriptApprovedAt 보존: 기존에 1차 승인이 완료된 경우 보존
+        // READY, VIDEO_READY 상태는 이미 1차 승인이 완료된 상태이므로 scriptApprovedAt을 보존해야 함
+        const prevScriptApprovedAt = prevItem.scriptApprovedAt;
+        const newScriptApprovedAt = newItem.scriptApprovedAt;
+        const videoStatusRaw = readMetaStrFromItem(newItem, "videoStatusRaw") as string | undefined;
+        const isReadyState = videoStatusRaw === "READY" || videoStatusRaw === "VIDEO_READY";
+        // 기존에 scriptApprovedAt이 있고, 새 것이 없거나 READY 상태인 경우 보존
+        const shouldPreserveScriptApprovedAt = 
+          prevScriptApprovedAt != null && 
+          (newScriptApprovedAt == null || (isReadyState && newScriptApprovedAt == null));
+        
+        // sourceFiles는 기존에 실제 업로드된 파일이 있으면 항상 보존
+        // script는 기존 것이 있으면 보존
+        if (shouldPreserveSourceFiles || shouldPreserveScript || shouldPreserveScriptApprovedAt) {
+          // 기존 sourceFiles, script, scriptId, scriptApprovedAt 보존
+          const mergedItem = {
+            ...newItem,
+            scriptApprovedAt: shouldPreserveScriptApprovedAt ? prevScriptApprovedAt : (newScriptApprovedAt ?? prevScriptApprovedAt),
+            assets: {
+              ...newItem.assets,
+              sourceFiles: shouldPreserveSourceFiles ? prevSourceFiles : newItem.assets.sourceFiles,
+              sourceFileName: shouldPreserveSourceFiles 
+                ? (prevItem.assets.sourceFileName || newItem.assets.sourceFileName || "")
+                : newItem.assets.sourceFileName,
+              sourceFileSize: shouldPreserveSourceFiles
+                ? (prevItem.assets.sourceFileSize || newItem.assets.sourceFileSize || 0)
+                : newItem.assets.sourceFileSize,
+              sourceFileMime: shouldPreserveSourceFiles
+                ? (prevItem.assets.sourceFileMime || newItem.assets.sourceFileMime || "")
+                : newItem.assets.sourceFileMime,
+              script: shouldPreserveScript ? prevScript : (newItem.assets.script || ""),
+            },
+          };
+          
+          // scriptId 보존 (새 scriptId가 없거나 같으면 기존 것 유지, 또는 기존 scriptId가 있고 새 것이 없으면 보존)
+          if (prevScriptId && (!newScriptId || !newScriptId.trim() || newScriptId === prevScriptId)) {
+            (mergedItem as unknown as Record<string, unknown>)["scriptId"] = prevScriptId;
+          } else if (newScriptId && newScriptId.trim()) {
+            (mergedItem as unknown as Record<string, unknown>)["scriptId"] = newScriptId;
+          }
+          
+          return mergedItem;
+        }
+        
+        // sourceFiles만 보존해야 하는 경우 (script는 보존하지 않음)
+        // 또는 sourceFileName이 있으면 보존 (파일이 업로드되었음을 의미)
+        if (shouldPreserveSourceFiles || (prevHasSourceFileName && !newHasSourceFileName)) {
+          const mergedItem = {
+            ...newItem,
+            // scriptApprovedAt 보존 (기존 값이 있으면 보존)
+            scriptApprovedAt: prevScriptApprovedAt ?? newItem.scriptApprovedAt,
+            assets: {
+              ...newItem.assets,
+              sourceFiles: shouldPreserveSourceFiles ? prevSourceFiles : (prevSourceFiles.length > 0 ? prevSourceFiles : newItem.assets.sourceFiles),
+              sourceFileName: prevItem.assets.sourceFileName || newItem.assets.sourceFileName || "",
+              sourceFileSize: prevItem.assets.sourceFileSize || newItem.assets.sourceFileSize || 0,
+              sourceFileMime: prevItem.assets.sourceFileMime || newItem.assets.sourceFileMime || "",
+            },
+          };
+          
+          // scriptId 보존 (기존 scriptId가 있으면 항상 보존, 새 것이 없거나 같으면 기존 것 유지)
+          if (prevScriptId && (!newScriptId || !newScriptId.trim() || newScriptId === prevScriptId)) {
+            (mergedItem as unknown as Record<string, unknown>)["scriptId"] = prevScriptId;
+          } else if (newScriptId && newScriptId.trim()) {
+            (mergedItem as unknown as Record<string, unknown>)["scriptId"] = newScriptId;
+          } else if (prevScriptId) {
+            // 새 scriptId가 없고 기존 것이 있으면 보존
+            (mergedItem as unknown as Record<string, unknown>)["scriptId"] = prevScriptId;
+          }
+          
+          return mergedItem;
+        }
+        
+        // scriptId는 항상 보존 (새 것이 없으면 기존 것 유지, 둘 다 있으면 새 것 사용)
+        const finalScriptId = (newScriptId && newScriptId.trim()) ? newScriptId : prevScriptId;
+        if (finalScriptId && finalScriptId !== newScriptId) {
+          const merged = { 
+            ...newItem,
+            // scriptApprovedAt 보존 (기존 값이 있으면 보존)
+            scriptApprovedAt: prevScriptApprovedAt ?? newItem.scriptApprovedAt,
+          };
+          (merged as unknown as Record<string, unknown>)["scriptId"] = finalScriptId;
+          // scriptText도 함께 보존 (scriptId가 있으면 scriptText도 있어야 함)
+          if (prevScript.trim().length > 0 && (!newScript || newScript.trim().length === 0)) {
+            merged.assets = {
+              ...merged.assets,
+              script: prevScript,
+            };
+          }
+          return merged;
+        }
+        
+        // 모든 경우에 scriptApprovedAt 보존 (기존 값이 있으면 보존)
+        if (prevScriptApprovedAt != null) {
+          return {
+            ...newItem,
+            scriptApprovedAt: prevScriptApprovedAt,
+          };
+        }
+        
+        return newItem;
+      });
+      
+      // 최근 생성순 정렬 유지 (createdAt 내림차순)
+      const sorted = sortItems(merged, "created_desc");
+      
+      // setItems로 상태 업데이트 (동일한 로직 사용)
+      setItems(() => sorted);
 
       setEducations(edus);
-      setItems(normalized);
-
+      
       // ---- catalog 보강: 서버 catalog가 없거나 비어도 UI가 잠기지 않게 "항상" 채움 ----
       const derivedCats = deriveCategoryOptionsFromEducations(edus);
       const derivedDepts = deriveDepartmentOptionsFromEducations(edus);
@@ -2128,9 +2698,9 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
       });
 
       setSelectedEducationId((cur) => cur ?? (edus[0]?.educationId ?? null));
-      setRawSelectedId((cur) => cur ?? (normalized[0]?.id ?? null));
+      setRawSelectedId((cur) => cur ?? (sorted[0]?.id ?? null));
 
-      return { educations: edus, items: normalized };
+      return { educations: edus, items: sorted };
     } catch (e) {
       // 스테일(이미 다른 refresh가 시작됨) / Abort는 "정상 흐름"으로 간주하고 조용히 무시
       const isStale = listAbortRef.current !== ac;
@@ -2190,9 +2760,20 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
     setItems((prev) =>
       prev.map((it) => {
         if (it.id !== selectedId) return it;
-        const next = { ...it, ...patch, updatedAt: Date.now() } as CreatorWorkItem;
+        // assets는 병합해야 함 (일부 필드만 업데이트하는 경우)
+        const assetsPatch = patch.assets;
+        const restPatch = { ...patch };
+        delete restPatch.assets;
+        
+        const next = { 
+          ...it, 
+          ...restPatch, 
+          updatedAt: Date.now(),
+          assets: assetsPatch ? { ...it.assets, ...assetsPatch } : it.assets,
+        } as CreatorWorkItem;
+        
         // patch에 educationId/videoStatusRaw/scriptId/jobId 등을 섞어 넣는 케이스 지원
-        for (const [k, v] of Object.entries(patch)) {
+        for (const [k, v] of Object.entries(restPatch)) {
           if (!(k in next)) (next as unknown as Record<string, unknown>)[k] = v;
         }
         return next;
@@ -2496,9 +3077,12 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
       // DELETE-only: PATCH(soft-disable) 및 폴백 제거
       await safeFetchJson(url, { method: "DELETE" });
 
-      // UX: 즉시 목록에서 제거해 “삭제됐는데 남아있는” 느낌 방지
+      // UX: 즉시 목록에서 제거해 "삭제됐는데 남아있는" 느낌 방지
       setItems((prev) => prev.filter((it) => it.id !== id));
       setRawSelectedId(null);
+
+      // 로컬 스토리지에서도 제거
+      removeSourceFilesFromStorage(id);
 
       showToast("success", "초안이 삭제되었습니다.");
       await refreshItems({ silent: true });
@@ -2569,7 +3153,7 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
     const nextFiles = [...prevFiles, ...addedMeta];
     const primary = nextFiles[0];
 
-    // optimistic
+    // optimistic: 파일 업로드 시작 시 assets만 업데이트, pipeline은 변경하지 않음
     setItems((prev) =>
       prev.map((it) => {
         if (it.id !== videoIdSnapshot) return it;
@@ -2582,7 +3166,7 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
             sourceFileSize: primary?.size ?? 0,
             sourceFileMime: primary?.mime ?? "",
           },
-          pipeline: resetPipeline(),
+          // pipeline은 변경하지 않음 (파일 업로드만으로는 진행률이 올라가지 않음)
           failedReason: undefined,
           updatedAt: Date.now(),
         };
@@ -2626,7 +3210,7 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
             const sf = Array.isArray(it.assets.sourceFiles) ? it.assets.sourceFiles : [];
             const patched = sf.map((x) => (x.id === meta.id ? { ...x, id: documentId } : x));
             const primary2 = patched[0];
-            return {
+            const updated = {
               ...it,
               assets: {
                 ...it.assets,
@@ -2637,11 +3221,24 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
               },
               updatedAt: Date.now(),
             };
+            
+            // 로컬 스토리지에 저장
+            saveSourceFilesToStorage(
+              videoIdSnapshot,
+              patched,
+              updated.assets.sourceFileName,
+              updated.assets.sourceFileSize,
+              updated.assets.sourceFileMime
+            );
+            
+            return updated;
           })
         );
       }
 
-      showToast("success", "자료 업로드/등록이 완료되었습니다. (소스셋 생성 가능)");
+      // 파일 업로드 완료 시 pipeline은 변경하지 않음 (IDLE 상태 유지)
+      // 스크립트 생성을 눌러야 pipeline이 진행됨
+      showToast("success", "자료 업로드/등록이 완료되었습니다. (스크립트 생성 가능)");
     } catch (e) {
       if (ac.signal.aborted) return;
       const msg = e instanceof Error ? e.message : "자료 업로드/등록에 실패했습니다.";
@@ -2673,19 +3270,37 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
     if (nextFiles.length === prevFiles.length) return;
 
     const primary = nextFiles[0];
+    const nextFileName = primary?.name ?? "";
+    const nextFileSize = primary?.size ?? 0;
+    const nextFileMime = primary?.mime ?? "";
 
     updateSelected({
       assets: {
         ...clearGeneratedAllAssets(selectedItem),
         sourceFiles: nextFiles,
-        sourceFileName: primary?.name ?? "",
-        sourceFileSize: primary?.size ?? 0,
-        sourceFileMime: primary?.mime ?? "",
+        sourceFileName: nextFileName,
+        sourceFileSize: nextFileSize,
+        sourceFileMime: nextFileMime,
       },
       pipeline: resetPipeline(),
       failedReason: undefined,
       videoStatusRaw: "DRAFT",
     });
+
+    // 로컬 스토리지 업데이트
+    if (nextFiles.length === 0) {
+      // 모든 파일이 삭제되면 로컬 스토리지에서도 제거
+      removeSourceFilesFromStorage(selectedItem.id);
+    } else {
+      // 일부 파일만 삭제된 경우 업데이트
+      saveSourceFilesToStorage(
+        selectedItem.id,
+        nextFiles,
+        nextFileName,
+        nextFileSize,
+        nextFileMime
+      );
+    }
 
     showToast("success", `파일이 삭제되었습니다${removed?.name ? `: ${removed.name}` : ""}.`);
   };
@@ -2775,8 +3390,57 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
 
               (next as unknown as Record<string, unknown>)["videoStatusRaw"] = String(statusRaw ?? "");
               (next as unknown as Record<string, unknown>)["jobId"] = readStr(raw, "jobId") ?? readMetaStrFromItem(it, "jobId");
-              (next as unknown as Record<string, unknown>)["scriptId"] = readStr(raw, "scriptId") ?? readMetaStrFromItem(it, "scriptId");
+              const newScriptId = readStr(raw, "scriptId") ?? readMetaStrFromItem(it, "scriptId");
+              
+              // scriptId가 있으면 항상 즉시 반영 (SCRIPT_READY 상태일 때 UI가 즉시 반응하도록)
+              // newScriptId가 undefined나 null이 아닌 경우에만 업데이트
+              // readScriptId는 it.scriptId를 먼저 확인하므로 메타데이터에 저장하면 작동함
+              if (newScriptId && typeof newScriptId === "string" && newScriptId.trim().length > 0) {
+                (next as unknown as Record<string, unknown>)["scriptId"] = newScriptId;
+              }
               if (scriptApprovedAt) (next as unknown as Record<string, unknown>)["scriptApprovedAt"] = scriptApprovedAt;
+              
+              // scriptId가 새로 추가되었거나 변경되었고, 스크립트 텍스트가 없으면 즉시 로드
+              // (pollRef.current가 true일 때 selectedItem 변경 감지 로직이 실행되지 않으므로 여기서 처리)
+              // SCRIPT_READY 상태일 때도 스크립트 텍스트를 로드하여 미리보기 섹션에 즉시 표시
+              const validScriptId = typeof newScriptId === "string" && newScriptId.trim().length > 0 ? newScriptId.trim() : null;
+              const needsScriptLoad = validScriptId && (!next.assets.script || next.assets.script.trim().length === 0);
+              
+              if (needsScriptLoad) {
+                void (async () => {
+                  try {
+                    const { getScript } = await import("./creatorApi");
+                    const script = await getScript(validScriptId);
+                    // chapters → scenes → narration 또는 caption을 합쳐서 텍스트 추출
+                    const parts: string[] = [];
+                    for (const chapter of script.chapters || []) {
+                      for (const scene of chapter.scenes || []) {
+                        const text = scene.narration || scene.caption || "";
+                        if (text.trim()) {
+                          parts.push(text.trim());
+                        }
+                      }
+                    }
+                    const extractedText = parts.join("\n\n");
+                    
+                    // 스크립트 텍스트 업데이트
+                    setItems((prev) =>
+                      prev.map((item) => {
+                        if (item.id !== videoId) return item;
+                        return {
+                          ...item,
+                          assets: {
+                            ...item.assets,
+                            script: extractedText || item.assets.script || "",
+                          },
+                        };
+                      })
+                    );
+                  } catch (err) {
+                    console.warn(`Failed to fetch script ${validScriptId}:`, err);
+                  }
+                })();
+              }
 
               return next;
             })
@@ -2795,7 +3459,157 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
             upper.includes("REJECT")
           ) {
             stopPolling();
-            await refreshItems({ silent: true });
+            // SCRIPT_READY 상태로 전이되면 pipeline stage도 업데이트 및 scriptId 조회
+            if (upper === "SCRIPT_READY") {
+              // raw에서 scriptId를 즉시 읽어서 업데이트 (비동기 작업 전에 먼저 반영)
+              const rawScriptId = readStr(raw, "scriptId");
+              
+              // pipeline과 scriptId를 먼저 즉시 업데이트하여 UI가 즉시 반응하도록
+              setItems((prev) => {
+                const currentItem = prev.find((it) => it.id === videoId);
+                if (!currentItem) {
+                  // currentItem이 없으면 pipeline만 업데이트
+                  return prev.map((it) => {
+                    if (it.id !== videoId) return it;
+                    const next: CreatorWorkItem = {
+                      ...it,
+                      pipeline: {
+                        ...it.pipeline,
+                        state: "SUCCESS" as const,
+                        stage: "SCRIPT",
+                        progress: 100,
+                        rawStage: "SCRIPT_READY",
+                      },
+                    };
+                    // raw에서 scriptId를 읽었으면 즉시 반영
+                    if (rawScriptId) {
+                      (next as unknown as Record<string, unknown>)["scriptId"] = rawScriptId;
+                    }
+                    return next;
+                  });
+                }
+                
+                const currentScriptId = readMetaStrFromItem(currentItem, "scriptId") || rawScriptId;
+                const needsScriptId = !currentScriptId;
+                const needsScriptText = !currentItem.assets.script || currentItem.assets.script.trim().length === 0;
+                
+                // scriptId가 있으면 즉시 반영 (비동기 작업 전에 먼저 업데이트하여 UI가 즉시 반응하도록)
+                const immediateScriptId = currentScriptId || rawScriptId;
+                
+                // pipeline과 scriptId는 즉시 업데이트 (scriptText는 비동기로 나중에 업데이트)
+                const immediateUpdate = prev.map((it) => {
+                  if (it.id !== videoId) return it;
+                  const next: CreatorWorkItem = {
+                    ...it,
+                    pipeline: {
+                      ...it.pipeline,
+                      state: "SUCCESS" as const,
+                      stage: "SCRIPT",
+                      progress: 100,
+                      rawStage: "SCRIPT_READY",
+                    },
+                  };
+                  // raw에서 scriptId를 읽었거나 현재 scriptId가 없으면 즉시 반영
+                  if (immediateScriptId && typeof immediateScriptId === "string" && immediateScriptId.trim().length > 0) {
+                    (next as unknown as Record<string, unknown>)["scriptId"] = immediateScriptId;
+                  }
+                  return next;
+                });
+                
+                // 스크립트 텍스트가 필요하면 비동기로 로드 (Promise로 감싸서 완료를 기다릴 수 있도록)
+                if (needsScriptId || needsScriptText) {
+                  const educationId = getEducationIdOfItem(currentItem);
+                  if (educationId) {
+                    // 비동기 작업을 Promise로 감싸서 완료를 기다릴 수 있도록
+                    void (async () => {
+                      try {
+                        const resolved = needsScriptId
+                          ? await resolveScriptIdForEducationOrVideo({
+                              educationId,
+                              videoId,
+                              signal: ac.signal,
+                            })
+                          : { educationId, videoId, scriptId: immediateScriptId! };
+                        
+                        if (ac.signal.aborted || !resolved.scriptId) return;
+                        
+                        // 스크립트 텍스트 조회
+                        let extractedText = currentItem.assets.script || "";
+                        if (needsScriptText) {
+                          try {
+                            const { getScript } = await import("./creatorApi");
+                            const script = await getScript(resolved.scriptId);
+                            // chapters → scenes → narration 또는 caption을 합쳐서 텍스트 추출
+                            const parts: string[] = [];
+                            for (const chapter of script.chapters || []) {
+                              for (const scene of chapter.scenes || []) {
+                                const text = scene.narration || scene.caption || "";
+                                if (text.trim()) {
+                                  parts.push(text.trim());
+                                }
+                              }
+                            }
+                            extractedText = parts.join("\n\n");
+                          } catch (err) {
+                            console.warn(`Failed to fetch script ${resolved.scriptId}:`, err);
+                          }
+                        }
+                        
+                        // setItems로 한 번에 업데이트 (scriptId, assets.script, pipeline 모두)
+                        setItems((prev2) =>
+                          prev2.map((it) => {
+                            if (it.id !== videoId) return it;
+                            const next = {
+                              ...it,
+                              pipeline: {
+                                ...it.pipeline,
+                                state: "SUCCESS",
+                                stage: "SCRIPT",
+                                progress: 100,
+                                rawStage: "SCRIPT_READY",
+                              },
+                              assets: {
+                                ...it.assets,
+                                script: extractedText || it.assets.script || "",
+                              },
+                            } as CreatorWorkItem;
+                            // scriptId 메타데이터 업데이트
+                            if (needsScriptId || resolved.scriptId !== immediateScriptId) {
+                              (next as unknown as Record<string, unknown>)["scriptId"] = resolved.scriptId;
+                            }
+                            return next;
+                          })
+                        );
+                      } catch {
+                        // lookup 실패는 조용히 무시 (refreshItems에서 재시도)
+                      }
+                    })();
+                  }
+                }
+                
+                return immediateUpdate;
+              });
+              
+              // React의 상태 업데이트가 반영되도록 다음 틱까지 대기
+              // setItems는 비동기적으로 처리되므로, 상태가 반영된 후 refreshItems 호출
+              void (async () => {
+                // React 상태 업데이트가 반영되도록 다음 이벤트 루프까지 대기
+                await new Promise((resolve) => setTimeout(resolve, 0));
+                
+                // scriptId가 업데이트되었는지 확인하고, 필요하면 refreshItems 호출
+                // 하지만 scriptId는 이미 setItems로 업데이트되었으므로, 
+                // refreshItems는 서버에서 최신 데이터를 가져오기 위해 호출
+                // 단, scriptId가 이미 있으면 즉시 UI에 반영되므로 refreshItems는 선택적
+                if (!ac.signal.aborted) {
+                  // scriptId가 이미 업데이트되었으므로, refreshItems는 백그라운드에서 호출
+                  // UI는 이미 scriptId로 업데이트되었으므로 즉시 반응함
+                  void refreshItems({ silent: true });
+                }
+              })();
+            } else {
+              // SCRIPT_READY가 아닌 다른 종료 상태는 즉시 refreshItems 호출
+              await refreshItems({ silent: true });
+            }
           }
         } catch {
           if (ac.signal.aborted) return;
@@ -2824,19 +3638,26 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
 
           const state = (readStr(raw, "status") ?? readStr(raw, "state") ?? "").toUpperCase();
           const progress = readNum(raw, "progress") ?? readNum(raw, "percent") ?? 0;
+          // job 응답에서 videoUrl 읽기 (영상 생성 완료 시 포함됨)
+          const videoUrl = readStr(raw, "videoUrl") ?? readStr(raw, "fileUrl") ?? null;
 
           setItems((prev) =>
             prev.map((it) => {
               if (it.id !== videoId) return it;
               const next = {
                 ...it,
-                status: state === "RUNNING" ? "GENERATING" : it.status,
+                status: state === "RUNNING" || state === "PROCESSING" ? "GENERATING" : it.status,
                 pipeline: {
                   ...it.pipeline,
-                  state: state === "RUNNING" ? "RUNNING" : it.pipeline.state,
+                  state: state === "RUNNING" || state === "PROCESSING" ? "RUNNING" : it.pipeline.state,
                   stage: "VIDEO",
                   rawStage: `JOB:${jobId}`,
                   progress: clamp(progress, 0, 100),
+                },
+                assets: {
+                  ...it.assets,
+                  // videoUrl이 있으면 즉시 업데이트
+                  videoUrl: videoUrl ?? it.assets.videoUrl,
                 },
                 updatedAt: Date.now(),
               } as CreatorWorkItem;
@@ -2845,8 +3666,10 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
             })
           );
 
-          if (state === "SUCCESS" || state === "FAILED" || state === "DONE") {
+          // COMPLETED, SUCCESS, FAILED, DONE 상태일 때 폴링 중지하고 video 상태 확인
+          if (state === "COMPLETED" || state === "SUCCESS" || state === "FAILED" || state === "DONE") {
             stopPolling();
+            // 영상 생성 완료 시 즉시 video 상태를 확인하여 최신 상태 반영
             pollVideoStatus(videoId);
           }
         } catch {
@@ -2939,6 +3762,18 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
           // 과거 스펙/백엔드 호환용 alias
           eduId: educationId,
         }),
+      });
+
+      // 스크립트 생성 요청 성공 시 진행 단계 전이
+      updateSelected({
+        pipeline: {
+          mode: "SCRIPT_ONLY" as CreatorWorkItem["pipeline"]["mode"],
+          state: "RUNNING",
+          stage: "SCRIPT",
+          rawStage: "SCRIPT_GENERATING",
+          progress: 0,
+        },
+        videoStatusRaw: "SCRIPT_GENERATING",
       });
 
       showToast("info", "소스셋 생성 요청이 완료되었습니다. 스크립트 생성 상태를 확인합니다…", 2000);
@@ -3492,5 +4327,7 @@ export function useCreatorStudioController(options?: UseCreatorStudioControllerO
     creatorCatalog,
     // optional
     refreshItems,
+    // internal utility (씬 저장 후 로컬 상태 업데이트용)
+    updateSelected,
   };
 }

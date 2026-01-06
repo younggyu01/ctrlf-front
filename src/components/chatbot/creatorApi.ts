@@ -565,7 +565,11 @@ export async function lookupScript(params: { videoId: string; educationId?: stri
 }
 
 export async function getScript(scriptId: string): Promise<CreatorScriptDetail> {
-  const url = expandEndpoint(SCRIPT_DETAIL_ENDPOINT, { scriptId });
+  const sid = scriptId?.trim() ?? "";
+  if (!sid || sid.length === 0) {
+    throw new Error("getScript: scriptId가 필요합니다.");
+  }
+  const url = expandEndpoint(SCRIPT_DETAIL_ENDPOINT, { scriptId: sid });
   return safeFetchJson<CreatorScriptDetail>(url, { method: "GET" });
 }
 
@@ -575,7 +579,11 @@ export async function getScript(scriptId: string): Promise<CreatorScriptDetail> 
  * - 2) 또는 string(script/rawPayload) payload
  */
 export async function putScript(scriptId: string, payload: CreatorPutScriptPayload): Promise<CreatorScriptDetail> {
-  const url = expandEndpoint(SCRIPT_DETAIL_ENDPOINT, { scriptId });
+  const sid = scriptId?.trim() ?? "";
+  if (!sid || sid.length === 0) {
+    throw new Error("putScript: scriptId가 필요합니다.");
+  }
+  const url = expandEndpoint(SCRIPT_DETAIL_ENDPOINT, { scriptId: sid });
 
   // payload 형태에 따라 그대로 전송 (설계안/구현 편차 흡수)
   return safeFetchJson<CreatorScriptDetail>(url, {

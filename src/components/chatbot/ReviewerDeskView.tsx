@@ -9,7 +9,7 @@ import React, {
 import "./chatbot.css";
 import { computePanelPosition, type Anchor, type PanelSize } from "../../utils/chat";
 
-import { useReviewerDeskController } from "./useReviewerDeskController";
+import { useReviewerDeskController, getReviewStage } from "./useReviewerDeskController";
 import ReviewerQueue from "./ReviewerQueue";
 import ReviewerDetail from "./ReviewerDetail";
 import ReviewerActionBar from "./ReviewerActionBar";
@@ -417,12 +417,17 @@ const ReviewerDeskView: React.FC<ReviewerDeskViewProps> = ({
     }
 
     if (selectedItem.contentType === "VIDEO") {
-      const stage: 1 | 2 = selectedItem.videoUrl?.trim() ? 2 : 1;
-      return {
-        stage,
-        publishOnApprove: stage === 2,
-        label: stage === 2 ? "2차 승인" : "1차 승인",
-      };
+      // getReviewStage를 사용하여 reviewStage 필드를 우선 확인
+      const stage = getReviewStage(selectedItem);
+      if (stage === 1 || stage === 2) {
+        return {
+          stage,
+          publishOnApprove: stage === 2,
+          label: stage === 2 ? "2차 승인" : "1차 승인",
+        };
+      }
+      // stage가 null인 경우 (VIDEO가 아닌 경우는 없지만 타입 안전성을 위해)
+      return { stage: null as 1 | 2 | null, publishOnApprove: false, label: "승인" };
     }
 
     return { stage: null as 1 | 2 | null, publishOnApprove: true, label: "승인" };

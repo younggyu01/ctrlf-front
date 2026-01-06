@@ -1366,8 +1366,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     setTab,
     query,
     setQuery,
-    sortMode,
-    setSortMode,
 
     filteredItems,
     selectedItem,
@@ -1652,8 +1650,8 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
   ]);
 
   const sortedItems = useMemo(
-    () => sortItems(searchedItems, sortMode),
-    [searchedItems, sortMode]
+    () => sortItems(searchedItems, "updated_desc"),
+    [searchedItems]
   );
 
   const creatorStageCounts = useMemo(() => {
@@ -2098,8 +2096,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
         if (Number.isFinite(v) && v > maxVersion) maxVersion = v;
       }
 
-      const next = Math.max(1, maxVersion + 1);
-      return `${base} - ${next}차 초안`;
+      return `${base} - 초안`;
     },
     [rawItems]
   );
@@ -2905,22 +2902,6 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                       onMouseDown={(e) => e.stopPropagation()}
                       onChange={(e) => setQuery(e.target.value)}
                     />
-                    <select
-                      className={cx(
-                        "cb-admin-select",
-                        "cb-creator-search-select"
-                      )}
-                      value={sortMode}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onChange={(e) =>
-                        setSortMode(e.target.value as CreatorSortMode)
-                      }
-                    >
-                      <option value="updated_desc">최근 수정</option>
-                      <option value="created_desc">최근 생성</option>
-                      <option value="updated_asc">수정 오래된</option>
-                      <option value="created_asc">생성 오래된</option>
-                    </select>
                   </div>
                 </div>
 

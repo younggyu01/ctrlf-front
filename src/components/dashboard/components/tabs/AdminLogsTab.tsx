@@ -1,20 +1,20 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import AdminFilterBar from "../../AdminFilterBar";
 import AdminRagGapView from "../../AdminRagGapView";
 import PiiReportCard from "../PiiReportCard";
 import type { CommonFilterState } from "../../adminFilterTypes";
-import type { PeriodFilter, PiiRiskLevel } from "../../adminDashboardTypes";
+import type { PeriodFilter, PiiRiskLevel, LogListItem } from "../../adminDashboardTypes";
 import {
   PERIOD_OPTIONS,
   DEPARTMENT_OPTIONS,
   LOG_DOMAIN_OPTIONS,
   LOG_ROUTE_OPTIONS,
   LOG_MODEL_OPTIONS,
-  LOG_LIST_MOCK,
   PII_REPORT_NONE,
   PII_REPORT_WARNING,
   PII_REPORT_HIGH,
 } from "../../adminDashboardMocks";
+import { getAdminLogs, periodToDateRange } from "../../api/logApi";
 
 interface AdminLogsTabProps {
   period: PeriodFilter;
@@ -40,6 +40,9 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
   onFilterChange,
 }) => {
   const [showRagGapView, setShowRagGapView] = useState<boolean>(false);
+  const [logs, setLogs] = useState<LogListItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const filterValue: CommonFilterState = {
     period,
@@ -55,33 +58,127 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
     onFilterChange(next);
   };
 
-  const selectedDeptNameForLogs =
-    selectedDept === "ALL" ? null : selectedDeptLabel;
+  // 로그 조회 함수
+  const fetchLogs = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
 
-  const filteredItems = LOG_LIST_MOCK.filter((item) => {
-    if (
-      selectedDeptNameForLogs &&
-      item.department !== selectedDeptNameForLogs
-    ) {
-      return false;
+    try {
+      // 기간을 시작/종료 날짜로 변환
+      const { startDate, endDate } = periodToDateRange(period);
+
+      // 필터 파라미터 구성
+      const filters: Parameters<typeof getAdminLogs>[0] = {
+        startDate,
+        endDate,
+        page: 0, // 기본값: 첫 페이지
+        size: 100, // 기본값: 100개 (최대값)
+        sort: "createdAt,desc", // 최신순 정렬
+      };
+
+      // 부서 필터
+      if (selectedDept && selectedDept !== "ALL") {
+        // 부서명을 직접 전달 (백엔드가 부서명을 받는 경우)
+        // 또는 부서 코드를 사용하는 경우는 백엔드 스펙에 맞춰 조정 필요
+        // filters.department = selectedDeptLabel;
+      }
+
+      // 도메인 필터
+      if (logDomainFilter && logDomainFilter !== "ALL") {
+        filters.domain = logDomainFilter;
+      }
+
+      // 라우트 필터
+      if (logRouteFilter && logRouteFilter !== "ALL") {
+        filters.route = logRouteFilter;
+      }
+
+      // 모델 필터는 백엔드 API에 없으므로 제외 (필요시 백엔드에 요청)
+
+      // 에러 로그만 필터링 (errorCode가 null이 아닌 것만)
+      // 백엔드 API에 onlyError 파라미터가 없으므로 클라이언트 측 필터링 필요
+      // 또는 백엔드에 요청하여 추가 필요
+
+      // PII 필터
+      if (logHasPiiOnly) {
+        filters.hasPiiInput = true; // 또는 hasPiiOutput = true
+        // 둘 중 하나라도 true면 PII 포함으로 간주
+      }
+
+      const response = await getAdminLogs(filters);
+
+      // 에러 로그만 필터링 (백엔드에서 지원하지 않는 경우 클라이언트 측 필터링)
+      let filteredLogs = response.content || [];
+      if (logOnlyError) {
+        filteredLogs = filteredLogs.filter((item) => item.errorCode != null);
+      }
+
+      setLogs(filteredLogs);
+    } catch (err) {
+      let errorMessage = "로그 조회에 실패했습니다.";
+      
+      // HttpError인 경우 상세 정보 추출
+      if (err instanceof Error && "status" in err) {
+        const httpError = err as {
+          status?: number;
+          statusText?: string;
+          body?: unknown;
+          message?: string;
+        };
+        
+        if (httpError.status === 500) {
+          errorMessage = "서버 오류가 발생했습니다. 백엔드 서버를 확인해주세요.";
+          // 백엔드 에러 메시지가 있으면 추가
+          if (httpError.body && typeof httpError.body === "object") {
+            const body = httpError.body as { message?: string; error?: string };
+            if (body.message || body.error) {
+              errorMessage += ` (${body.message || body.error})`;
+            }
+          }
+        } else if (httpError.status === 400) {
+          errorMessage = "잘못된 요청입니다. 날짜 범위를 확인해주세요.";
+        } else if (httpError.status === 401) {
+          errorMessage = "인증이 필요합니다. 다시 로그인해주세요.";
+        } else if (httpError.status === 403) {
+          errorMessage = "관리자 권한이 필요합니다.";
+        } else {
+          errorMessage = httpError.message || `HTTP ${httpError.status} ${httpError.statusText || ""}`;
+        }
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
+      console.error("[AdminLogsTab] 로그 조회 실패:", {
+        error: err,
+        period,
+        filters: {
+          domain: logDomainFilter,
+          route: logRouteFilter,
+          onlyError: logOnlyError,
+          hasPiiOnly: logHasPiiOnly,
+        },
+      });
+      setLogs([]);
+    } finally {
+      setIsLoading(false);
     }
-    if (logDomainFilter !== "ALL" && item.domain !== logDomainFilter) {
-      return false;
-    }
-    if (logRouteFilter !== "ALL" && item.route !== logRouteFilter) {
-      return false;
-    }
-    if (logModelFilter !== "ALL" && item.modelName !== logModelFilter) {
-      return false;
-    }
-    if (logOnlyError && !item.errorCode) {
-      return false;
-    }
-    if (logHasPiiOnly && !item.hasPiiInput && !item.hasPiiOutput) {
-      return false;
-    }
-    return true;
-  });
+  }, [
+    period,
+    selectedDept,
+    logDomainFilter,
+    logRouteFilter,
+    logModelFilter,
+    logOnlyError,
+    logHasPiiOnly,
+  ]);
+
+  // 필터 변경 시 로그 조회
+  useEffect(() => {
+    void fetchLogs();
+  }, [fetchLogs]);
+
+  const filteredItems = logs;
 
   const totalCount = filteredItems.length;
   const errorCount = filteredItems.filter((i) => i.errorCode).length;
@@ -153,7 +250,9 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
 
   const piiContextSummary = contextParts.join(" · ");
 
-  const onRefresh = () => {};
+  const onRefresh = () => {
+    void fetchLogs();
+  };
 
   return (
     <div className="cb-admin-tab-panel cb-admin-tab-panel--logs">
@@ -221,31 +320,42 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
               </div>
             </div>
 
+            {error && (
+              <div className="cb-admin-error-message" style={{ marginBottom: "16px", padding: "12px", backgroundColor: "#fee", color: "#c33", borderRadius: "4px" }}>
+                ⚠️ {error}
+              </div>
+            )}
+
             <div className="cb-admin-table-wrapper cb-admin-table-wrapper--logs">
-              <table className="cb-admin-table cb-admin-table--logs">
-                <thead>
-                  <tr>
-                    <th>시간</th>
-                    <th>user_id</th>
-                    <th>user_role</th>
-                    <th>부서</th>
-                    <th>domain</th>
-                    <th>route</th>
-                    <th>model</th>
-                    <th>PII (입력/출력)</th>
-                    <th>latency(ms)</th>
-                    <th>error_code</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.length === 0 && (
+              {isLoading ? (
+                <div style={{ padding: "40px", textAlign: "center", color: "#666" }}>
+                  로그를 불러오는 중...
+                </div>
+              ) : (
+                <table className="cb-admin-table cb-admin-table--logs">
+                  <thead>
                     <tr>
-                      <td colSpan={10} className="cb-admin-table-empty">
-                        조건에 해당하는 로그가 없습니다.
-                      </td>
+                      <th>시간</th>
+                      <th>user_id</th>
+                      <th>user_role</th>
+                      <th>부서</th>
+                      <th>domain</th>
+                      <th>route</th>
+                      <th>model</th>
+                      <th>PII (입력/출력)</th>
+                      <th>latency(ms)</th>
+                      <th>error_code</th>
                     </tr>
-                  )}
-                  {filteredItems.map((item) => {
+                  </thead>
+                  <tbody>
+                    {filteredItems.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="cb-admin-table-empty">
+                          {error ? "로그를 불러올 수 없습니다." : "조건에 해당하는 로그가 없습니다."}
+                        </td>
+                      </tr>
+                    )}
+                    {filteredItems.map((item) => {
                     const hasError = !!item.errorCode;
                     const hasPii = item.hasPiiInput || item.hasPiiOutput;
 
@@ -254,13 +364,24 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
                         key={item.id}
                         className={hasError ? "cb-admin-log-row--error" : ""}
                       >
-                        <td>{item.createdAt}</td>
+                        <td>
+                          {item.createdAt
+                            ? new Date(item.createdAt).toLocaleString("ko-KR", {
+                                year: "numeric",
+                                month: "2-digit",
+                                day: "2-digit",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })
+                            : "-"}
+                        </td>
                         <td>{item.userId}</td>
-                        <td>{item.userRole}</td>
-                        <td>{item.department}</td>
+                        <td>{item.userRole || "-"}</td>
+                        <td>{item.department || "-"}</td>
                         <td>{item.domain}</td>
                         <td>{item.route}</td>
-                        <td>{item.modelName}</td>
+                        <td>{item.modelName || "-"}</td>
                         <td>
                           {hasPii ? (
                             <span className="cb-admin-badge cb-admin-badge--pii">
@@ -285,8 +406,9 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
                       </tr>
                     );
                   })}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              )}
             </div>
           </>
         )}

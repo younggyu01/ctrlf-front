@@ -5086,7 +5086,12 @@ export function useCreatorStudioController(
         }),
       });
 
-      updateSelected({ status: "REVIEW_PENDING" });
+      updateSelected({
+        status: "REVIEW_PENDING",
+        videoStatusRaw: wantsFinal
+          ? "FINAL_REVIEW_REQUESTED"
+          : "SCRIPT_REVIEW_REQUESTED",
+      });
       setTab("review_pending");
 
       showToast(

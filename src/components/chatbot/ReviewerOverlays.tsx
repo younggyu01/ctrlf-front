@@ -7,11 +7,11 @@ import CreatorScriptSceneEditor from "./CreatorScriptSceneEditor";
 
 function getVideoStage(it: ReviewWorkItem): 1 | 2 | null {
   if (it.contentType !== "VIDEO") return null;
-  
+
   // reviewStage 필드를 우선 확인 (백엔드에서 명시적으로 설정한 값 사용)
   if (it.reviewStage === "FINAL") return 2;
   if (it.reviewStage === "SCRIPT") return 1;
-  
+
   // reviewStage가 없으면 videoUrl로 판단 (하위 호환성)
   return it.videoUrl?.trim() ? 2 : 1;
 }
@@ -292,9 +292,7 @@ const ReviewerOverlays: React.FC<{
           role="dialog"
           aria-modal="true"
           aria-labelledby={
-            decisionModal.type === "approve"
-              ? approveTitleId
-              : rejectTitleId
+            decisionModal.kind === "approve" ? approveTitleId : rejectTitleId
           }
           ref={decisionModalRef}
         >
@@ -302,13 +300,13 @@ const ReviewerOverlays: React.FC<{
             <div className="cb-reviewer-modal-head">
               <h2
                 id={
-                  decisionModal.type === "approve"
+                  decisionModal.kind === "approve"
                     ? approveTitleId
                     : rejectTitleId
                 }
                 className="cb-reviewer-modal-title"
               >
-                {decisionModal.type === "approve"
+                {decisionModal.kind === "approve"
                   ? `${approveLabelText} 확인`
                   : "반려 확인"}
               </h2>
@@ -324,7 +322,7 @@ const ReviewerOverlays: React.FC<{
               </button>
             </div>
 
-            {decisionModal.type === "approve" ? (
+            {decisionModal.kind === "approve" ? (
               <div className="cb-reviewer-approve-body">
                 <p id={approveDescId} className="cb-reviewer-muted">
                   이 항목을 {approveLabelText}하시겠습니까?
@@ -352,7 +350,9 @@ const ReviewerOverlays: React.FC<{
               <RejectModalBody
                 rejectTitleId={rejectTitleId}
                 rejectDescId={rejectDescId}
-                initialReason={decisionModal.initialReason ?? ""}
+                initialReason={
+                  decisionModal.kind === "reject" ? decisionModal.reason : ""
+                }
                 error={decisionModal.error}
                 isBusy={isBusy}
                 rejectProcessing={rejectProcessing}
@@ -394,71 +394,81 @@ const ReviewerOverlays: React.FC<{
             </div>
 
             <div className="cb-reviewer-preview-body">
-              {previewItem.contentType === "VIDEO" ? (() => {
-                const stage = getVideoStage(previewItem);
-                const any = previewItem as unknown as Record<string, unknown>;
-                const scriptId = typeof any.scriptId === "string" && any.scriptId.trim() 
-                  ? any.scriptId.trim() 
-                  : "";
-                
-                // 1차 검토(스크립트 검토)일 때는 스크립트 표시
-                if (stage === 1 && scriptId) {
-                  return (
-                    <CreatorScriptSceneEditor
-                      scriptId={scriptId}
-                      videoId={previewItem.id}
-                      scriptText={previewItem.scriptText}
-                      disabled={true}
-                      showToast={() => {}}
-                    />
-                  );
-                }
-                
-                // 2차 검토(영상 검토)일 때는 영상 표시
-                if (stage === 2 && previewItem.videoUrl && previewItem.videoUrl.trim().length > 0) {
-                  return (
-                    <div className="cb-reviewer-preview-media">
-                      <video
-                        className="cb-reviewer-preview-video"
-                        src={previewItem.videoUrl}
-                        controls
+              {previewItem.contentType === "VIDEO" ? (
+                (() => {
+                  const stage = getVideoStage(previewItem);
+                  const any = previewItem as unknown as Record<string, unknown>;
+                  const scriptId =
+                    typeof any.scriptId === "string" && any.scriptId.trim()
+                      ? any.scriptId.trim()
+                      : "";
+
+                  // 1차 검토(스크립트 검토)일 때는 스크립트 표시
+                  if (stage === 1 && scriptId) {
+                    return (
+                      <CreatorScriptSceneEditor
+                        scriptId={scriptId}
+                        videoId={previewItem.id}
+                        scriptText={previewItem.scriptText}
+                        disabled={true}
+                        showToast={() => {}}
                       />
-                      {/* 2차 검토 시 영상과 함께 스크립트도 표시 */}
-                      {scriptId ? (
-                        <div style={{ marginTop: 16 }}>
-                          <CreatorScriptSceneEditor
-                            scriptId={scriptId}
-                            videoId={previewItem.id}
-                            scriptText={previewItem.scriptText}
-                            disabled={true}
-                            showToast={() => {}}
-                          />
-                        </div>
-                      ) : null}
+                    );
+                  }
+
+                  // 2차 검토(영상 검토)일 때는 영상 표시
+                  if (
+                    stage === 2 &&
+                    previewItem.videoUrl &&
+                    previewItem.videoUrl.trim().length > 0
+                  ) {
+                    return (
+                      <div className="cb-reviewer-preview-media">
+                        <video
+                          className="cb-reviewer-preview-video"
+                          src={previewItem.videoUrl}
+                          controls
+                        />
+                        {/* 2차 검토 시 영상과 함께 스크립트도 표시 */}
+                        {scriptId ? (
+                          <div style={{ marginTop: 16 }}>
+                            <CreatorScriptSceneEditor
+                              scriptId={scriptId}
+                              videoId={previewItem.id}
+                              scriptText={previewItem.scriptText}
+                              disabled={true}
+                              showToast={() => {}}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }
+
+                  // 스크립트나 영상이 없는 경우
+                  return (
+                    <div className="cb-reviewer-doc-preview">
+                      <div className="cb-reviewer-doc-preview-title">
+                        {stage === 2
+                          ? "2차(최종) 검토 단계"
+                          : "1차(스크립트) 검토 단계"}
+                      </div>
+                      <div className="cb-reviewer-doc-preview-body">
+                        {stage === 2
+                          ? "영상이 아직 생성되지 않았습니다."
+                          : "스크립트가 아직 생성되지 않았습니다."}
+                      </div>
                     </div>
                   );
-                }
-                
-                // 스크립트나 영상이 없는 경우
-                return (
-                  <div className="cb-reviewer-doc-preview">
-                    <div className="cb-reviewer-doc-preview-title">
-                      {stage === 2 ? "2차(최종) 검토 단계" : "1차(스크립트) 검토 단계"}
-                    </div>
-                    <div className="cb-reviewer-doc-preview-body">
-                      {stage === 2 
-                        ? "영상이 아직 생성되지 않았습니다."
-                        : "스크립트가 아직 생성되지 않았습니다."}
-                    </div>
-                  </div>
-                );
-              })() : (
+                })()
+              ) : (
                 <div className="cb-reviewer-doc-preview">
                   <div className="cb-reviewer-doc-preview-title">
                     {previewItem.title}
                   </div>
                   <div className="cb-reviewer-doc-preview-body">
-                    {previewItem.policyExcerpt ?? "(미리보기 텍스트가 없습니다)"}
+                    {previewItem.policyExcerpt ??
+                      "(미리보기 텍스트가 없습니다)"}
                   </div>
                 </div>
               )}
@@ -466,8 +476,8 @@ const ReviewerOverlays: React.FC<{
 
             <div className="cb-reviewer-preview-foot">
               <span id={previewDescId} className="cb-reviewer-muted">
-                {previewItem.department} · 제작자 {previewItem.creatorName} · 버전{" "}
-                {previewItem.version}
+                {previewItem.department} · 제작자 {previewItem.creatorName} ·
+                버전 {previewItem.version}
               </span>
             </div>
           </div>

@@ -1118,29 +1118,51 @@ async function fetchFaqJson(
   token: string,
   timeoutMs = 15_000
 ): Promise<unknown> {
-  const res = await fetchWithTimeout(
-    url,
-    {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
+  console.log(`[FAQ API] fetchFaqJson 호출:`, { url, timeoutMs, hasToken: !!token });
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
       },
-    },
-    timeoutMs
-  );
-
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    throw new Error(
-      `GET ${url} failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""
-      }`
+      timeoutMs
     );
-  }
 
-  const data = (await res.json().catch(() => null)) as unknown;
-  if (data === null) throw new Error(`GET ${url} failed: invalid JSON`);
-  return data;
+    console.log(`[FAQ API] 응답 상태:`, { 
+      url, 
+      status: res.status, 
+      statusText: res.statusText,
+      ok: res.ok 
+    });
+
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      console.error(`[FAQ API] 요청 실패:`, { 
+        url, 
+        status: res.status, 
+        statusText: res.statusText,
+        body: bodyText 
+      });
+      throw new Error(
+        `GET ${url} failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
+      );
+    }
+
+    const data = (await res.json().catch(() => null)) as unknown;
+    if (data === null) {
+      console.error(`[FAQ API] JSON 파싱 실패:`, { url });
+      throw new Error(`GET ${url} failed: invalid JSON`);
+    }
+    console.log(`[FAQ API] 응답 데이터:`, { url, dataType: Array.isArray(data) ? 'array' : typeof data, dataLength: Array.isArray(data) ? data.length : 'N/A' });
+    return data;
+  } catch (error) {
+    console.error(`[FAQ API] fetchFaqJson 에러:`, { url, error });
+    throw error;
+  }
 }
 
 /** FAQ Home */
@@ -1182,6 +1204,7 @@ export async function fetchFaqList(domain: ChatServiceDomain): Promise<FaqItem[]
     cached.items.length > 0 &&
     now - cached.fetchedAt < FAQ_CACHE_TTL_MS
   ) {
+    console.log(`[FAQ API] 캐시에서 반환 (${key}):`, cached.items.length, "개");
     return cached.items;
   }
 
@@ -1191,14 +1214,21 @@ export async function fetchFaqList(domain: ChatServiceDomain): Promise<FaqItem[]
   const url = `${FAQ_LIST_ENDPOINT}?domain=${encodeURIComponent(
     String(domain).toUpperCase()
   )}`;
+  console.log(`[FAQ API] 요청 URL (${key}):`, url);
+  
   const raw = await fetchFaqJson(url, token, 15_000);
+  console.log(`[FAQ API] 원본 응답 (${key}):`, raw);
+  
   const items = normalizeFaqItems(raw);
+  console.log(`[FAQ API] 정규화된 FAQ (${key}):`, items.length, "개", items);
 
   // 빈 배열 고착 방지: items가 있을 때만 캐시
   if (items.length > 0) {
     faqListCache.set(key, { items, fetchedAt: now });
+    console.log(`[FAQ API] 캐시 저장 (${key}):`, items.length, "개");
   } else {
     faqListCache.delete(key);
+    console.warn(`[FAQ API] ⚠️ 도메인 ${key}에 대한 FAQ가 0개입니다.`);
   }
 
   return items;

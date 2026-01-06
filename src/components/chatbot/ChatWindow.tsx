@@ -1062,7 +1062,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       const key = toUpperKey(domain);
       if (!key) return;
 
-      if (faqTop10ByDomainRef.current[key]?.length) return;
       if (!onRequestFaqTop10) {
         setFaqTop10Error("FAQ 목록 API가 연결되지 않았습니다.");
         return;
@@ -1072,22 +1071,89 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       setFaqTop10Error(null);
 
       try {
+        console.log(`[FAQ] 도메인별 FAQ 로드 시작: ${key} (${domain})`);
         const list = await onRequestFaqTop10(domain);
-        const normalized = (Array.isArray(list) ? list : [])
+        console.log(`[FAQ] 도메인별 FAQ 응답 (${key}):`, {
+          rawList: list,
+          listLength: Array.isArray(list) ? list.length : 0,
+          listType: Array.isArray(list) ? 'array' : typeof list
+        });
+        
+        if (!Array.isArray(list) || list.length === 0) {
+          console.warn(`[FAQ] 도메인 ${key}에 대한 FAQ 데이터가 없습니다.`);
+          setFaqTop10ByDomain((prev) => ({ ...prev, [key]: [] }));
+          return;
+        }
+
+        // 먼저 모든 항목을 정규화하고 도메인 정보 확인
+        const allNormalized = (Array.isArray(list) ? list : [])
           .map((it) => {
             const id = getFaqItemId(it);
             const question = getFaqItemQuestion(it);
             const d = getFaqItemDomain(it);
-            return { raw: it, id, question, domain: d };
-          })
-          .filter((x) => Boolean(x.id) && Boolean(x.question?.trim()));
+            const itemDomainKey = d ? toUpperKey(d) : null;
+            return { 
+              raw: it, 
+              id, 
+              question, 
+              domain: d,
+              domainKey: itemDomainKey,
+              matches: itemDomainKey === key
+            };
+          });
 
-        // top10
-        const top10 = normalized.slice(0, 10).map((x) => x.raw);
-        setFaqTop10ByDomain((prev) => ({ ...prev, [key]: top10 }));
+        console.log(`[FAQ] 모든 항목 정규화 결과 (${key}):`, allNormalized.map(x => ({
+          id: x.id,
+          question: x.question?.substring(0, 30),
+          domain: x.domain,
+          domainKey: x.domainKey,
+          matches: x.matches,
+          requestedKey: key
+        })));
+
+        // 필터링: ID와 질문이 있고, 도메인이 일치하는 것만
+        const filtered = allNormalized.filter((x) => {
+          if (!Boolean(x.id) || !Boolean(x.question?.trim())) {
+            console.log(`[FAQ] 필터링 제외 (ID/질문 없음):`, x.id, x.question);
+            return false;
+          }
+          if (x.domainKey !== key) {
+            console.log(`[FAQ] 필터링 제외 (도메인 불일치): 요청=${key}, 항목=${x.domainKey}`);
+            return false;
+          }
+          return true;
+        });
+
+        console.log(`[FAQ] 필터링 후 FAQ (${key}):`, filtered.length, "개");
+
+        // 중복 제거 (ID 기준)
+        const seenIds = new Set<string>();
+        const items = filtered
+          .map((x) => x.raw)
+          .filter((it) => {
+            const id = getFaqItemId(it);
+            if (!id || seenIds.has(id)) {
+              if (seenIds.has(id)) {
+                console.log(`[FAQ] 중복 제거:`, id);
+              }
+              return false;
+            }
+            seenIds.add(id);
+            return true;
+          });
+        
+        console.log(`[FAQ] 최종 저장할 FAQ (${key}):`, items.length, "개");
+        setFaqTop10ByDomain((prev) => ({ ...prev, [key]: items }));
+        
+        if (items.length === 0) {
+          console.warn(`[FAQ] ⚠️ 도메인 ${key}에 대한 FAQ가 0개입니다. 백엔드 응답을 확인하세요.`);
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[FAQ] 도메인 ${key} 로드 실패:`, e);
         setFaqTop10Error(msg || "FAQ 목록을 불러오지 못했습니다.");
+        // 에러 발생 시 빈 배열로 설정하여 재시도 가능하도록 함
+        setFaqTop10ByDomain((prev) => ({ ...prev, [key]: [] }));
       } finally {
         setFaqTop10Loading(false);
       }
@@ -1135,7 +1201,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       };
     }
 
-    // DOMAIN: top10 list
+    // DOMAIN: 도메인별로 백엔드에서 반환하는 모든 FAQ 표시 (초기 데이터는 각 도메인별 2개)
     const domainKey = toUpperKey(faqDomainFilter);
     const list = faqTop10ByDomain[domainKey] ?? [];
     return {

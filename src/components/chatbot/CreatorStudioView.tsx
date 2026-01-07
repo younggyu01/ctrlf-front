@@ -19,6 +19,8 @@ import {
   formatDateTime,
   labelStatus,
   isJobCategory,
+  deptLabel,
+  categoryLabel,
 } from "./creatorStudioCatalog";
 import { useCreatorStudioController } from "./useCreatorStudioController";
 import CreatorScriptSceneEditor from "./CreatorScriptSceneEditor";
@@ -740,6 +742,7 @@ function filterByQuery(
       (typeof it.categoryLabel === "string" && it.categoryLabel.trim()
         ? it.categoryLabel
         : "") ||
+      categoryLabel(it.categoryId) ||
       it.categoryId;
 
     const templateText = templateNameById.get(it.templateId) ?? it.templateId;
@@ -1290,17 +1293,8 @@ function readSourceFileName(it: CreatorWorkItem | null): string {
   return "";
 }
 
-function readSourceFileSize(it: CreatorWorkItem | null): number | null {
-  if (!it) return null;
-  const assets = (it as unknown as { assets?: unknown }).assets;
-  if (assets && typeof assets === "object") {
-    const s = (assets as Record<string, unknown>)["sourceFileSize"];
-    if (typeof s === "number" && Number.isFinite(s)) return s;
-  }
-  const direct = (it as unknown as { sourceFileSize?: unknown }).sourceFileSize;
-  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
-  return null;
-}
+// sourceFileSize는 백엔드에서 제공하지 않으므로 제거됨
+// 파일 크기는 sourceFiles 배열의 각 항목에서 확인 가능
 
 function readScriptId(it: CreatorWorkItem | null): string {
   if (!it) return "";
@@ -1540,7 +1534,14 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     [normalizedDepartments]
   );
   const categoryNameById = useMemo(
-    () => new Map(normalizedCategories.map((c) => [c.id, c.name])),
+    () => {
+      const map = new Map<string, string>();
+      for (const c of normalizedCategories) {
+        // name이 있으면 사용, 없으면 categoryLabel 함수로 fallback
+        map.set(c.id, c.name || categoryLabel(c.id) || c.id);
+      }
+      return map;
+    },
     [normalizedCategories]
   );
   const templateNameById = useMemo(
@@ -1801,26 +1802,105 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
     boundEducation.departmentScope.length > 0
   );
 
-  const deptIdByName = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const d of normalizedDepartments) {
-      // 같은 이름이 여러 개면 최초 1개 매칭(일단 안전)
-      if (!m.has(d.name)) m.set(d.name, d.id);
-    }
-    return m;
-  }, [normalizedDepartments]);
-
   const mapDeptNamesToIds = useCallback(
     (names: readonly string[]) => {
-      const out: string[] = [];
-      for (const nm of names) {
-        const id = deptIdByName.get(nm);
-        if (id) out.push(id);
+      if (!names || names.length === 0) return [];
+
+      // 공백 제거 후 정규화
+      const normalizeForMatching = (str: string): string => {
+        return str
+          .trim()
+          .replace(/\s+/g, "") // 모든 공백 제거
+          .toLowerCase();
+      };
+
+      const normalizedNames = names
+        .map((x) => String(x ?? "").trim())
+        .filter((x) => x.length > 0);
+
+      // "전체 부서" 포함 → 전사 전체 의미 → 빈 배열 반환
+      const hasAll = normalizedNames.some(
+        (n) => {
+          const normalized = normalizeForMatching(n);
+          return (
+            normalized === "전체부서" ||
+            normalized === "전체" ||
+            normalized === "전사" ||
+            normalized === "all"
+          );
+        }
+      );
+      if (hasAll) return [];
+
+      // 매핑 맵 구축 (정규화된 이름 → 부서 ID)
+      const byName = new Map<string, string>();
+      const knownIds = new Set<string>();
+
+      for (const d of normalizedDepartments) {
+        if (!d?.id) continue;
+        knownIds.add(d.id);
+
+        // 부서 이름으로 매핑 (공백 제거 + 대소문자 무시)
+        const n1 = normalizeForMatching(d.name ?? "");
+        const n1Original = (d.name ?? "").trim().toLowerCase();
+        if (n1) {
+          byName.set(n1, d.id);
+          // 원본 이름도 추가 (공백 포함)
+          if (n1Original && n1Original !== n1) byName.set(n1Original, d.id);
+        }
+
+        // deptLabel(부서 ID의 라벨 이름)로도 매핑
+        const label = deptLabel(d.id);
+        const n2 = normalizeForMatching(label);
+        const n2Original = label.trim().toLowerCase();
+        if (n2 && n2 !== n1) {
+          byName.set(n2, d.id);
+          // 원본 라벨도 추가 (공백 포함)
+          if (n2Original && n2Original !== n2 && n2Original !== n1Original) {
+            byName.set(n2Original, d.id);
+          }
+        }
+
+        // 부서 ID 자체도 이름으로 추가 (일부 경우 ID가 이름으로 사용됨)
+        const idNormalized = normalizeForMatching(d.id);
+        if (idNormalized && idNormalized !== n1 && idNormalized !== n2) {
+          byName.set(idNormalized, d.id);
+        }
       }
+
+      const out: string[] = [];
+      for (const raw of normalizedNames) {
+        const s = String(raw ?? "").trim();
+        if (!s) continue;
+
+        // 이미 부서 ID인 경우
+        if (knownIds.has(s)) {
+          out.push(s);
+          continue;
+        }
+
+        // 정규화된 이름으로 매핑 시도
+        const normalized = normalizeForMatching(s);
+        let mapped = byName.get(normalized);
+
+        // 정규화 매칭 실패 시 원본으로도 시도
+        if (!mapped) {
+          mapped = byName.get(s.toLowerCase());
+        }
+
+        if (mapped) {
+          out.push(mapped);
+        } else {
+          // 매핑 실패 시: 부서명 자체를 ID로 사용 (fallback)
+          // 이렇게 하면 normalizedDepartments에 없어도 매핑 가능
+          out.push(s);
+        }
+      }
+
       // 중복 제거
       return Array.from(new Set(out));
     },
-    [deptIdByName]
+    [normalizedDepartments]
   );
 
   const loadEducationsOnce = useCallback(async () => {
@@ -1905,25 +1985,63 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
           // 전사(전체)로 해석: targetDeptIds=[]
           patch.targetDeptIds = [];
         } else {
-          const mapped = mapDeptNamesToIds(names);
-          if (mapped.length > 0) {
-            patch.targetDeptIds = mapped;
-          } else {
-            // 매핑 실패 시에도 초안 생성은 계속 진행 (부서는 빈 배열로 설정)
-            // 경고 메시지는 표시하되, 초안 생성은 중단하지 않음
+          // "전체 부서" 체크: 의도적으로 빈 배열을 반환하는 케이스
+          const isAllDept = names.some(
+            (n) => {
+              const normalized = n.trim().toLowerCase();
+              return (
+                normalized === "전체 부서" ||
+                normalized === "전체부서" ||
+                normalized === "전체" ||
+                normalized === "전사" ||
+                normalized === "all"
+              );
+            }
+          );
+          
+          if (isAllDept) {
+            // "전체 부서"는 의도적으로 전사(전체) 설정이므로 빈 배열로 설정
+            // 경고를 표시하지 않음
             patch.targetDeptIds = [];
-            showToast(
-              "info",
-              "선택한 교육의 대상 부서를 현재 부서 목록에서 매핑하지 못했습니다. 부서 카탈로그(명칭/옵션)를 확인해주세요. 초안은 생성되지만 부서 설정이 비어있습니다.",
-              5000
-            );
+          } else {
+            const mapped = mapDeptNamesToIds(names);
+            if (mapped.length > 0) {
+              patch.targetDeptIds = mapped;
+            } else {
+              // 매핑 실패: 디버깅 정보를 포함한 경고 메시지
+              console.warn(
+                "[부서 매핑 실패]",
+                {
+                  교육부서명: names,
+                  사용가능한부서명: normalizedDepartments.map((d) => ({
+                    id: d.id,
+                    name: d.name,
+                    label: deptLabel(d.id),
+                  })),
+                }
+              );
+              // 매핑 실패 시에도 초안 생성은 계속 진행 (부서는 빈 배열로 설정)
+              // 경고 메시지는 표시하되, 초안 생성은 중단하지 않음
+              patch.targetDeptIds = [];
+              showToast(
+                "info",
+                `선택한 교육의 대상 부서 "${names.join(", ")}"를 현재 부서 목록에서 매핑하지 못했습니다. 부서 카탈로그(명칭/옵션)를 확인해주세요. 초안은 생성되지만 부서 설정이 비어있습니다.`,
+                7000
+              );
+            }
           }
         }
       }
 
       updateSelectedMetaCompat(patch);
     },
-    [mapDeptNamesToIds, selectedItem, showToast, updateSelectedMetaCompat]
+    [
+      mapDeptNamesToIds,
+      selectedItem,
+      showToast,
+      updateSelectedMetaCompat,
+      normalizedDepartments,
+    ]
   );
 
   // selectedItem이 “새로 생성된 초안”으로 바뀌는 시점에 교육 메타를 1회 주입
@@ -2873,6 +2991,7 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                                   it.categoryLabel.trim()
                                     ? it.categoryLabel
                                     : "") ||
+                                  categoryLabel(it.categoryId) ||
                                   it.categoryId}{" "}
                                 · {kindText} · {templateText}
                                 {trainingText ? ` · ${trainingText}` : ""}
@@ -3402,16 +3521,21 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                                   );
                                 }
 
-                                // sourceFiles가 없을 때만 레거시 필드 확인
+                                // sourceFiles 배열 또는 sourceFileName 필드 확인
+                                const sourceFiles = readSourceFiles(selectedItem);
                                 const name = readSourceFileName(selectedItem);
-                                const size = readSourceFileSize(selectedItem);
 
-                                return name ? (
+                                // sourceFiles가 있으면 첫 번째 파일 정보 사용, 없으면 sourceFileName 사용
+                                const displayName = sourceFiles.length > 0 
+                                  ? sourceFiles[0].name 
+                                  : name;
+
+                                return displayName ? (
                                   <>
-                                    업로드됨: {name}
-                                    {size ? (
+                                    업로드됨: {displayName}
+                                    {sourceFiles.length > 0 && sourceFiles[0].size > 0 ? (
                                       <span className="cb-creator-muted">
-                                        {` (${formatBytes(size)})`}
+                                        {` (${formatBytes(sourceFiles[0].size)})`}
                                       </span>
                                     ) : null}
                                   </>
@@ -3432,9 +3556,12 @@ const CreatorStudioView: React.FC<CreatorStudioViewProps> = ({
                               </div>
 
                               <div className="cb-creator-pipeline-status-desc">
-                                {pipelineView.state !== "IDLE" &&
-                                pipelineView.progress > 0
-                                  ? `진행률 ${pipelineView.progress}%`
+                                {pipelineView.state === "RUNNING"
+                                  ? pipelineView.progress > 0
+                                    ? `진행률 ${pipelineView.progress}%`
+                                    : "생성 중…"
+                                  : pipelineView.state === "FAILED"
+                                  ? pipelineView.message || "생성 실패"
                                   : !hasSourceFile
                                   ? "자료를 업로드하세요."
                                   : !selectedIsScriptApproved

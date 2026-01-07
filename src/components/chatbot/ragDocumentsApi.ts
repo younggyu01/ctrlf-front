@@ -28,6 +28,91 @@ export type RagDocStatusResponse = {
   errorMessage?: string | null;
 };
 
+/**
+ * 문서 목록 항목 타입
+ */
+export interface RagDocumentListItem {
+  id: string; // UUID
+  title: string;
+  domain: string; // 예: "HR", "SEC", "EDU"
+  uploaderUuid?: string;
+  createdAt: string; // ISO-8601
+}
+
+/**
+ * 문서 정보 타입
+ */
+export interface RagDocumentInfo {
+  id: string; // UUID
+  title: string;
+  domain: string; // 예: "HR", "SEC", "EDU"
+  sourceUrl: string; // S3 파일 URL
+  status: string; // "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED"
+}
+
+/**
+ * 문서 수정 응답 타입
+ */
+export interface RagDocumentUpdateResponse {
+  documentId: string;
+  status: string; // "REPROCESSING" 등
+  updatedAt: string; // ISO-8601
+}
+
+/**
+ * 문서 삭제 응답 타입
+ */
+export interface RagDocumentDeleteResponse {
+  documentId: string;
+  status: string; // "DELETED"
+  deletedAt: string; // ISO-8601
+}
+
+/**
+ * 문서 재처리 요청 타입
+ */
+export interface RagDocumentReprocessRequest {
+  title?: string;
+  domain?: string;
+  fileUrl?: string;
+  requestedBy?: string;
+}
+
+/**
+ * 문서 재처리 응답 타입
+ */
+export interface RagDocumentReprocessResponse {
+  documentId: string;
+  accepted: boolean;
+  status: string; // "REPROCESSING"
+  jobId?: string;
+  updatedAt: string; // ISO-8601
+}
+
+/**
+ * 문서 원문 텍스트 응답 타입
+ */
+export interface RagDocumentTextResponse {
+  documentId: string;
+  text: string;
+}
+
+/**
+ * Query 파라미터를 URL에 추가
+ */
+function buildQueryString(
+  params: Record<string, string | number | boolean | undefined>
+): string {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      searchParams.append(key, String(value));
+    }
+  });
+  const query = searchParams.toString();
+  return query ? `?${query}` : "";
+}
+
 export async function uploadDocument(payload: {
   title: string;
   domain: string;
@@ -69,4 +154,112 @@ export async function getDocumentStatus(documentId: string): Promise<RagDocStatu
     null;
 
   return { status, errorMessage };
+}
+
+/**
+ * 문서 목록 조회
+ *
+ * 등록된 문서 목록을 필터링 및 페이징하여 조회합니다.
+ */
+export async function listDocuments(params?: {
+  domain?: string; // 문서 도메인 필터
+  uploaderUuid?: string; // 업로더 UUID 필터
+  startDate?: string; // 기간 시작 (yyyy-MM-dd)
+  endDate?: string; // 기간 끝 (yyyy-MM-dd)
+  keyword?: string; // 제목 키워드 검색
+  page?: number; // 페이지 번호 (기본값: 0)
+  size?: number; // 페이지 크기 (기본값: 10)
+}): Promise<RagDocumentListItem[]> {
+  const { page = 0, size = 10, ...rest } = params || {};
+  const query = buildQueryString({
+    ...rest,
+    page,
+    size,
+  });
+  return fetchJson<RagDocumentListItem[]>(
+    `${INFRA_BASE}/rag/documents${query}`
+  );
+}
+
+/**
+ * 문서 정보 조회
+ *
+ * 문서의 메타 정보를 조회합니다.
+ */
+export async function getDocument(documentId: string): Promise<RagDocumentInfo> {
+  return fetchJson<RagDocumentInfo>(
+    `${INFRA_BASE}/rag/documents/${encodeURIComponent(documentId)}`
+  );
+}
+
+/**
+ * 문서 수정
+ *
+ * 문서의 메타 정보를 수정합니다.
+ */
+export async function updateDocument(
+  documentId: string,
+  data: {
+    title?: string;
+    domain?: string;
+    fileUrl?: string;
+  }
+): Promise<RagDocumentUpdateResponse> {
+  return fetchJson<RagDocumentUpdateResponse>(
+    `${INFRA_BASE}/rag/documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "PATCH",
+      ...jsonBody(data),
+    }
+  );
+}
+
+/**
+ * 문서 삭제
+ *
+ * 문서를 삭제합니다.
+ */
+export async function deleteDocument(
+  documentId: string
+): Promise<RagDocumentDeleteResponse> {
+  return fetchJson<RagDocumentDeleteResponse>(
+    `${INFRA_BASE}/rag/documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
+/**
+ * 문서 재처리 요청
+ *
+ * 문서의 재처리를 요청합니다.
+ */
+export async function reprocessDocument(
+  documentId: string,
+  data?: RagDocumentReprocessRequest
+): Promise<RagDocumentReprocessResponse> {
+  return fetchJson<RagDocumentReprocessResponse>(
+    `${INFRA_BASE}/rag/documents/${encodeURIComponent(documentId)}/reprocess`,
+    {
+      method: "POST",
+      ...jsonBody(data || {}),
+    }
+  );
+}
+
+/**
+ * 문서 원문 텍스트 조회
+ *
+ * 문서의 원문 텍스트를 조회합니다. S3에서 파일을 다운로드하여 텍스트를 추출합니다.
+ */
+export async function getDocumentText(
+  documentId: string
+): Promise<RagDocumentTextResponse> {
+  return fetchJson<RagDocumentTextResponse>(
+    `${INFRA_BASE}/rag/documents/${encodeURIComponent(documentId)}/text`,
+    {
+      method: "GET",
+    }
+  );
 }

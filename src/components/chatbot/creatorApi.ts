@@ -93,6 +93,8 @@ export type AdminVideoSummary = {
   createdAt?: string;
   updatedAt?: string;
   isPublished?: boolean;
+  sourceFileName?: string | null;
+  sourceFileUrl?: string | null;
 };
 
 export type AdminEducationWithVideosItem = {
@@ -117,6 +119,8 @@ export type VideoDetail = {
   jobId?: string | null;
   thumbnailUrl?: string | null;
   scriptText?: string | null;
+  sourceFileName?: string | null;
+  sourceFileUrl?: string | null;
 };
 
 // ------------------------------
@@ -285,6 +289,8 @@ function normalizeVideoSummary(raw: unknown): AdminVideoSummary | null {
     createdAt: readStr(raw, "createdAt"),
     updatedAt: readStr(raw, "updatedAt"),
     isPublished: readBool(raw, "isPublished"),
+    sourceFileName: (readStr(raw, "sourceFileName") ?? null) as string | null,
+    sourceFileUrl: (readStr(raw, "sourceFileUrl") ?? null) as string | null,
   };
 }
 
@@ -304,6 +310,8 @@ function normalizeVideoDetail(raw: unknown, fallbackVideoId: string): VideoDetai
     scriptId: (readStr(raw, "scriptId") ?? null) as string | null,
     jobId: (readStr(raw, "jobId") ?? null) as string | null,
     scriptText: (readStr(raw, "scriptText") ?? readStr(raw, "script") ?? null) as string | null,
+    sourceFileName: (readStr(raw, "sourceFileName") ?? null) as string | null,
+    sourceFileUrl: (readStr(raw, "sourceFileUrl") ?? null) as string | null,
   };
 }
 

@@ -215,11 +215,20 @@ function toStdHttpErrorMessage(
         tone: "warn",
         message: `${kindLabel} 실패: 상태가 변경되었습니다. 새로고침 후 다시 시도하세요. (409)`,
       };
-    if (typeof s === "number" && s >= 500)
+    if (typeof s === "number" && s >= 500) {
+      // 데이터베이스 제약 조건 위반 등 구체적인 에러 메시지 확인
+      const errMsg = extractApiErrorMessage(err);
+      if (errMsg && (errMsg.includes("constraint") || errMsg.includes("제약") || errMsg.includes("ck_rag_document_status"))) {
+        return {
+          tone: "danger",
+          message: `${kindLabel} 실패: 데이터베이스 제약 조건 위반입니다. 백엔드 관리자에게 문의하세요. (500)`,
+        };
+      }
       return {
         tone: "danger",
         message: `${kindLabel} 실패: 서버 오류가 발생했습니다. 잠시 후 다시 시도하세요. (500)`,
       };
+    }
 
     // status가 없거나(undefined) 위 케이스에 안 걸리는 경우도 표준 메시지 유지
     return {

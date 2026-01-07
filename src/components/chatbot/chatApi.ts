@@ -1234,6 +1234,30 @@ export async function fetchFaqList(domain: ChatServiceDomain): Promise<FaqItem[]
   return items;
 }
 
+/**
+ * FAQ 목록 캐시 무효화 (특정 도메인 또는 전체)
+ * 승인/반려 후 챗봇 UI의 FAQ 목록을 갱신하기 위해 사용
+ */
+export function invalidateFaqListCache(domain?: ChatServiceDomain): void {
+  if (domain) {
+    const key = String(domain).toUpperCase();
+    faqListCache.delete(key);
+    console.log(`[FAQ API] 캐시 무효화: ${key}`);
+  } else {
+    faqListCache.clear();
+    console.log(`[FAQ API] 전체 FAQ 캐시 무효화`);
+  }
+}
+
+/**
+ * FAQ Home 캐시 무효화
+ */
+export function invalidateFaqHomeCache(): void {
+  faqHomeCache.fetchedAt = 0;
+  faqHomeCache.items = [];
+  console.log(`[FAQ API] FAQ Home 캐시 무효화`);
+}
+
 async function postJsonWithAuth(
   url: string,
   token: string,

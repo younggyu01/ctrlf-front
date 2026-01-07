@@ -67,6 +67,16 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
       // 기간을 시작/종료 날짜로 변환
       const { startDate, endDate } = periodToDateRange(period);
 
+      // 디버깅: 날짜 범위 확인
+      console.log("[AdminLogsTab] 날짜 범위:", {
+        period,
+        startDate,
+        endDate,
+        startDateLocal: new Date(startDate).toLocaleString("ko-KR"),
+        endDateLocal: new Date(endDate).toLocaleString("ko-KR"),
+        현재시간: new Date().toLocaleString("ko-KR"),
+      });
+
       // 필터 파라미터 구성
       const filters: Parameters<typeof getAdminLogs>[0] = {
         startDate,
@@ -107,12 +117,32 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
 
       const response = await getAdminLogs(filters);
 
+      // 디버깅: 응답 데이터 확인
+      console.log("[AdminLogsTab] 응답 데이터:", {
+        totalElements: response.totalElements,
+        contentLength: response.content?.length ?? 0,
+        firstLogTime: response.content?.[0]?.createdAt
+          ? new Date(response.content[0].createdAt).toLocaleString("ko-KR")
+          : null,
+        lastLogTime: response.content?.[response.content.length - 1]?.createdAt
+          ? new Date(response.content[response.content.length - 1].createdAt).toLocaleString("ko-KR")
+          : null,
+        logs: response.content?.slice(0, 3).map((log) => ({
+          id: log.id,
+          createdAt: log.createdAt,
+          createdAtLocal: new Date(log.createdAt).toLocaleString("ko-KR"),
+          userId: log.userId,
+          domain: log.domain,
+        })),
+      });
+
       // 에러 로그만 필터링 (백엔드에서 지원하지 않는 경우 클라이언트 측 필터링)
       let filteredLogs = response.content || [];
       if (logOnlyError) {
         filteredLogs = filteredLogs.filter((item) => item.errorCode != null);
       }
 
+      console.log("[AdminLogsTab] 필터링 후 로그 개수:", filteredLogs.length);
       setLogs(filteredLogs);
     } catch (err) {
       let errorMessage = "로그 조회에 실패했습니다.";
@@ -176,6 +206,18 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
   // 필터 변경 시 로그 조회
   useEffect(() => {
     void fetchLogs();
+  }, [fetchLogs]);
+
+  // 자동 새로고침: 30초마다 최신 로그 확인
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      void fetchLogs();
+    }, 30000); // 30초마다 새로고침
+
+    // 컴포넌트 언마운트 시 인터벌 정리
+    return () => {
+      clearInterval(intervalId);
+    };
   }, [fetchLogs]);
 
   const filteredItems = logs;

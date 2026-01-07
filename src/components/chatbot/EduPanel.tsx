@@ -857,80 +857,80 @@ const EduPanel: React.FC<EduPanelProps> = ({
     [abortWatchResolve, setPresignState, pushToastOnce]
   );
 
-  // =========================
-  // [수정] handleVideoClick 정의를 여기로 이동 (자동 재생 useEffect보다 위로)
-  // =========================
-  const handleVideoClick = useCallback(
-    async (educationId: string, educationTitle: string, video: UiVideo) => {
-      const raw = (video.videoUrl ?? "").trim();
-      if (!raw) {
-        pushToast("영상 URL이 없습니다. 관리자에게 문의해 주세요.", "warn");
-        return;
-      }
+  // // =========================
+  // // [수정] handleVideoClick 정의를 여기로 이동 (자동 재생 useEffect보다 위로)
+  // // =========================
+  // const handleVideoClick = useCallback(
+  //   async (educationId: string, educationTitle: string, video: UiVideo) => {
+  //     const raw = (video.videoUrl ?? "").trim();
+  //     if (!raw) {
+  //       pushToast("영상 URL이 없습니다. 관리자에게 문의해 주세요.", "warn");
+  //       return;
+  //     }
 
-      // watch 전환 시 이전 resolve는 abort
-      abortWatchResolve();
+  //     // watch 전환 시 이전 resolve는 abort
+  //     abortWatchResolve();
 
-      listRestoreRef.current = { size: sizeRef.current, pos: posRef.current };
+  //     listRestoreRef.current = { size: sizeRef.current, pos: posRef.current };
 
-      const base = clamp(video.progress ?? 0, 0, 100);
+  //     const base = clamp(video.progress ?? 0, 0, 100);
 
-      // watch 패널부터 먼저 열어 UX 지연 방지
-      const prevPos = posRef.current;
-      const prevSize = sizeRef.current;
-      const nextSize = WATCH_DEFAULT_SIZE;
-      const minTop = getMinTop(topSafeRef.current);
-      setSize(nextSize);
-      setPanelPos(derivePosByBottomRight(prevPos, prevSize, nextSize, minTop));
+  //     // watch 패널부터 먼저 열어 UX 지연 방지
+  //     const prevPos = posRef.current;
+  //     const prevSize = sizeRef.current;
+  //     const nextSize = WATCH_DEFAULT_SIZE;
+  //     const minTop = getMinTop(topSafeRef.current);
+  //     setSize(nextSize);
+  //     setPanelPos(derivePosByBottomRight(prevPos, prevSize, nextSize, minTop));
 
-      // 초기 선택 상태 (rawVideoUrl은 항상 유지)
-      const knownPlayable = getKnownPlayableUrl(video.id, raw);
+  //     // 초기 선택 상태 (rawVideoUrl은 항상 유지)
+  //     const knownPlayable = getKnownPlayableUrl(video.id, raw);
 
-      setSelectedVideo({
-        ...video,
-        educationId,
-        educationTitle,
-        rawVideoUrl: raw,
-        videoUrl: knownPlayable, // presign된 URL이 있으면 즉시 반영
-        progress: base,
-      });
+  //     setSelectedVideo({
+  //       ...video,
+  //       educationId,
+  //       educationTitle,
+  //       rawVideoUrl: raw,
+  //       videoUrl: knownPlayable, // presign된 URL이 있으면 즉시 반영
+  //       progress: base,
+  //     });
 
-      // watch 상태 초기화
-      setWatchPercent(base);
+  //     // watch 상태 초기화
+  //     setWatchPercent(base);
 
-      // 완료/완료요청 상태 초기화
-      completedSentRef.current = Boolean(video.completed) || base >= 100;
-      completeRequestPosRef.current = null;
+  //     // 완료/완료요청 상태 초기화
+  //     completedSentRef.current = Boolean(video.completed) || base >= 100;
+  //     completeRequestPosRef.current = null;
 
-      maxWatchedTimeRef.current = 0;
-      videoDurationRef.current = 0;
-      watchTimeAccumRef.current = 0;
-      lastTimeSampleRef.current = null;
-      setIsPlaying(false);
-      setSaveStatus("idle");
-      clearSaveTimer();
+  //     maxWatchedTimeRef.current = 0;
+  //     videoDurationRef.current = 0;
+  //     watchTimeAccumRef.current = 0;
+  //     lastTimeSampleRef.current = null;
+  //     setIsPlaying(false);
+  //     setSaveStatus("idle");
+  //     clearSaveTimer();
 
-      // playable이 이미 확보되면 끝
-      if (knownPlayable) {
-        setPresignState(video.id, { status: "ready", url: knownPlayable });
-        return;
-      }
+  //     // playable이 이미 확보되면 끝
+  //     if (knownPlayable) {
+  //       setPresignState(video.id, { status: "ready", url: knownPlayable });
+  //       return;
+  //     }
 
-      // 아니면 presign resolve
-      try {
-        const resolved = await resolvePlayableUrl(video.id, raw, { watch: true });
+  //     // 아니면 presign resolve
+  //     try {
+  //       const resolved = await resolvePlayableUrl(video.id, raw, { watch: true });
 
-        // 이미 다른 영상으로 이동한 경우 state 업데이트 금지
-        const cur = selectedVideoRef.current;
-        if (!cur || cur.id !== video.id) return;
+  //       // 이미 다른 영상으로 이동한 경우 state 업데이트 금지
+  //       const cur = selectedVideoRef.current;
+  //       if (!cur || cur.id !== video.id) return;
 
-        setSelectedVideo((prev) => (prev && prev.id === video.id ? { ...prev, videoUrl: resolved } : prev));
-      } catch (e: unknown) {
-        if (isAbortError(e)) return;
-      }
-    },
-    [abortWatchResolve, clearSaveTimer, getKnownPlayableUrl, pushToast, resolvePlayableUrl, setPresignState]
-  );
+  //       setSelectedVideo((prev) => (prev && prev.id === video.id ? { ...prev, videoUrl: resolved } : prev));
+  //     } catch (e: unknown) {
+  //       if (isAbortError(e)) return;
+  //     }
+  //   },
+  //   [abortWatchResolve, clearSaveTimer, getKnownPlayableUrl, pushToast, resolvePlayableUrl, setPresignState]
+  // );
 
   // =========================
   // (1) getResumeSeconds (실사용)

@@ -70,7 +70,7 @@ const DOCK_SAFE_BOTTOM = 60;
 const QUIZ_LAYER_Z = 2147483000;
 
 // 초기/자동 높이조정 시 "아래 잘림" 방지용 (패널을 화면 안쪽으로 살짝 끌어올림)
-const OPEN_VISIBLE_MARGIN = 16;
+const OPEN_VISIBLE_MARGIN = 80;
 
 // =========================
 // UI Timeout (EduPanel과 동일 목적)
@@ -2303,7 +2303,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       }}
     >
       <div
-        className="cb-edu-panel-container"
+        className="cb-quiz-panel-container"
         style={{
           position: "fixed",
           top: panelPos.top,
@@ -2312,7 +2312,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         }}
       >
         <div
-          className="cb-edu-panel cb-chatbot-panel"
+          className="cb-quiz-panel cb-chatbot-panel"
           style={{ width: size.width, height: size.height }}
           onMouseDown={() => onRequestFocus?.()}
         >
@@ -2373,7 +2373,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
             ✕
           </button>
 
-          <div className="cb-edu-panel-inner" ref={contentRef} style={{ position: "relative" }}>
+          <div className="cb-quiz-panel-inner" ref={contentRef} style={{ position: "relative" }}>
             {resultMessage && (
               <div
                 style={{
@@ -2466,12 +2466,12 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
             {/* 로딩/에러 */}
             {mode === "dashboard" && loading && (
-              <div style={{ padding: 18, fontSize: 13, color: "#cbd5e1" }}>퀴즈 데이터를 불러오는 중입니다...</div>
+              <div className="cb-quiz-padding-medium cb-quiz-text-medium cb-quiz-text-muted">퀴즈 데이터를 불러오는 중입니다...</div>
             )}
 
             {mode === "dashboard" && !loading && loadError && (
-              <div style={{ padding: 18 }}>
-                <div style={{ fontSize: 13, color: "#fecaca", marginBottom: 10 }}>
+              <div className="cb-quiz-padding-medium">
+                <div className="cb-quiz-text-medium cb-quiz-text-error" style={{ marginBottom: 10 }}>
                   불러오기에 실패했습니다: {loadError}
                 </div>
                 <button
@@ -2496,7 +2496,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                   </div>
 
                   {departments.length === 0 ? (
-                    <div style={{ padding: 14, fontSize: 12, color: "#94a3b8" }}>
+                    <div className="cb-quiz-padding-small cb-quiz-text-normal cb-quiz-text-secondary">
                       표시할 부서 점수 데이터가 없습니다.
                     </div>
                   ) : (
@@ -2545,7 +2545,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                   </div>
 
                   {courses.length === 0 ? (
-                    <div style={{ padding: 14, fontSize: 12, color: "#94a3b8" }}>표시할 퀴즈가 없습니다.</div>
+                    <div className="cb-quiz-padding-small cb-quiz-text-normal cb-quiz-text-secondary">표시할 퀴즈가 없습니다.</div>
                   ) : (
                     <div className="cb-quiz-course-row">
                       <button
@@ -2673,27 +2673,17 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                                   <div className="cb-quiz-progress-bar-fill" style={{ width: `${progressPercent}%` }} />
                                 </div>
 
-                                <div
-                                  style={{
-                                    marginTop: 10,
-                                    fontSize: 12,
-                                    color: "#94a3b8",
-                                    display: "grid",
-                                    gridTemplateColumns: "1fr 1fr",
-                                    rowGap: 6,
-                                    columnGap: 10,
-                                  }}
-                                >
-                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                <div className="cb-quiz-course-info-grid">
+                                  <div className="cb-quiz-course-info-item">
                                     <span>합격 기준</span>
-                                    <span style={{ color: "#e2e8f0" }}>
+                                    <span className="cb-quiz-text-value">
                                       {metaPassScore !== null ? `${Math.round(metaPassScore)}점` : "-"}
                                     </span>
                                   </div>
 
-                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                  <div className="cb-quiz-course-info-item">
                                     <span>재응시</span>
-                                    <span style={{ color: "#e2e8f0" }}>
+                                    <span className="cb-quiz-text-value">
                                       {metaRetry
                                         ? metaRetry.canRetry === null
                                           ? "-"
@@ -2706,9 +2696,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                                     </span>
                                   </div>
 
-                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                  <div className="cb-quiz-course-info-item">
                                     <span>남은 횟수</span>
-                                    <span style={{ color: "#e2e8f0" }}>
+                                    <span className="cb-quiz-text-value">
                                       {metaRetry
                                         ? `${metaRetry.remainingAttempts ?? "-"} / ${metaRetry.maxAttempts ?? "-"}`
                                         : fallbackRemaining !== null && course.maxAttempts !== null
@@ -2717,9 +2707,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                                     </span>
                                   </div>
 
-                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                  <div className="cb-quiz-course-info-item">
                                     <span>응시 횟수</span>
-                                    <span style={{ color: "#e2e8f0" }}>
+                                    <span className="cb-quiz-text-value">
                                       {metaRetry?.usedAttempts !== null && metaRetry?.usedAttempts !== undefined
                                         ? `${metaRetry.usedAttempts}`
                                         : `${course.attemptCount}`}
@@ -2728,13 +2718,13 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                                 </div>
 
                                 {attemptsErr && (
-                                  <p className="cb-quiz-locked-text" style={{ color: "#fecaca" }}>
+                                  <p className="cb-quiz-locked-text cb-quiz-text-error">
                                     응시 내역/메타 불러오기 실패: {attemptsErr}
                                   </p>
                                 )}
 
                                 {attemptResultErr && (
-                                  <p className="cb-quiz-locked-text" style={{ color: "#fecaca" }}>
+                                  <p className="cb-quiz-locked-text cb-quiz-text-error">
                                     응시 결과 불러오기 실패: {attemptResultErr}
                                   </p>
                                 )}
@@ -2742,13 +2732,13 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                                 {isLocked && <p className="cb-quiz-locked-text">교육 이수 완료 후 퀴즈를 풀 수 있어요.</p>}
 
                                 {!isLocked && coursePassed === true && (
-                                  <p className="cb-quiz-locked-text" style={{ color: "#a7f3d0" }}>
+                                  <p className="cb-quiz-locked-text cb-quiz-text-success">
                                     이미 합격 처리되었습니다. 오답노트만 확인할 수 있어요.
                                   </p>
                                 )}
 
                                 {!isLocked && metaRetry?.reason && (
-                                  <p className="cb-quiz-locked-text" style={{ color: "#cbd5e1" }}>
+                                  <p className="cb-quiz-locked-text cb-quiz-text-muted">
                                     {metaRetry.reason}
                                   </p>
                                 )}
@@ -2802,24 +2792,17 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                     <h2 className="cb-quiz-solve-title">퀴즈풀기</h2>
 
                     <div className="cb-quiz-solve-tabs" title="남은 시간">
-                      <div className="cb-quiz-solve-tab is-active" style={{ minWidth: 86 }}>
+                      <div className="cb-quiz-solve-tab is-active cb-quiz-solve-tab-active">
                         {formatRemaining(remainingSeconds)}
                       </div>
                     </div>
                   </div>
 
-                  <div className="cb-quiz-solve-meta" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div className="cb-quiz-solve-meta cb-quiz-flex-center">
                     <span>{solve.course.title}</span>
 
                     <span
-                      style={{
-                        fontSize: 12,
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                        border: "1px solid rgba(148,163,184,.35)",
-                        background: "rgba(15,23,42,.25)",
-                        color: "#e2e8f0",
-                      }}
+                      className="cb-quiz-solve-meta-badge"
                       title={
                         saveState.status === "saved"
                           ? `저장됨${saveState.savedAt ? ` (${saveState.savedAt})` : ""}`
@@ -2877,25 +2860,17 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                       </button>
                     </div>
 
-                    <div
-                      style={{
-                        padding: "10px 14px",
-                        fontSize: 12,
-                        color: "#94a3b8",
-                        display: "grid",
-                        rowGap: 6,
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <div className="cb-quiz-solve-info-grid">
+                      <div className="cb-quiz-flex-row">
                         <span>합격 기준(passScore)</span>
-                        <span style={{ color: "#e2e8f0" }}>
+                        <span className="cb-quiz-text-value">
                           {Number.isFinite(solvePassScoreDisplay) ? `${Math.round(solvePassScoreDisplay)}점` : "-"}
                         </span>
                       </div>
 
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                      <div className="cb-quiz-flex-row">
                         <span>재응시(retry-info)</span>
-                        <span style={{ color: "#e2e8f0" }}>
+                        <span className="cb-quiz-text-value">
                           {solveRetryDisplay
                             ? solveRetryDisplay.canRetry === null
                               ? "-"
@@ -2906,16 +2881,16 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         </span>
                       </div>
 
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                      <div className="cb-quiz-flex-row">
                         <span>남은 횟수</span>
-                        <span style={{ color: "#e2e8f0" }}>
+                        <span className="cb-quiz-text-value">
                           {solveRetryDisplay
                             ? `${solveRetryDisplay.remainingAttempts ?? "-"} / ${solveRetryDisplay.maxAttempts ?? "-"}`
                             : "-"}
                         </span>
                       </div>
 
-                      <div style={{ opacity: 0.9 }}>
+                      <div className="cb-quiz-opacity-90">
                         서버 DTO가 아직 내려오지 않는 환경에서는 기본 합격 기준 {DEFAULT_PASSING_SCORE}점으로 표시됩니다.
                       </div>
                     </div>
@@ -2940,18 +2915,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                     <h2 className="cb-quiz-solve-title">결과</h2>
                   </div>
 
-                  <div className="cb-quiz-solve-meta" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div className="cb-quiz-solve-meta cb-quiz-flex-center">
                     <span>{resultCourse.title}</span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                        border: "1px solid rgba(148,163,184,.35)",
-                        background: "rgba(15,23,42,.25)",
-                        color: "#e2e8f0",
-                      }}
-                    >
+                    <span className="cb-quiz-solve-meta-badge">
                       {resultPassed === null ? "결과 확인" : resultPassed ? "합격" : "불합격"}
                     </span>
                   </div>
@@ -2959,42 +2925,42 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
                 <div className="cb-quiz-solve-body">
                   <div className="cb-quiz-solve-card">
-                    <div style={{ padding: "14px 14px 10px", display: "grid", rowGap: 10 }}>
+                    <div className="cb-quiz-padding-result cb-quiz-grid-small">
                       {resultLoading ? (
-                        <div style={{ fontSize: 13, color: "#cbd5e1" }}>결과를 불러오는 중입니다...</div>
+                        <div className="cb-quiz-text-medium cb-quiz-text-muted">결과를 불러오는 중입니다...</div>
                       ) : resultError ? (
-                        <div style={{ fontSize: 13, color: "#fecaca" }}>결과 불러오기 실패: {resultError}</div>
+                        <div className="cb-quiz-text-medium cb-quiz-text-error">결과 불러오기 실패: {resultError}</div>
                       ) : (
                         <>
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <span style={{ color: "#94a3b8", fontSize: 12 }}>점수</span>
-                            <span style={{ color: "#e2e8f0", fontWeight: 700 }}>
+                          <div className="cb-quiz-flex-row">
+                            <span className="cb-quiz-result-label">점수</span>
+                            <span className="cb-quiz-result-value">
                               {resultUi?.score !== null && resultUi?.score !== undefined ? `${Math.round(resultUi.score)}점` : "-"}
                             </span>
                           </div>
 
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <span style={{ color: "#94a3b8", fontSize: 12 }}>정답/전체</span>
-                            <span style={{ color: "#e2e8f0" }}>
+                          <div className="cb-quiz-flex-row">
+                            <span className="cb-quiz-result-label">정답/전체</span>
+                            <span className="cb-quiz-text-value">
                               {resultUi?.correctCount ?? "-"} / {resultUi?.totalCount ?? "-"}
                             </span>
                           </div>
 
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <span style={{ color: "#94a3b8", fontSize: 12 }}>오답</span>
-                            <span style={{ color: "#e2e8f0" }}>{resultUi?.wrongCount ?? "-"}</span>
+                          <div className="cb-quiz-flex-row">
+                            <span className="cb-quiz-result-label">오답</span>
+                            <span className="cb-quiz-text-value">{resultUi?.wrongCount ?? "-"}</span>
                           </div>
 
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <span style={{ color: "#94a3b8", fontSize: 12 }}>합격 기준(passScore)</span>
-                            <span style={{ color: "#e2e8f0" }}>
+                          <div className="cb-quiz-flex-row">
+                            <span className="cb-quiz-result-label-small">합격 기준(passScore)</span>
+                            <span className="cb-quiz-text-value">
                               {resultPassScore !== null ? `${Math.round(resultPassScore)}점` : "-"}
                             </span>
                           </div>
 
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <span style={{ color: "#94a3b8", fontSize: 12 }}>재응시(retry-info)</span>
-                            <span style={{ color: "#e2e8f0" }}>
+                          <div className="cb-quiz-flex-row">
+                            <span className="cb-quiz-result-label-small">재응시(retry-info)</span>
+                            <span className="cb-quiz-text-value">
                               {resultRetry
                                 ? resultRetry.canRetry === null
                                   ? "-"
@@ -3005,21 +2971,21 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                             </span>
                           </div>
 
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <span style={{ color: "#94a3b8", fontSize: 12 }}>남은 횟수</span>
-                            <span style={{ color: "#e2e8f0" }}>
+                          <div className="cb-quiz-flex-row">
+                            <span className="cb-quiz-result-label-small">남은 횟수</span>
+                            <span className="cb-quiz-text-value">
                               {resultRetry ? `${resultRetry.remainingAttempts ?? "-"} / ${resultRetry.maxAttempts ?? "-"}` : "-"}
                             </span>
                           </div>
 
                           {resultUi?.submittedAt && (
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                              <span style={{ color: "#94a3b8", fontSize: 12 }}>제출 시각</span>
-                              <span style={{ color: "#e2e8f0", fontSize: 12 }}>{resultUi.submittedAt}</span>
+                            <div className="cb-quiz-flex-row">
+                              <span className="cb-quiz-result-label">제출 시각</span>
+                              <span className="cb-quiz-text-value cb-quiz-text-normal">{resultUi.submittedAt}</span>
                             </div>
                           )}
 
-                          <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                          <div className="cb-quiz-result-actions">
                             <button
                               type="button"
                               className="cb-quiz-note-btn"
@@ -3066,18 +3032,9 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                     <h2 className="cb-quiz-solve-title">오답노트</h2>
                   </div>
 
-                  <div className="cb-quiz-solve-meta" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div className="cb-quiz-solve-meta cb-quiz-flex-center">
                     <span>{noteCourse.title}</span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                        border: "1px solid rgba(148,163,184,.35)",
-                        background: "rgba(15,23,42,.25)",
-                        color: "#e2e8f0",
-                      }}
-                    >
+                    <span className="cb-quiz-solve-meta-badge">
                       {noteAttemptIndex + 1}회차
                     </span>
                   </div>
@@ -3085,46 +3042,26 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
                 <div className="cb-quiz-solve-body">
                   <div className="cb-quiz-solve-card">
-                    <div style={{ padding: 14 }}>
+                    <div className="cb-quiz-padding-small">
                       {noteLoading ? (
-                        <div style={{ fontSize: 13, color: "#cbd5e1" }}>오답노트를 불러오는 중입니다...</div>
+                        <div className="cb-quiz-text-medium cb-quiz-text-muted">오답노트를 불러오는 중입니다...</div>
                       ) : noteError ? (
-                        <div style={{ fontSize: 13, color: "#fecaca" }}>불러오기 실패: {noteError}</div>
+                        <div className="cb-quiz-text-medium cb-quiz-text-error">불러오기 실패: {noteError}</div>
                       ) : noteItems.length === 0 ? (
-                        <div style={{ fontSize: 13, color: "#cbd5e1" }}>표시할 오답이 없습니다.</div>
+                        <div className="cb-quiz-text-medium cb-quiz-text-muted">표시할 오답이 없습니다.</div>
                       ) : (
-                        <div style={{ display: "grid", gap: 10 }}>
+                        <div className="cb-quiz-grid-note">
                           {noteItems.map((it) => (
                             <button
                               key={`${it.attemptId}-${it.questionNumber}`}
                               type="button"
-                              className="cb-quiz-note-btn"
+                              className="cb-quiz-note-btn cb-quiz-note-item-btn"
                               onClick={() => setNoteModal(it)}
-                              style={{
-                                textAlign: "left",
-                                width: "100%",
-                                display: "flex",
-                                alignItems: "flex-start",
-                                gap: 10,
-                              }}
                             >
-                              <span
-                                style={{
-                                  minWidth: 28,
-                                  height: 28,
-                                  borderRadius: 8,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  background: "rgba(148,163,184,.15)",
-                                  border: "1px solid rgba(148,163,184,.25)",
-                                  color: "#e2e8f0",
-                                  fontWeight: 700,
-                                }}
-                              >
+                              <span className="cb-quiz-note-item-number">
                                 {it.questionNumber}
                               </span>
-                              <span style={{ color: "#e2e8f0", lineHeight: 1.45 }}>{it.questionText}</span>
+                              <span className="cb-quiz-note-item-text">{it.questionText}</span>
                             </button>
                           ))}
                         </div>
@@ -3138,30 +3075,15 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                   <div
                     role="dialog"
                     aria-modal="true"
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background: "rgba(2,6,23,.55)",
-                      padding: 16,
-                    }}
+                    className="cb-quiz-note-modal-backdrop"
                     onClick={() => setNoteModal(null)}
                   >
                     <div
-                      style={{
-                        width: "min(720px, 100%)",
-                        borderRadius: 14,
-                        background: "rgba(15,23,42,.92)",
-                        border: "1px solid rgba(148,163,184,.25)",
-                        boxShadow: "0 20px 60px rgba(0,0,0,.45)",
-                        padding: 16,
-                      }}
+                      className="cb-quiz-note-modal"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                        <div style={{ color: "#e2e8f0", fontWeight: 800 }}>{noteModal.questionNumber}번 문제</div>
+                      <div className="cb-quiz-note-modal-header">
+                        <div className="cb-quiz-note-modal-title">{noteModal.questionNumber}번 문제</div>
                         <button
                           type="button"
                           className="cb-quiz-note-btn"
@@ -3172,12 +3094,12 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         </button>
                       </div>
 
-                      <div style={{ marginTop: 12, color: "#e2e8f0", lineHeight: 1.55 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6, color: "#cbd5e1" }}>문제</div>
-                        <div style={{ marginBottom: 12 }}>{noteModal.questionText}</div>
+                      <div className="cb-quiz-note-modal-body">
+                        <div className="cb-quiz-note-modal-section-title">문제</div>
+                        <div className="cb-quiz-note-modal-section-content">{noteModal.questionText}</div>
 
-                        <div style={{ fontWeight: 700, marginBottom: 6, color: "#cbd5e1" }}>해설</div>
-                        <div style={{ whiteSpace: "pre-wrap" }}>{noteModal.explanation || "해설이 없습니다."}</div>
+                        <div className="cb-quiz-note-modal-section-title">해설</div>
+                        <div className="cb-quiz-note-modal-explanation">{noteModal.explanation || "해설이 없습니다."}</div>
                       </div>
                     </div>
                   </div>

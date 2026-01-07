@@ -98,7 +98,6 @@ const INFRA_BASE = String(ENV.VITE_INFRA_API_BASE ?? "/api-infra").replace(
   /\/$/,
   ""
 );
-const RAG_BASE = String(ENV.VITE_RAG_API_BASE ?? INFRA_BASE).replace(/\/$/, "");
 
 /**
  * Creator Studio “실 API” 기본값 (env로 오버라이드 가능)
@@ -2232,6 +2231,12 @@ export function useCreatorStudioController(
   // 서버 로딩
   const [items, setItems] = useState<CreatorWorkItem[]>([]);
   const [educations, setEducations] = useState<EduSummary[]>([]);
+  
+  // items 상태의 최신 값을 보장하기 위한 ref
+  const itemsRef = useRef<CreatorWorkItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   type CreatorCatalogState = {
     categories: CategoryOption[];
@@ -2567,7 +2572,8 @@ export function useCreatorStudioController(
 
     const sorted = sortItems(allowedItems, "updated_desc");
     const byTab = sorted.filter((it) => tabMatchesStatus(tab, it));
-    const fallback = (byTab[0] ?? sorted[0] ?? null)?.id ?? null;
+    // 탭에 맞는 아이템이 있으면 첫 번째를, 없으면 null 반환 (다른 탭의 아이템을 선택하지 않음)
+    const fallback = (byTab[0] ?? null)?.id ?? null;
 
     if (!rawSelectedId) return fallback;
 
@@ -2575,8 +2581,9 @@ export function useCreatorStudioController(
     if (!exists) return fallback;
 
     const cur = allowedItems.find((it) => it.id === rawSelectedId) ?? null;
+    // 현재 선택된 아이템이 탭과 맞지 않으면, 탭에 맞는 첫 번째 아이템을 선택 (없으면 null)
     if (cur && !tabMatchesStatus(tab, cur)) {
-      return (byTab[0] ?? null)?.id ?? null;
+      return fallback;
     }
 
     return rawSelectedId;
@@ -2952,9 +2959,23 @@ export function useCreatorStudioController(
       );
 
       // 기존 items의 sourceFiles와 script 정보 보존 (로컬에 저장된 파일 정보 유지)
-      // items 상태를 직접 참조하여 merged 계산 (setItems 콜백과 동일한 로직)
+      // itemsRef를 사용하여 최신 상태를 보장 (setItems 직후 refreshItems 호출 시 이전 상태 참조 방지)
       // normalizeCreatorSourceFiles 호출 전에 prevMap을 생성하여 기존 파일 정보를 보존
-      const prevMap = new Map(items.map((it) => [it.id, it]));
+      const currentItems = itemsRef.current;
+      const prevMap = new Map(currentItems.map((it) => [it.id, it]));
+      
+      // 디버깅: refreshItems 호출 시점 확인
+      console.log("[refreshItems] 호출됨:", {
+        itemsCount: currentItems.length,
+        prevMapSize: prevMap.size,
+        itemsWithSourceFiles: currentItems.filter(it => 
+          Array.isArray(it.assets?.sourceFiles) && it.assets.sourceFiles.length > 0
+        ).map(it => ({
+          id: it.id,
+          sourceFilesCount: Array.isArray(it.assets?.sourceFiles) ? it.assets.sourceFiles.length : 0,
+          sourceFileName: it.assets?.sourceFileName ?? "",
+        })),
+      });
 
       const normalized = normalizeCreatorSourceFiles(videos);
 
@@ -3029,6 +3050,17 @@ export function useCreatorStudioController(
 
       const merged = normalizedWithScriptIds.map((newItem) => {
         const prevItem = prevMap.get(newItem.id);
+        
+        // 디버깅: prevItem 확인
+        if (prevItem && Array.isArray(prevItem.assets.sourceFiles) && prevItem.assets.sourceFiles.length > 0) {
+          console.log("[refreshItems] prevItem 발견:", {
+            videoId: newItem.id,
+            prevSourceFilesCount: prevItem.assets.sourceFiles.length,
+            prevSourceFileName: prevItem.assets.sourceFileName,
+            newSourceFilesCount: Array.isArray(newItem.assets.sourceFiles) ? newItem.assets.sourceFiles.length : 0,
+            newSourceFileName: newItem.assets.sourceFileName,
+          });
+        }
 
         // prevItem이 없는 경우 (페이지를 처음 열거나 닫았다가 다시 열었을 때)
         // API 응답에서 받아온 sourceFileName, sourceFileUrl을 사용 (세션 스토리지 대신)
@@ -3056,6 +3088,25 @@ export function useCreatorStudioController(
             !f.id.startsWith("src-legacy-") &&
             !f.id.startsWith("SRC_TMP")
         );
+        
+        // 디버깅: prevSourceFiles 구조 확인
+        if (prevSourceFiles.length > 0 && prevRealSourceFiles.length === 0) {
+          console.log("[refreshItems] prevSourceFiles 필터링 결과:", {
+            videoId: newItem.id,
+            prevSourceFilesCount: prevSourceFiles.length,
+            prevRealSourceFilesCount: prevRealSourceFiles.length,
+            prevSourceFilesSample: prevSourceFiles.slice(0, 2).map(f => ({
+              id: f?.id,
+              name: f?.name,
+              hasId: "id" in (f || {}),
+              idType: typeof f?.id,
+              idStartsWith: f?.id ? {
+                srcLegacy: f.id.startsWith("src-legacy-"),
+                srcTmp: f.id.startsWith("SRC_TMP"),
+              } : null,
+            })),
+          });
+        }
 
         // 새 sourceFiles 중 실제 업로드된 파일(레거시가 아닌, 임시 ID가 아닌) 확인
         const newRealSourceFiles = newSourceFiles.filter(
@@ -3118,6 +3169,7 @@ export function useCreatorStudioController(
         // 2. 기존에 실제 파일명이 있고, 새 것이 없거나 UUID이면 보존
         // 3. 백엔드 응답에 sourceFiles가 없거나 빈 경우 보존
         // 4. 새 응답의 documentId가 기존 것과 다르면 보존 (백엔드가 잘못된 documentId를 반환할 수 있음)
+        // 5. 기존 sourceFiles가 있고 새 sourceFiles가 비어있으면 항상 보존 (파일 업로드 직후 백엔드가 아직 반영하지 않은 경우)
         const shouldPreserveSourceFiles =
           prevRealSourceFiles.length > 0 || // 기존에 실제 업로드된 파일이 있으면 항상 보존
           prevHasRealFileInfo || // 기존 sourceFiles에 실제 파일명이 있으면 보존
@@ -3126,7 +3178,8 @@ export function useCreatorStudioController(
           (newRealSourceFiles.length === 0 && prevRealSourceFiles.length > 0) || // 백엔드 응답에 sourceFiles가 없거나 빈 경우 보존
           (prevRealSourceFiles.length > 0 &&
             newRealSourceFiles.length > 0 &&
-            prevRealSourceFiles[0].id !== newRealSourceFiles[0].id); // 기존과 새 것의 documentId가 다르면 기존 것 보존
+            prevRealSourceFiles[0].id !== newRealSourceFiles[0].id) || // 기존과 새 것의 documentId가 다르면 기존 것 보존
+          (prevSourceFiles.length > 0 && newSourceFiles.length === 0); // 기존 sourceFiles가 있고 새 것이 비어있으면 보존 (파일 업로드 직후 보호)
         // script 보존 여부 확인 (기존 script가 있으면 항상 보존, 새 것이 없거나 비어있으면 보존)
         // scriptId가 있으면 scriptText도 보존 (스크립트가 생성되었음을 의미)
         const shouldPreserveScript =
@@ -3156,6 +3209,19 @@ export function useCreatorStudioController(
           shouldPreserveScript ||
           shouldPreserveScriptApprovedAt
         ) {
+          // 디버깅: sourceFiles 보존 여부 확인
+          if (shouldPreserveSourceFiles) {
+            console.log("[refreshItems] sourceFiles 보존:", {
+              videoId: newItem.id,
+              prevSourceFilesCount: prevSourceFiles.length,
+              newSourceFilesCount: newSourceFiles.length,
+              prevRealSourceFilesCount: prevRealSourceFiles.length,
+              newRealSourceFilesCount: newRealSourceFiles.length,
+              prevSourceFileName: prevItem.assets.sourceFileName,
+              newSourceFileName: newItem.assets.sourceFileName,
+            });
+          }
+          
           // 기존 sourceFiles, script, scriptId, scriptApprovedAt 보존
           const mergedItem = {
             ...newItem,
@@ -4034,8 +4100,9 @@ export function useCreatorStudioController(
         const documentId = result.documentId;
 
         // id를 documentId로 치환하고 sourceFileUrl도 설정
-        setItems((prev) =>
-          prev.map((it) => {
+        // itemsRef를 즉시 업데이트하여 refreshItems가 최신 상태를 참조하도록 보장
+        setItems((prev) => {
+          const updated = prev.map((it) => {
             if (it.id !== videoIdSnapshot) return it;
             const sf = Array.isArray(it.assets.sourceFiles)
               ? it.assets.sourceFiles
@@ -4074,7 +4141,7 @@ export function useCreatorStudioController(
             }
 
             const primary2 = patched[0];
-            const updated = {
+            const updatedItem = {
               ...it,
               assets: {
                 ...it.assets,
@@ -4087,10 +4154,33 @@ export function useCreatorStudioController(
               },
               updatedAt: Date.now(),
             };
+            
+            // 디버깅: 파일 업로드 후 상태 업데이트 확인
+            console.log("[addSourceFilesToSelected] 상태 업데이트:", {
+              videoId: videoIdSnapshot,
+              documentId,
+              sourceFilesCount: patched.length,
+              sourceFileName: updatedItem.assets.sourceFileName,
+              sourceFiles: patched.map(f => ({ id: f.id, name: f.name })),
+            });
 
-            return updated;
-          })
-        );
+            return updatedItem;
+          });
+          
+          // itemsRef를 즉시 업데이트하여 refreshItems가 최신 상태를 참조하도록 보장
+          itemsRef.current = updated;
+          console.log("[addSourceFilesToSelected] itemsRef 업데이트:", {
+            itemsCount: updated.length,
+            itemsWithSourceFiles: updated.filter(it => 
+              Array.isArray(it.assets?.sourceFiles) && it.assets.sourceFiles.length > 0
+            ).map(it => ({
+              id: it.id,
+              sourceFilesCount: Array.isArray(it.assets?.sourceFiles) ? it.assets.sourceFiles.length : 0,
+              sourceFileName: it.assets?.sourceFileName ?? "",
+            })),
+          });
+          return updated;
+        });
       }
 
       // 파일 업로드 완료 시 최신 정보 가져오기

@@ -1,6 +1,6 @@
 // src/components/chatbot/ragDocumentsApi.ts
 
-import { fetchJson } from "../common/api/authHttp";
+import { fetchJson, getAccessToken } from "../common/api/authHttp";
 
 type EnvLike = Record<string, string | undefined>;
 const ENV = import.meta.env as unknown as EnvLike;
@@ -126,6 +126,15 @@ export async function uploadDocument(payload: {
   uploaderUuid?: string;
 }): Promise<RagUploadResponse> {
   console.log("uploadDocument", payload);
+  
+  // JWT 토큰 확인 - 없으면 명시적으로 에러 발생
+  const token = await getAccessToken(30);
+  if (!token) {
+    throw new Error(
+      "인증 토큰이 없습니다. 로그인이 필요합니다. JWT 토큰을 가져올 수 없습니다."
+    );
+  }
+  
   const res = await fetchJson<Record<string, unknown>>(
     `${INFRA_BASE}/rag/documents/upload`,
     {

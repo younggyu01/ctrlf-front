@@ -829,20 +829,19 @@ function toScore(feedback: FeedbackValue): number | null {
 export async function sendFeedbackToAI(req: ChatFeedbackRequest): Promise<void> {
   const token = await ensureFreshToken();
   if (!token) {
-    console.warn("[chatApi] feedback skipped: not authenticated");
-    return;
+    throw new Error("Not authenticated: Keycloak token is missing.");
   }
 
   if (!isUuidLike(req.sessionId) || !isUuidLike(req.messageId)) {
-    console.warn(
-      "[chatApi] feedback skipped: sessionId/messageId must be UUID",
-      req
-    );
-    return;
+    throw new Error("Feedback failed: sessionId/messageId must be UUID.");
   }
 
   const score = toScore(req.feedback);
-  if (score == null) return;
+  if (score == null) {
+    // null 피드백(평가 해제)은 백엔드에서 지원하지 않으므로 무시
+    console.warn("[chatApi] feedback skipped: null feedback not supported");
+    return;
+  }
 
   const payload: UpstreamChatFeedbackRequest = {
     score,
@@ -865,9 +864,8 @@ export async function sendFeedbackToAI(req: ChatFeedbackRequest): Promise<void> 
 
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
-    console.warn(
-      `[chatApi] feedback failed: ${res.status} ${res.statusText}`,
-      bodyText
+    throw new Error(
+      `Feedback failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
     );
   }
 }

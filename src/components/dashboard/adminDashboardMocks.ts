@@ -335,9 +335,17 @@ export const LOG_MODEL_OPTIONS = [
 ];
 
 /**
- * 프로젝트 부서 기준 + 데이터 양을 늘린 세부 로그 Mock
+ * Mock용 로그 항목 타입 (id가 string이고 일부 필드 optional)
  */
-export const LOG_LIST_MOCK: LogListItem[] = [
+type MockLogListItem = Omit<LogListItem, "id" | "intent" | "errorMessage" | "conversationId" | "turnId" | "questionMasked" | "answerMasked"> & {
+  id: string;
+};
+
+/**
+ * 프로젝트 부서 기준 + 데이터 양을 늘린 세부 로그 Mock
+ * NOTE: Mock 데이터는 실제 API 응답과 일부 필드가 다를 수 있음
+ */
+export const LOG_LIST_MOCK: MockLogListItem[] = [
   {
     id: "log-001",
     createdAt: "2025-12-09 10:21:34",
@@ -770,7 +778,7 @@ export const MOCK_USERS: AdminUserSummary[] = [
     employeeNo: "2024-00321",
     deptCode: "HR",
     deptName: "인사팀",
-    roles: ["EMPLOYEE", "COMPLAINT_MANAGER"],
+    roles: ["EMPLOYEE"],
   },
   {
     id: "user-003",

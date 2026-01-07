@@ -48,6 +48,12 @@ interface ChatWindowProps {
   // 피드백 업데이트 콜백 (세션 상태 업데이트는 상위에서)
   onFeedbackChange?: (messageId: string, value: FeedbackValue) => void;
 
+  // 피드백 요청 중인 메시지 ID Set (in-flight 차단용)
+  feedbackLoadingIds?: Set<string>;
+
+  // 다시시도 요청 중인 메시지 ID (in-flight 차단용)
+  retryLoadingMessageId?: string | null;
+
   // 신고 모달에서 제출 시
   onReportSubmit?: (payload: ReportPayload) => void;
 
@@ -67,6 +73,8 @@ interface UiChatMessage {
   kind?: "normal" | "reportSuggestion" | "reportReceipt";
   // 피드백 (좋아요/별로예요)
   feedback?: FeedbackValue;
+  // 서버 메시지 UUID (피드백/재시도에 필요)
+  serverId?: string;
 }
 
 type FaqFilterDomain = ChatServiceDomain | null; // null = HOME(추천)
@@ -767,6 +775,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onFaqQuickSend,
   onRetryFromMessage,
   onFeedbackChange,
+  feedbackLoadingIds,
+  retryLoadingMessageId,
   onReportSubmit,
   userRole,
   onOpenReviewerPanel,
@@ -1132,10 +1142,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           .map((x) => x.raw)
           .filter((it) => {
             const id = getFaqItemId(it);
-            if (!id || seenIds.has(id)) {
-              if (seenIds.has(id)) {
-                console.log(`[FAQ] 중복 제거:`, id);
-              }
+            if (!id) return false;
+            if (seenIds.has(id)) {
+              console.log(`[FAQ] 중복 제거:`, id);
               return false;
             }
             seenIds.add(id);
@@ -1424,58 +1433,84 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
                         <div className="cb-chat-actions-icon-group">
                           <div className="cb-chat-feedback-group">
-                            <button
-                              type="button"
-                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                                feedback === "up" ? "is-selected" : ""
-                              }`}
-                              onClick={() => {
-                                if (!onFeedbackChange) return;
-                                const next: FeedbackValue = feedback === "up" ? null : "up";
-                                onFeedbackChange(msg.id, next);
-                              }}
-                              title="좋은 응답"
-                              aria-label="도움이 되었어요"
-                              aria-pressed={feedback === "up"}
-                              disabled={!onFeedbackChange}
-                            >
-                              <img
-                                src={feedbackGoodIcon}
-                                alt="좋은 응답"
-                                className="cb-chat-bubble-action-icon"
-                              />
-                            </button>
+                            {(() => {
+                              // 피드백 버튼 비활성화 조건
+                              const hasServerId = Boolean(msg.serverId);
+                              const isFeedbackLoading = feedbackLoadingIds?.has(msg.id) ?? false;
+                              const canFeedback = onFeedbackChange && hasServerId && !isFeedbackLoading;
 
-                            <button
-                              type="button"
-                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                                feedback === "down" ? "is-selected" : ""
-                              }`}
-                              onClick={() => {
-                                if (!onFeedbackChange) return;
-                                const next: FeedbackValue = feedback === "down" ? null : "down";
-                                onFeedbackChange(msg.id, next);
-                              }}
-                              title="별로인 응답"
-                              aria-label="별로인 응답이에요"
-                              aria-pressed={feedback === "down"}
-                              disabled={!onFeedbackChange}
-                            >
-                              <img
-                                src={feedbackBadIcon}
-                                alt="별로예요"
-                                className="cb-chat-bubble-action-icon"
-                              />
-                            </button>
+                              // serverId 없으면 개발자용 경고 (최초 1회만)
+                              if (!hasServerId && isAssistant) {
+                                console.warn(
+                                  `[ChatWindow] 피드백 버튼 비활성화: serverId 없음 (messageId: ${msg.id})`
+                                );
+                              }
+
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                                      feedback === "up" ? "is-selected" : ""
+                                    }${isFeedbackLoading ? " is-loading" : ""}`}
+                                    onClick={() => {
+                                      if (!canFeedback) return;
+                                      // 같은 버튼 재클릭 시 아무 동작 없음 (평가 해제 불가)
+                                      if (feedback === "up") return;
+                                      onFeedbackChange(msg.id, "up");
+                                    }}
+                                    title={!hasServerId ? "피드백 불가 (메시지 처리 중)" : "좋은 응답"}
+                                    aria-label="도움이 되었어요"
+                                    aria-pressed={feedback === "up"}
+                                    disabled={!canFeedback}
+                                  >
+                                    <img
+                                      src={feedbackGoodIcon}
+                                      alt="좋은 응답"
+                                      className="cb-chat-bubble-action-icon"
+                                    />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                                      feedback === "down" ? "is-selected" : ""
+                                    }${isFeedbackLoading ? " is-loading" : ""}`}
+                                    onClick={() => {
+                                      if (!canFeedback) return;
+                                      // 같은 버튼 재클릭 시 아무 동작 없음 (평가 해제 불가)
+                                      if (feedback === "down") return;
+                                      onFeedbackChange(msg.id, "down");
+                                    }}
+                                    title={!hasServerId ? "피드백 불가 (메시지 처리 중)" : "별로인 응답"}
+                                    aria-label="별로인 응답이에요"
+                                    aria-pressed={feedback === "down"}
+                                    disabled={!canFeedback}
+                                  >
+                                    <img
+                                      src={feedbackBadIcon}
+                                      alt="별로예요"
+                                      className="cb-chat-bubble-action-icon"
+                                    />
+                                  </button>
+                                </>
+                              );
+                            })()}
                           </div>
 
                           {sourceQuestion && onRetryFromMessage && (
                             <button
                               type="button"
-                              className="cb-chat-bubble-icon-btn"
-                              onClick={() => onRetryFromMessage(sourceQuestion, "retry")}
-                              disabled={isSending}
-                              title="다시 시도"
+                              className={`cb-chat-bubble-icon-btn${
+                                retryLoadingMessageId === msg.id ? " is-loading" : ""
+                              }`}
+                              onClick={() => {
+                                // in-flight 차단: 이미 재시도 중이면 무시
+                                if (retryLoadingMessageId) return;
+                                onRetryFromMessage(sourceQuestion, "retry");
+                              }}
+                              disabled={isSending || Boolean(retryLoadingMessageId)}
+                              title={retryLoadingMessageId ? "재시도 중..." : "다시 시도"}
                               aria-label="다시 시도"
                             >
                               <img

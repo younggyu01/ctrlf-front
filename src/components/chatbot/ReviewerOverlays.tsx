@@ -53,7 +53,7 @@ const RejectModalBody: React.FC<{
   onCloseDecision: () => void;
   onReject: (reason: string) => void;
 }> = ({
-  rejectTitleId,
+  rejectTitleId: _rejectTitleId,
   rejectDescId,
   initialReason,
   error,
@@ -62,6 +62,7 @@ const RejectModalBody: React.FC<{
   onCloseDecision,
   onReject,
 }) => {
+  void _rejectTitleId; // props로 전달되지만 현재 미사용 (aria-labelledby 용도로 예약)
   const [reason, setReason] = useState(initialReason);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 

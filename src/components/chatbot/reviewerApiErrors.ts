@@ -5,6 +5,7 @@ export type ReviewerApiErrorCode =
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "VALIDATION_ERROR"
+  | "INVALID_REQUEST"
   | "LOCK_CONFLICT"
   | "VERSION_CONFLICT"
   | "ALREADY_PROCESSED"

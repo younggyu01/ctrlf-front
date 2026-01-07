@@ -170,34 +170,5 @@ export async function getAdminLogs(
     });
     throw error;
   }
-
-  // 응답이 배열 형태로 올 수도 있음 (방어적 처리)
-  if (Array.isArray(response)) {
-    return {
-      content: response,
-      page: 0,
-      size: response.length,
-      totalElements: response.length,
-      totalPages: 1,
-      first: true,
-      last: true,
-    };
-  }
-
-  // 응답이 객체 형태인 경우
-  if (response && typeof response === "object" && "content" in response) {
-    return response as LogsResponse;
-  }
-
-  // content 필드가 없는 경우 빈 배열로 반환
-  return {
-    content: [],
-    page: 0,
-    size: 0,
-    totalElements: 0,
-    totalPages: 0,
-    first: true,
-    last: true,
-  };
 }
 

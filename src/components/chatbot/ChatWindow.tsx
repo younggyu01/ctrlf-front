@@ -1,5 +1,11 @@
 // src/components/chatbot/ChatWindow.tsx
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import robotIcon from "../../assets/robot.png";
 import quizIcon from "../../assets/quiz.png";
 import eduIcon from "../../assets/edu.png";
@@ -17,6 +23,7 @@ import feedbackBadIcon from "../../assets/chat-bad.png"; // 별로예요 아이�
 import type {
   ChatDomain,
   ChatSession,
+  ChatSource,
   FeedbackValue,
   ReportPayload,
   ChatServiceDomain,
@@ -43,10 +50,19 @@ interface ChatWindowProps {
   onFaqQuickSend?: (faqKey: number | string) => void;
 
   // 답변 기준 다시 시도 버튼
-  onRetryFromMessage?: (sourceQuestion: string, mode: "retry" | "variant") => void;
+  onRetryFromMessage?: (
+    sourceQuestion: string,
+    mode: "retry" | "variant"
+  ) => void;
 
   // 피드백 업데이트 콜백 (세션 상태 업데이트는 상위에서)
   onFeedbackChange?: (messageId: string, value: FeedbackValue) => void;
+
+  // 피드백 요청 중인 메시지 ID Set (in-flight 차단용)
+  feedbackLoadingIds?: Set<string>;
+
+  // 다시시도 요청 중인 메시지 ID (in-flight 차단용)
+  retryLoadingMessageId?: string | null;
 
   // 신고 모달에서 제출 시
   onReportSubmit?: (payload: ReportPayload) => void;
@@ -67,12 +83,18 @@ interface UiChatMessage {
   kind?: "normal" | "reportSuggestion" | "reportReceipt";
   // 피드백 (좋아요/별로예요)
   feedback?: FeedbackValue;
+  // 서버 메시지 UUID (피드백/재시도에 필요)
+  serverId?: string;
+  // RAG 참조 문서 목록 (출처 정보)
+  sources?: ChatSource[];
 }
 
 type FaqFilterDomain = ChatServiceDomain | null; // null = HOME(추천)
 
 function toUpperKey(v: unknown): string {
-  return String(v ?? "").trim().toUpperCase();
+  return String(v ?? "")
+    .trim()
+    .toUpperCase();
 }
 
 function normalizeFaqKey(v: string | number): string | number {
@@ -362,7 +384,11 @@ function renderInlineMarkdownLite(
           className="cb-md-bold"
           style={{ fontWeight: 700 }}
         >
-          {renderInlineMarkdownLite(inner, `${keyBase}:binner:${key++}`, depth + 1)}
+          {renderInlineMarkdownLite(
+            inner,
+            `${keyBase}:binner:${key++}`,
+            depth + 1
+          )}
         </strong>
       );
       i = close + marker.length;
@@ -417,7 +443,9 @@ function renderListBlock(block: string, keyBase: string): React.ReactNode {
   }
 
   const items = lines.map((l, idx) => {
-    const content = allOrdered ? stripOrderedMarker(l) : stripUnorderedMarker(l);
+    const content = allOrdered
+      ? stripOrderedMarker(l)
+      : stripUnorderedMarker(l);
     return (
       <li
         key={`${keyBase}:li:${idx}`}
@@ -459,10 +487,10 @@ function renderHeadingBlock(
     level === 1
       ? "1.12em"
       : level === 2
-        ? "1.08em"
-        : level === 3
-          ? "1.04em"
-          : "1.00em";
+      ? "1.08em"
+      : level === 3
+      ? "1.04em"
+      : "1.00em";
 
   return (
     <div
@@ -494,7 +522,11 @@ function renderHorizontalRule(keyBase: string): React.ReactNode {
   );
 }
 
-function renderCodeBlock(code: string, lang: string, keyBase: string): React.ReactNode {
+function renderCodeBlock(
+  code: string,
+  lang: string,
+  keyBase: string
+): React.ReactNode {
   const label = lang ? lang.toUpperCase() : "";
   return (
     <div key={keyBase} className="cb-md-prewrap" style={{ margin: "10px 0" }}>
@@ -533,7 +565,11 @@ function renderCodeBlock(code: string, lang: string, keyBase: string): React.Rea
   );
 }
 
-function renderBlockquoteBlock(content: string, keyBase: string, depth: number): React.ReactNode {
+function renderBlockquoteBlock(
+  content: string,
+  keyBase: string,
+  depth: number
+): React.ReactNode {
   return (
     <div
       key={keyBase}
@@ -551,7 +587,11 @@ function renderBlockquoteBlock(content: string, keyBase: string, depth: number):
   );
 }
 
-function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.ReactNode {
+function renderMarkdownLite(
+  text: string,
+  keyBase = "md",
+  depth = 0
+): React.ReactNode {
   const src = String(text ?? "");
   if (!src) return null;
 
@@ -588,7 +628,9 @@ function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.Reac
 
   const flushPara = () => {
     if (paraBuf.length === 0) return;
-    out.push(renderParagraphBlock(paraBuf.join("\n"), `${keyBase}:p:${pIndex++}`));
+    out.push(
+      renderParagraphBlock(paraBuf.join("\n"), `${keyBase}:p:${pIndex++}`)
+    );
     paraBuf = [];
   };
 
@@ -602,13 +644,25 @@ function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.Reac
 
   const flushQuote = () => {
     if (quoteBuf.length === 0) return;
-    out.push(renderBlockquoteBlock(quoteBuf.join("\n"), `${keyBase}:q:${qIndex++}`, depth));
+    out.push(
+      renderBlockquoteBlock(
+        quoteBuf.join("\n"),
+        `${keyBase}:q:${qIndex++}`,
+        depth
+      )
+    );
     quoteBuf = [];
   };
 
   const flushCode = () => {
     if (!inCodeFence) return;
-    out.push(renderCodeBlock(codeBuf.join("\n"), codeFenceLang, `${keyBase}:c:${cIndex++}`));
+    out.push(
+      renderCodeBlock(
+        codeBuf.join("\n"),
+        codeFenceLang,
+        `${keyBase}:c:${cIndex++}`
+      )
+    );
     inCodeFence = false;
     codeFenceLang = "";
     codeBuf = [];
@@ -668,8 +722,8 @@ function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.Reac
       const kind: "ordered" | "unordered" | null = isOl
         ? "ordered"
         : isUl
-          ? "unordered"
-          : null;
+        ? "unordered"
+        : null;
 
       if (!kind || kind !== listKind) {
         flushList();
@@ -703,7 +757,13 @@ function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.Reac
     if (heading) {
       flushList();
       flushPara();
-      out.push(renderHeadingBlock(heading.level, heading.text, `${keyBase}:h:${hIndex++}`));
+      out.push(
+        renderHeadingBlock(
+          heading.level,
+          heading.text,
+          `${keyBase}:h:${hIndex++}`
+        )
+      );
       continue;
     }
 
@@ -753,6 +813,146 @@ function renderMarkdownLite(text: string, keyBase = "md", depth = 0): React.Reac
   );
 }
 
+/**
+ * 출처(Sources) 컴포넌트
+ * - 접기/펼치기 기능
+ * - 문서 제목, 조항 라벨, 스니펫 표시
+ */
+const SourcesSection: React.FC<{ sources: ChatSource[]; messageId: string }> = ({
+  sources,
+  messageId,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  if (!sources || sources.length === 0) return null;
+
+  const sourceTypeLabel = (type?: string) => {
+    if (!type) return "";
+    if (type === "POLICY") return "정책문서";
+    if (type === "TRAINING_SCRIPT") return "교육자료";
+    return type;
+  };
+
+  return (
+    <div className="cb-sources-section" style={{ marginTop: 8 }}>
+      <button
+        type="button"
+        className="cb-sources-toggle"
+        onClick={() => setIsExpanded(!isExpanded)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "4px 8px",
+          fontSize: "0.85em",
+          color: "#666",
+          background: "rgba(0,0,0,0.04)",
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ fontSize: "0.9em" }}>📚</span>
+        <span>참고 근거 ({sources.length})</span>
+        <span style={{ fontSize: "0.8em", marginLeft: 2 }}>
+          {isExpanded ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div
+          className="cb-sources-list"
+          style={{
+            marginTop: 6,
+            padding: "8px 10px",
+            background: "rgba(0,0,0,0.02)",
+            borderRadius: 8,
+            border: "1px solid rgba(0,0,0,0.06)",
+          }}
+        >
+          {sources.map((src, idx) => (
+            <div
+              key={`${messageId}-src-${idx}`}
+              className="cb-source-item"
+              style={{
+                padding: "6px 0",
+                borderBottom: idx < sources.length - 1 ? "1px solid rgba(0,0,0,0.06)" : "none",
+              }}
+            >
+              <div
+                className="cb-source-header"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  marginBottom: 2,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "0.8em",
+                    fontWeight: 600,
+                    color: "#333",
+                  }}
+                >
+                  {src.title || src.docId}
+                </span>
+                {src.sourceType && (
+                  <span
+                    style={{
+                      fontSize: "0.7em",
+                      padding: "1px 5px",
+                      background: src.sourceType === "POLICY" ? "#e3f2fd" : "#fff3e0",
+                      color: src.sourceType === "POLICY" ? "#1565c0" : "#e65100",
+                      borderRadius: 4,
+                    }}
+                  >
+                    {sourceTypeLabel(src.sourceType)}
+                  </span>
+                )}
+                {src.page && (
+                  <span style={{ fontSize: "0.75em", color: "#888" }}>
+                    p.{src.page}
+                  </span>
+                )}
+              </div>
+
+              {src.articleLabel && (
+                <div
+                  style={{
+                    fontSize: "0.78em",
+                    color: "#555",
+                    marginBottom: 2,
+                  }}
+                >
+                  {src.articleLabel}
+                </div>
+              )}
+
+              {src.snippet && (
+                <div
+                  className="cb-source-snippet"
+                  style={{
+                    fontSize: "0.78em",
+                    color: "#666",
+                    lineHeight: 1.4,
+                    overflow: "hidden",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                  }}
+                >
+                  "{src.snippet}"
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ChatWindow: React.FC<ChatWindowProps> = ({
   activeSession,
   onSendMessage,
@@ -767,6 +967,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onFaqQuickSend,
   onRetryFromMessage,
   onFeedbackChange,
+  feedbackLoadingIds,
+  retryLoadingMessageId,
   onReportSubmit,
   userRole,
   onOpenReviewerPanel,
@@ -783,7 +985,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const [faqDomainFilter, setFaqDomainFilter] = useState<FaqFilterDomain>(null);
 
   // FAQ: 도메인별 top10 캐시(컴포넌트 로컬 UI 캐시)
-  const [faqTop10ByDomain, setFaqTop10ByDomain] = useState<Record<string, FaqItem[]>>({});
+  const [faqTop10ByDomain, setFaqTop10ByDomain] = useState<
+    Record<string, FaqItem[]>
+  >({});
   const faqTop10ByDomainRef = useRef<Record<string, FaqItem[]>>({});
   useEffect(() => {
     faqTop10ByDomainRef.current = faqTop10ByDomain;
@@ -820,7 +1024,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       const active = document.activeElement as HTMLElement | null;
       if (!opts?.force && active && active !== el) {
         const tag = active.tagName;
-        const isTextField = tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable;
+        const isTextField =
+          tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable;
         if (isTextField) return;
       }
 
@@ -954,6 +1159,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleOpenAdminDashboard = useCallback(() => {
     if (isSending) return;
     if (!isAdmin) return;
+    // 관리자 버튼 클릭 시 sourceDomain을 POLICY로 저장
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ctrlf-creator-source-domain", "POLICY");
+    }
     onOpenAdminPanel?.();
   }, [isSending, isAdmin, onOpenAdminPanel]);
 
@@ -966,6 +1175,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleOpenCreatorStudio = useCallback(() => {
     if (isSending) return;
     if (!isCreator) return;
+    // 제작 버튼 클릭 시 sourceDomain을 EDU로 저장
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ctrlf-creator-source-domain", "EDU");
+    }
     onOpenCreatorPanel?.();
   }, [isSending, isCreator, onOpenCreatorPanel]);
 
@@ -997,7 +1210,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       });
     }
     return arr;
-  }, [isAdmin, isReviewer, isCreator, handleOpenAdminDashboard, handleOpenReviewerDesk, handleOpenCreatorStudio]);
+  }, [
+    isAdmin,
+    isReviewer,
+    isCreator,
+    handleOpenAdminDashboard,
+    handleOpenReviewerDesk,
+    handleOpenCreatorStudio,
+  ]);
 
   const handleFaqChipClick = useCallback(() => {
     if (isSending) return;
@@ -1076,9 +1296,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         console.log(`[FAQ] 도메인별 FAQ 응답 (${key}):`, {
           rawList: list,
           listLength: Array.isArray(list) ? list.length : 0,
-          listType: Array.isArray(list) ? 'array' : typeof list
+          listType: Array.isArray(list) ? "array" : typeof list,
         });
-        
+
         if (!Array.isArray(list) || list.length === 0) {
           console.warn(`[FAQ] 도메인 ${key}에 대한 FAQ 데이터가 없습니다.`);
           setFaqTop10ByDomain((prev) => ({ ...prev, [key]: [] }));
@@ -1086,39 +1306,43 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         }
 
         // 먼저 모든 항목을 정규화하고 도메인 정보 확인
-        const allNormalized = (Array.isArray(list) ? list : [])
-          .map((it) => {
-            const id = getFaqItemId(it);
-            const question = getFaqItemQuestion(it);
-            const d = getFaqItemDomain(it);
-            const itemDomainKey = d ? toUpperKey(d) : null;
-            return { 
-              raw: it, 
-              id, 
-              question, 
-              domain: d,
-              domainKey: itemDomainKey,
-              matches: itemDomainKey === key
-            };
-          });
+        const allNormalized = (Array.isArray(list) ? list : []).map((it) => {
+          const id = getFaqItemId(it);
+          const question = getFaqItemQuestion(it);
+          const d = getFaqItemDomain(it);
+          const itemDomainKey = d ? toUpperKey(d) : null;
+          return {
+            raw: it,
+            id,
+            question,
+            domain: d,
+            domainKey: itemDomainKey,
+            matches: itemDomainKey === key,
+          };
+        });
 
-        console.log(`[FAQ] 모든 항목 정규화 결과 (${key}):`, allNormalized.map(x => ({
-          id: x.id,
-          question: x.question?.substring(0, 30),
-          domain: x.domain,
-          domainKey: x.domainKey,
-          matches: x.matches,
-          requestedKey: key
-        })));
+        console.log(
+          `[FAQ] 모든 항목 정규화 결과 (${key}):`,
+          allNormalized.map((x) => ({
+            id: x.id,
+            question: x.question?.substring(0, 30),
+            domain: x.domain,
+            domainKey: x.domainKey,
+            matches: x.matches,
+            requestedKey: key,
+          }))
+        );
 
         // 필터링: ID와 질문이 있고, 도메인이 일치하는 것만
         const filtered = allNormalized.filter((x) => {
-          if (!Boolean(x.id) || !Boolean(x.question?.trim())) {
+          if (!x.id || !x.question?.trim()) {
             console.log(`[FAQ] 필터링 제외 (ID/질문 없음):`, x.id, x.question);
             return false;
           }
           if (x.domainKey !== key) {
-            console.log(`[FAQ] 필터링 제외 (도메인 불일치): 요청=${key}, 항목=${x.domainKey}`);
+            console.log(
+              `[FAQ] 필터링 제외 (도메인 불일치): 요청=${key}, 항목=${x.domainKey}`
+            );
             return false;
           }
           return true;
@@ -1132,21 +1356,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           .map((x) => x.raw)
           .filter((it) => {
             const id = getFaqItemId(it);
-            if (!id || seenIds.has(id)) {
-              if (seenIds.has(id)) {
-                console.log(`[FAQ] 중복 제거:`, id);
-              }
+            if (!id) return false;
+            if (seenIds.has(id)) {
+              console.log(`[FAQ] 중복 제거:`, id);
               return false;
             }
             seenIds.add(id);
             return true;
           });
-        
+
         console.log(`[FAQ] 최종 저장할 FAQ (${key}):`, items.length, "개");
         setFaqTop10ByDomain((prev) => ({ ...prev, [key]: items }));
-        
+
         if (items.length === 0) {
-          console.warn(`[FAQ] ⚠️ 도메인 ${key}에 대한 FAQ가 0개입니다. 백엔드 응답을 확인하세요.`);
+          console.warn(
+            `[FAQ] ⚠️ 도메인 ${key}에 대한 FAQ가 0개입니다. 백엔드 응답을 확인하세요.`
+          );
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1173,7 +1398,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       }
 
       // 같은 도메인을 다시 누르면 HOME으로
-      if (faqDomainFilter && toUpperKey(faqDomainFilter) === toUpperKey(domain)) {
+      if (
+        faqDomainFilter &&
+        toUpperKey(faqDomainFilter) === toUpperKey(domain)
+      ) {
         setFaqDomainFilter(null);
         setFaqTop10Error(null);
         return;
@@ -1229,7 +1457,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           {/* HOME(추천) */}
           <button
             type="button"
-            className={"cb-faq-category-chip" + (!faqDomainFilter ? " is-active" : "")}
+            className={
+              "cb-faq-category-chip" + (!faqDomainFilter ? " is-active" : "")
+            }
             onClick={() => handleToggleFaqDomain(null)}
             disabled={isSending}
           >
@@ -1245,7 +1475,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               <button
                 key={k}
                 type="button"
-                className={"cb-faq-category-chip" + (active ? " is-active" : "")}
+                className={
+                  "cb-faq-category-chip" + (active ? " is-active" : "")
+                }
                 onClick={() => handleToggleFaqDomain(sd)}
                 disabled={isSending}
               >
@@ -1297,11 +1529,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               );
             })}
 
-          {!showLoadingRow && !showErrorText && faqSuggestionButtons.items.length === 0 && (
-            <button type="button" className="cb-faq-suggestion-btn" disabled>
-              표시할 FAQ가 없습니다.
-            </button>
-          )}
+          {!showLoadingRow &&
+            !showErrorText &&
+            faqSuggestionButtons.items.length === 0 && (
+              <button type="button" className="cb-faq-suggestion-btn" disabled>
+                표시할 FAQ가 없습니다.
+              </button>
+            )}
         </div>
       </div>
     );
@@ -1319,13 +1553,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
           const isErrorAssistant =
             isAssistant &&
-            msg.content.startsWith("죄송합니다. 서버와 통신 중 문제가 발생했어요");
+            msg.content.startsWith(
+              "죄송합니다. 서버와 통신 중 문제가 발생했어요"
+            );
 
           // Streaming 상태: 마지막 assistant 메시지는 전송 중일 때 “스트리밍 말풍선”로 표시
-          const isStreaming = isAssistant && isSending && index === messages.length - 1;
+          const isStreaming =
+            isAssistant && isSending && index === messages.length - 1;
 
           // 스트리밍 시작 직후: placeholder assistant가 먼저 생기고 content가 비어있으면
-          const isStreamingEmpty = isStreaming && (msg.content?.length ?? 0) === 0;
+          const isStreamingEmpty =
+            isStreaming && (msg.content?.length ?? 0) === 0;
 
           // 이 assistant 답변의 기준이 되는 user 질문 찾기
           let sourceQuestion: string | null = null;
@@ -1357,15 +1595,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               <div
                 className={
                   "cb-chat-bubble-container " +
-                  (isUser ? "cb-chat-bubble-container-user" : "cb-chat-bubble-container-bot")
+                  (isUser
+                    ? "cb-chat-bubble-container-user"
+                    : "cb-chat-bubble-container-bot")
                 }
               >
                 {isAssistant && isReportSuggestion ? (
                   <div className="cb-chat-bubble cb-chat-bubble-bot cb-chat-bubble-report">
-                    <span className="cb-chat-bubble-report-icon" aria-hidden="true">
+                    <span
+                      className="cb-chat-bubble-report-icon"
+                      aria-hidden="true"
+                    >
                       🔍
                     </span>
-                    <span className="cb-chat-bubble-report-text">{msg.content}</span>
+                    <span className="cb-chat-bubble-report-text">
+                      {msg.content}
+                    </span>
                     <button
                       type="button"
                       className="cb-report-suggest-inline-btn"
@@ -1377,10 +1622,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   </div>
                 ) : isAssistant && isReportReceipt ? (
                   <div className="cb-chat-bubble cb-chat-bubble-bot cb-chat-bubble-receipt">
-                    <span className="cb-chat-bubble-receipt-icon" aria-hidden="true">
+                    <span
+                      className="cb-chat-bubble-receipt-icon"
+                      aria-hidden="true"
+                    >
                       ✅
                     </span>
-                    <span className="cb-chat-bubble-receipt-text">{msg.content}</span>
+                    <span className="cb-chat-bubble-receipt-text">
+                      {msg.content}
+                    </span>
                   </div>
                 ) : (
                   <>
@@ -1400,8 +1650,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                         }}
                       >
                         {isStreamingEmpty ? (
-                          <span aria-label="답변 생성 중" style={{ display: "inline-flex", alignItems: "center" }}>
-                            <span className="cb-typing-dots" style={{ margin: 0 }}>
+                          <span
+                            aria-label="답변 생성 중"
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span
+                              className="cb-typing-dots"
+                              style={{ margin: 0 }}
+                            >
                               <span />
                               <span />
                               <span />
@@ -1409,73 +1668,113 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           </span>
                         ) : (
                           <>
-                            {isAssistant ? renderMarkdownLite(msg.content, `m:${msg.id}`) : msg.content}
-                            {isStreaming && <span className="cb-streaming-caret" aria-hidden="true" />}
+                            {isAssistant
+                              ? renderMarkdownLite(msg.content, `m:${msg.id}`)
+                              : msg.content}
+                            {isStreaming && (
+                              <span
+                                className="cb-streaming-caret"
+                                aria-hidden="true"
+                              />
+                            )}
                           </>
                         )}
                       </div>
                     </div>
 
+                    {/* 출처 정보 표시 (assistant 메시지에만) */}
+                    {isAssistant && msg.sources && msg.sources.length > 0 && (
+                      <SourcesSection sources={msg.sources} messageId={msg.id} />
+                    )}
+
                     {allowActions && (
                       <div className="cb-chat-bubble-actions">
                         {isErrorAssistant && (
-                          <span className="cb-chat-bubble-error-text">네트워크 오류로 실패했어요.</span>
+                          <span className="cb-chat-bubble-error-text">
+                            네트워크 오류로 실패했어요.
+                          </span>
                         )}
 
                         <div className="cb-chat-actions-icon-group">
                           <div className="cb-chat-feedback-group">
-                            <button
-                              type="button"
-                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                                feedback === "up" ? "is-selected" : ""
-                              }`}
-                              onClick={() => {
-                                if (!onFeedbackChange) return;
-                                const next: FeedbackValue = feedback === "up" ? null : "up";
-                                onFeedbackChange(msg.id, next);
-                              }}
-                              title="좋은 응답"
-                              aria-label="도움이 되었어요"
-                              aria-pressed={feedback === "up"}
-                              disabled={!onFeedbackChange}
-                            >
-                              <img
-                                src={feedbackGoodIcon}
-                                alt="좋은 응답"
-                                className="cb-chat-bubble-action-icon"
-                              />
-                            </button>
+                            {(() => {
+                              // 피드백 버튼 비활성화 조건
+                              const hasServerId = Boolean(msg.serverId);
+                              const isFeedbackLoading = feedbackLoadingIds?.has(msg.id) ?? false;
+                              const canFeedback = onFeedbackChange && hasServerId && !isFeedbackLoading;
 
-                            <button
-                              type="button"
-                              className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
-                                feedback === "down" ? "is-selected" : ""
-                              }`}
-                              onClick={() => {
-                                if (!onFeedbackChange) return;
-                                const next: FeedbackValue = feedback === "down" ? null : "down";
-                                onFeedbackChange(msg.id, next);
-                              }}
-                              title="별로인 응답"
-                              aria-label="별로인 응답이에요"
-                              aria-pressed={feedback === "down"}
-                              disabled={!onFeedbackChange}
-                            >
-                              <img
-                                src={feedbackBadIcon}
-                                alt="별로예요"
-                                className="cb-chat-bubble-action-icon"
-                              />
-                            </button>
+                              // serverId 없으면 개발자용 경고 (최초 1회만)
+                              if (!hasServerId && isAssistant) {
+                                console.warn(
+                                  `[ChatWindow] 피드백 버튼 비활성화: serverId 없음 (messageId: ${msg.id})`
+                                );
+                              }
+
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                                      feedback === "up" ? "is-selected" : ""
+                                    }${isFeedbackLoading ? " is-loading" : ""}`}
+                                    onClick={() => {
+                                      if (!canFeedback) return;
+                                      // 같은 버튼 재클릭 시 아무 동작 없음 (평가 해제 불가)
+                                      if (feedback === "up") return;
+                                      onFeedbackChange(msg.id, "up");
+                                    }}
+                                    title={!hasServerId ? "피드백 불가 (메시지 처리 중)" : "좋은 응답"}
+                                    aria-label="도움이 되었어요"
+                                    aria-pressed={feedback === "up"}
+                                    disabled={!canFeedback}
+                                  >
+                                    <img
+                                      src={feedbackGoodIcon}
+                                      alt="좋은 응답"
+                                      className="cb-chat-bubble-action-icon"
+                                    />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className={`cb-chat-bubble-icon-btn cb-chat-feedback-btn ${
+                                      feedback === "down" ? "is-selected" : ""
+                                    }${isFeedbackLoading ? " is-loading" : ""}`}
+                                    onClick={() => {
+                                      if (!canFeedback) return;
+                                      // 같은 버튼 재클릭 시 아무 동작 없음 (평가 해제 불가)
+                                      if (feedback === "down") return;
+                                      onFeedbackChange(msg.id, "down");
+                                    }}
+                                    title={!hasServerId ? "피드백 불가 (메시지 처리 중)" : "별로인 응답"}
+                                    aria-label="별로인 응답이에요"
+                                    aria-pressed={feedback === "down"}
+                                    disabled={!canFeedback}
+                                  >
+                                    <img
+                                      src={feedbackBadIcon}
+                                      alt="별로예요"
+                                      className="cb-chat-bubble-action-icon"
+                                    />
+                                  </button>
+                                </>
+                              );
+                            })()}
                           </div>
 
                           {sourceQuestion && onRetryFromMessage && (
                             <button
                               type="button"
-                              className="cb-chat-bubble-icon-btn"
-                              onClick={() => onRetryFromMessage(sourceQuestion, "retry")}
-                              disabled={isSending}
-                              title="다시 시도"
+                              className={`cb-chat-bubble-icon-btn${
+                                retryLoadingMessageId === msg.id ? " is-loading" : ""
+                              }`}
+                              onClick={() => {
+                                // in-flight 차단: 이미 재시도 중이면 무시
+                                if (retryLoadingMessageId) return;
+                                onRetryFromMessage(sourceQuestion, "retry");
+                              }}
+                              disabled={isSending || Boolean(retryLoadingMessageId)}
+                              title={retryLoadingMessageId ? "재시도 중..." : "다시 시도"}
                               aria-label="다시 시도"
                             >
                               <img
@@ -1591,16 +1890,33 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             {!hasMessages && (
               <div className="cb-feature-container">
                 <div className="cb-welcome-row">
-                  <img src={robotIcon} alt="챗봇 아이콘" className="cb-welcome-icon" />
+                  <img
+                    src={robotIcon}
+                    alt="챗봇 아이콘"
+                    className="cb-welcome-icon"
+                  />
                   <div className="cb-welcome-text">
                     <p>안녕하세요.</p>
                     <p>Ctrl F의 챗봇(BlinQ)이 서비스를 시작합니다.</p>
                   </div>
                 </div>
 
-                <div className={"cb-feature-row" + (hasMiddleRoleCard ? " cb-feature-row--admin" : "")}>
-                  <button type="button" className="cb-feature-card" onClick={handleQuizClick}>
-                    <img src={quizIcon} alt="퀴즈" className="cb-feature-icon" />
+                <div
+                  className={
+                    "cb-feature-row" +
+                    (hasMiddleRoleCard ? " cb-feature-row--admin" : "")
+                  }
+                >
+                  <button
+                    type="button"
+                    className="cb-feature-card"
+                    onClick={handleQuizClick}
+                  >
+                    <img
+                      src={quizIcon}
+                      alt="퀴즈"
+                      className="cb-feature-icon"
+                    />
                     <span className="cb-feature-label">퀴즈</span>
                   </button>
 
@@ -1611,7 +1927,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       onClick={handleOpenAdminDashboard}
                       disabled={isSending}
                     >
-                      <img src={adminIcon} alt="관리자 대시보드" className="cb-feature-icon" />
+                      <img
+                        src={adminIcon}
+                        alt="관리자 대시보드"
+                        className="cb-feature-icon"
+                      />
                       <span className="cb-feature-label">관리자</span>
                     </button>
                   )}
@@ -1623,7 +1943,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       onClick={handleOpenReviewerDesk}
                       disabled={isSending}
                     >
-                      <img src={reviewIcon} alt="콘텐츠 검토" className="cb-feature-icon" />
+                      <img
+                        src={reviewIcon}
+                        alt="콘텐츠 검토"
+                        className="cb-feature-icon"
+                      />
                       <span className="cb-feature-label">검토</span>
                     </button>
                   )}
@@ -1635,12 +1959,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       onClick={handleOpenCreatorStudio}
                       disabled={isSending}
                     >
-                      <img src={studioIcon} alt="교육 콘텐츠 제작" className="cb-feature-icon" />
+                      <img
+                        src={studioIcon}
+                        alt="교육 콘텐츠 제작"
+                        className="cb-feature-icon"
+                      />
                       <span className="cb-feature-label">제작</span>
                     </button>
                   )}
 
-                  <button type="button" className="cb-feature-card" onClick={handleEduClick}>
+                  <button
+                    type="button"
+                    className="cb-feature-card"
+                    onClick={handleEduClick}
+                  >
                     <img src={eduIcon} alt="교육" className="cb-feature-icon" />
                     <span className="cb-feature-label">교육</span>
                   </button>
@@ -1654,7 +1986,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             {renderMessages()}
 
             {/* FAQ 도메인일 때: 스레드 하단에 카테고리 + 추천/top10 노출 */}
-            {isFaqDomain && <div className="cb-faq-thread-section">{renderFaqSection()}</div>}
+            {isFaqDomain && (
+              <div className="cb-faq-thread-section">{renderFaqSection()}</div>
+            )}
 
             <div ref={messagesEndRef} />
           </div>
@@ -1664,10 +1998,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             <div className="cb-input-section">
               <p className="cb-input-title">무엇이든 물어보세요!</p>
 
-              {isSending && <p className="cb-input-hint">답변을 생성하고 있어요…</p>}
+              {isSending && (
+                <p className="cb-input-hint">답변을 생성하고 있어요…</p>
+              )}
 
-              <div className={"cb-input-pill" + (isSending ? " cb-input-pill-disabled" : "")}>
-                <button type="button" className="cb-input-plus" disabled={isSending}>
+              <div
+                className={
+                  "cb-input-pill" + (isSending ? " cb-input-pill-disabled" : "")
+                }
+              >
+                <button
+                  type="button"
+                  className="cb-input-plus"
+                  disabled={isSending}
+                >
                   +
                 </button>
                 <textarea
@@ -1762,7 +2106,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   />
                 </div>
 
-                {reportError && <div className="cb-report-error-text">{reportError}</div>}
+                {reportError && (
+                  <div className="cb-report-error-text">{reportError}</div>
+                )}
               </section>
 
               <section className="cb-report-section cb-report-section-guide">
@@ -1790,7 +2136,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                 className="cb-report-btn cb-report-btn-submit"
                 onClick={handleSubmitReportClick}
                 disabled={!reportContent.trim()}
-                title={!reportContent.trim() ? "신고 내용을 입력해 주세요." : "제출"}
+                title={
+                  !reportContent.trim() ? "신고 내용을 입력해 주세요." : "제출"
+                }
               >
                 제출하기
               </button>

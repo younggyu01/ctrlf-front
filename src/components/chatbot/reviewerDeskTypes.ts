@@ -73,6 +73,8 @@ export interface ReviewWorkItem {
   status: ReviewStatus;
   approvedAt?: string;
   rejectedAt?: string;
+  rejectedStage?: ReviewStage; // 반려된 단계 (SCRIPT 또는 FINAL)
+  rejectedComment?: string; // 반려 사유
 
   // VIDEO
   videoUrl?: string;

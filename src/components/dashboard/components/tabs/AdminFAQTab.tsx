@@ -1,15 +1,18 @@
 // src/components/dashboard/components/tabs/AdminFAQTab.tsx
 import React, { useCallback, useEffect, useState } from "react";
 import "../../../chatbot/chatbot.css";
+import keycloak from "../../../../keycloak";
 import {
   listFAQCandidates,
   autoGenerateFAQCandidates,
   approveFAQCandidate,
   rejectFAQCandidate,
+  deleteFAQCandidate,
   type FAQCandidate,
   type FAQCandidateStatus,
   type AutoGenerateRequest,
 } from "../../api/faqApi";
+import { invalidateFaqListCache, invalidateFaqHomeCache } from "../../../chatbot/chatApi";
 
 function cx(...tokens: Array<string | false | null | undefined>) {
   return tokens.filter(Boolean).join(" ");
@@ -105,16 +108,14 @@ const AdminFAQTab: React.FC = () => {
       
       // 안전하게 배열로 설정
       const items = Array.isArray(response?.items) ? response.items : [];
-      console.log("[FAQ] 설정할 후보 목록:", items.length, "개");
+      console.log("[FAQ] 설정할 후보 목록:", items.length, "개", "필터:", statusFilter);
+      console.log("[FAQ] 응답 항목 상세:", items.map((item) => ({
+        id: item.id || item.faqDraftId,
+        question: item.question,
+        status: item.status,
+      })));
       
-      // 목록이 비어있고 기존 후보가 있으면 기존 후보 유지 (목록 조회 API 문제일 수 있음)
-      if (items.length === 0 && candidates.length > 0) {
-        console.warn("[FAQ] ⚠️ 목록 조회가 빈 배열을 반환했지만 기존 후보가 있습니다. 기존 후보를 유지합니다.");
-        // 기존 후보 유지, 로딩만 해제
-        setLoading(false);
-        return;
-      }
-      
+      // 항상 API 응답을 반영 (승인/반려 후 상태 변경 반영)
       setCandidates(items);
       
       if (items.length === 0 && response?.total === 0) {
@@ -245,10 +246,64 @@ const AdminFAQTab: React.FC = () => {
       }, 2000);
     } catch (err) {
       console.error("[FAQ] 자동 생성 실패:", err);
-      const errorMessage =
-        err instanceof Error ? err.message : "FAQ 후보 자동 생성에 실패했습니다.";
+      let errorMessage = "FAQ 후보 자동 생성에 실패했습니다.";
+      
+      // HttpError인 경우 상세 정보 추출
+      if (err instanceof Error && "status" in err) {
+        const httpError = err as {
+          status?: number;
+          statusText?: string;
+          body?: unknown;
+          message?: string;
+        };
+        
+        console.error("[FAQ] HTTP 에러 상세:", {
+          status: httpError.status,
+          statusText: httpError.statusText,
+          body: httpError.body,
+          message: httpError.message,
+          requestParams: {
+            minFrequency: autoGenSettings.minFrequency ?? 3,
+            daysBack: autoGenSettings.daysBack ?? 30,
+          },
+        });
+        
+        if (httpError.status === 500) {
+          errorMessage = "서버 오류가 발생했습니다. 백엔드 서버를 확인해주세요.";
+          // 백엔드 에러 메시지가 있으면 추가
+          if (httpError.body && typeof httpError.body === "object") {
+            const body = httpError.body as { message?: string; error?: string; detail?: string };
+            if (body.message) {
+              errorMessage += `\n에러 메시지: ${body.message}`;
+            } else if (body.error) {
+              errorMessage += `\n에러: ${body.error}`;
+            } else if (body.detail) {
+              errorMessage += `\n상세: ${body.detail}`;
+            }
+          } else if (typeof httpError.body === "string") {
+            errorMessage += `\n응답: ${httpError.body}`;
+          }
+        } else if (httpError.status === 400) {
+          errorMessage = "잘못된 요청입니다. 파라미터를 확인해주세요.";
+          if (httpError.body && typeof httpError.body === "object") {
+            const body = httpError.body as { message?: string; error?: string };
+            if (body.message || body.error) {
+              errorMessage += ` (${body.message || body.error})`;
+            }
+          }
+        } else if (httpError.status === 401) {
+          errorMessage = "인증이 필요합니다. 다시 로그인해주세요.";
+        } else if (httpError.status === 403) {
+          errorMessage = "관리자 권한이 필요합니다.";
+        } else {
+          errorMessage = httpError.message || `HTTP ${httpError.status} ${httpError.statusText || ""}`;
+        }
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      
       setError(errorMessage);
-      showToast("danger", `FAQ 후보 자동 생성에 실패했습니다: ${errorMessage}`);
+      showToast("danger", errorMessage);
     } finally {
       setGenerating(false);
     }
@@ -263,18 +318,235 @@ const AdminFAQTab: React.FC = () => {
         return;
       }
       
+      // reviewerId 가져오기 (keycloak token에서)
+      const reviewerId = (keycloak.tokenParsed as { sub?: string })?.sub;
+      if (!reviewerId) {
+        showToast("danger", "사용자 ID를 가져올 수 없습니다. 다시 로그인해주세요.");
+        return;
+      }
+      
+      // question과 answer 가져오기
+      const question = candidate.question;
+      const answer = candidate.answer || candidate.answerMarkdown || "";
+      
+      if (!question || !answer) {
+        showToast("danger", "FAQ 후보의 질문 또는 답변이 없습니다.");
+        return;
+      }
+      
       try {
         setLoading(true);
-        await approveFAQCandidate(candidateId);
-        showToast("neutral", "FAQ 후보가 승인되었습니다.");
-        await fetchCandidates(); // 목록 새로고침
+        console.log("[FAQ] 승인 요청 시작:", { candidateId, candidate, reviewerId });
+        
+        // AI 표준 도메인을 FAQ 도메인으로 매핑 (질문 내용 분석 포함)
+        const candidateDomain = candidate.domain;
+        const questionText = question.toLowerCase();
+        let faqDomain: string | undefined = undefined;
+        
+        // 질문 내용 기반 도메인 감지 (우선순위 높음)
+        const accountKeywords = ["계정", "로그인", "비밀번호", "아이디", "회원가입", "회원", "인증", "접속"];
+        const approvalKeywords = ["결재", "승인", "결제"];
+        const payKeywords = ["급여", "월급", "연봉", "봉급"];
+        const welfareKeywords = ["복지", "혜택", "지원금", "보조금"];
+        const hrKeywords = ["인사", "채용", "면접", "입사", "퇴사", "이직"];
+        const educationKeywords = ["교육", "강의", "학습", "훈련", "과정", "수강"];
+        const itKeywords = ["it", "컴퓨터", "시스템", "프로그램", "소프트웨어", "하드웨어"];
+        const securityKeywords = ["보안", "해킹", "침해", "암호화", "권한", "접근제어"];
+        const facilityKeywords = ["시설", "회의실", "주차", "건물", "사무실"];
+        
+        if (accountKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "ACCOUNT";
+          console.log("[FAQ] 질문 내용 분석: 계정 관련 키워드 감지 → ACCOUNT");
+        } else if (approvalKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "APPROVAL";
+          console.log("[FAQ] 질문 내용 분석: 결재 관련 키워드 감지 → APPROVAL");
+        } else if (payKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "PAY";
+          console.log("[FAQ] 질문 내용 분석: 급여 관련 키워드 감지 → PAY");
+        } else if (welfareKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "WELFARE";
+          console.log("[FAQ] 질문 내용 분석: 복지 관련 키워드 감지 → WELFARE");
+        } else if (hrKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "HR";
+          console.log("[FAQ] 질문 내용 분석: 인사 관련 키워드 감지 → HR");
+        } else if (educationKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "EDUCATION";
+          console.log("[FAQ] 질문 내용 분석: 교육 관련 키워드 감지 → EDUCATION");
+        } else if (itKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "IT";
+          console.log("[FAQ] 질문 내용 분석: IT 관련 키워드 감지 → IT");
+        } else if (securityKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "SECURITY";
+          console.log("[FAQ] 질문 내용 분석: 보안 관련 키워드 감지 → SECURITY");
+        } else if (facilityKeywords.some(keyword => questionText.includes(keyword))) {
+          faqDomain = "FACILITY";
+          console.log("[FAQ] 질문 내용 분석: 시설 관련 키워드 감지 → FACILITY");
+        }
+        
+        // 질문 내용 분석으로 도메인을 찾지 못한 경우, AI 표준 도메인 매핑 사용
+        if (!faqDomain && candidateDomain) {
+          const upperDomain = candidateDomain.toUpperCase();
+          switch (upperDomain) {
+            case "POLICY":
+              // POLICY는 질문 내용에 따라 SECURITY 또는 ETC로 매핑
+              // 이미 보안 키워드 체크를 했으므로, 여기서는 기본값으로 SECURITY
+              faqDomain = "SECURITY";
+              break;
+            case "EDU":
+            case "EDUCATION":
+              faqDomain = "EDUCATION";
+              break;
+            case "HR":
+              faqDomain = "HR";
+              break;
+            case "QUIZ":
+              faqDomain = "EDUCATION";
+              break;
+            case "GENERAL":
+              faqDomain = "ETC";
+              break;
+            default:
+              // 이미 FAQ 도메인인 경우 그대로 사용
+              const faqDomains = ["ACCOUNT", "APPROVAL", "HR", "PAY", "WELFARE", "EDUCATION", "IT", "SECURITY", "FACILITY", "ETC"];
+              if (faqDomains.includes(upperDomain)) {
+                faqDomain = upperDomain;
+              } else {
+                faqDomain = candidateDomain; // 알 수 없는 경우 원본 사용
+              }
+              break;
+          }
+          console.log("[FAQ] AI 표준 도메인 매핑:", { 원본: candidateDomain, FAQ도메인: faqDomain });
+        }
+        
+        // 최종적으로 도메인을 찾지 못한 경우 ETC로 설정
+        if (!faqDomain) {
+          faqDomain = "ETC";
+          console.log("[FAQ] 도메인을 찾지 못해 기본값 ETC 사용");
+        }
+        
+        console.log("[FAQ] 최종 도메인 결정:", { 원본도메인: candidateDomain, 질문: question.substring(0, 30), 결정된FAQ도메인: faqDomain });
+        
+        const approvedResponse = await approveFAQCandidate(candidateId, {
+          reviewerId,
+          question,
+          answer,
+          domain: faqDomain, // 매핑된 FAQ 도메인 전달
+        });
+        console.log("[FAQ] 승인 성공:", candidateId);
+        console.log("[FAQ] 승인 응답 상세:", approvedResponse);
+        
+        // 승인된 FAQ 정보 확인 (응답이 null일 수 있음)
+        const approvedDomain = approvedResponse?.domain || faqDomain || candidate.domain;
+        
+        // 챗봇 UI의 FAQ 캐시 무효화 (승인된 FAQ가 챗봇 UI에 즉시 반영되도록)
+        if (approvedDomain) {
+          // 해당 도메인의 FAQ 목록 캐시 무효화
+          // approvedDomain은 string이지만 ChatServiceDomain으로 사용 가능
+          invalidateFaqListCache(approvedDomain.toUpperCase() as any);
+          console.log("[FAQ] 챗봇 UI FAQ 캐시 무효화:", approvedDomain);
+          
+          // FAQ Home 캐시도 무효화 (FAQ Home에 새로 추가된 FAQ가 표시되도록)
+          invalidateFaqHomeCache();
+          console.log("[FAQ] 챗봇 UI FAQ Home 캐시 무효화");
+        } else {
+          // 도메인이 없는 경우 전체 캐시 무효화
+          invalidateFaqListCache();
+          invalidateFaqHomeCache();
+          console.log("[FAQ] 챗봇 UI 전체 FAQ 캐시 무효화");
+        }
+        
+        // 승인 완료 메시지
+        showToast(
+          "neutral", 
+          `FAQ 후보가 승인되었습니다.${approvedDomain ? ` (도메인: ${approvedDomain})` : ""}\n승인된 FAQ는 해당 도메인의 FAQ 목록에 추가됩니다.\n챗봇 UI에서 해당 도메인을 선택하면 새로 추가된 FAQ를 확인할 수 있습니다.`
+        );
+        
+        // 선택된 항목 해제
         const currentId = selectedCandidate?.id || selectedCandidate?.faqDraftId;
         if (currentId === candidateId) {
           setSelectedCandidate(null);
         }
+        
+        // 목록 새로고침 (상태 변경 반영)
+        // 현재 필터가 "대기중"이면 승인된 항목은 자동으로 사라짐
+        await fetchCandidates();
       } catch (err) {
-        console.error("Failed to approve FAQ candidate:", err);
-        showToast("danger", "FAQ 후보 승인에 실패했습니다.");
+        console.error("[FAQ] 승인 실패:", err);
+        let errorMessage = "FAQ 후보 승인에 실패했습니다.";
+        
+        // HttpError인 경우 상세 정보 추출
+        if (err instanceof Error && "status" in err) {
+          const httpError = err as {
+            status?: number;
+            statusText?: string;
+            body?: unknown;
+            message?: string;
+          };
+          
+          console.error("[FAQ] HTTP 에러 상세:", {
+            status: httpError.status,
+            statusText: httpError.statusText,
+            body: httpError.body,
+            message: httpError.message,
+            candidateId,
+            candidate: candidate,
+          });
+          
+          // body를 JSON으로 출력하여 상세 확인
+          if (httpError.body) {
+            console.error("[FAQ] 에러 응답 body 상세:", JSON.stringify(httpError.body, null, 2));
+          }
+          
+          if (httpError.status === 404) {
+            errorMessage = "FAQ 후보를 찾을 수 없습니다.";
+          } else if (httpError.status === 400) {
+            errorMessage = "잘못된 요청입니다.";
+            // 백엔드 에러 메시지 추출
+            if (httpError.body && typeof httpError.body === "object") {
+              const body = httpError.body as { 
+                message?: string; 
+                error?: string; 
+                detail?: string;
+                reason?: string;
+              };
+              if (body.message) {
+                errorMessage = body.message;
+              } else if (body.error) {
+                errorMessage = body.error;
+              } else if (body.detail) {
+                errorMessage = body.detail;
+              } else if (body.reason) {
+                errorMessage = body.reason;
+              } else {
+                errorMessage = "FAQ 후보 상태를 확인해주세요. (이미 처리되었거나 유효하지 않은 상태일 수 있습니다)";
+              }
+            } else if (typeof httpError.body === "string") {
+              errorMessage = httpError.body;
+            } else {
+              errorMessage = "FAQ 후보 상태를 확인해주세요. (이미 처리되었거나 유효하지 않은 상태일 수 있습니다)";
+            }
+          } else if (httpError.status === 401) {
+            errorMessage = "인증이 필요합니다. 다시 로그인해주세요.";
+          } else if (httpError.status === 403) {
+            errorMessage = "관리자 권한이 필요합니다.";
+          } else if (httpError.status === 409) {
+            errorMessage = "이미 처리된 FAQ 후보입니다.";
+          } else if (httpError.status === 500) {
+            errorMessage = "서버 오류가 발생했습니다. 백엔드 서버를 확인해주세요.";
+            if (httpError.body && typeof httpError.body === "object") {
+              const body = httpError.body as { message?: string; error?: string };
+              if (body.message || body.error) {
+                errorMessage += ` (${body.message || body.error})`;
+              }
+            }
+          } else {
+            errorMessage = httpError.message || `HTTP ${httpError.status} ${httpError.statusText || ""}`;
+          }
+        } else if (err instanceof Error) {
+          errorMessage = err.message;
+        }
+        
+        showToast("danger", errorMessage);
       } finally {
         setLoading(false);
       }
@@ -291,18 +563,200 @@ const AdminFAQTab: React.FC = () => {
         return;
       }
       
+      // reviewerId 가져오기 (keycloak token에서)
+      const reviewerId = (keycloak.tokenParsed as { sub?: string })?.sub;
+      if (!reviewerId) {
+        showToast("danger", "사용자 ID를 가져올 수 없습니다. 다시 로그인해주세요.");
+        return;
+      }
+      
+      // question과 answer 가져오기
+      const question = candidate.question;
+      const answer = candidate.answer || candidate.answerMarkdown || "";
+      
+      if (!question || !answer) {
+        showToast("danger", "FAQ 후보의 질문 또는 답변이 없습니다.");
+        return;
+      }
+      
       try {
         setLoading(true);
-        await rejectFAQCandidate(candidateId);
+        console.log("[FAQ] 반려 요청 시작:", { candidateId, candidate, reviewerId });
+        const rejectResponse = await rejectFAQCandidate(candidateId, {
+          reviewerId,
+          question,
+          answer,
+        });
+        console.log("[FAQ] 반려 성공:", candidateId);
+        console.log("[FAQ] 반려 응답 상세:", rejectResponse);
         showToast("neutral", "FAQ 후보가 반려되었습니다.");
-        await fetchCandidates(); // 목록 새로고침
+        
+        // 선택된 항목 해제
         const currentId = selectedCandidate?.id || selectedCandidate?.faqDraftId;
         if (currentId === candidateId) {
           setSelectedCandidate(null);
         }
+        
+        // 목록 새로고침 (상태 변경 반영)
+        // 현재 필터가 "대기중"이면 반려된 항목은 자동으로 사라짐
+        await fetchCandidates();
       } catch (err) {
-        console.error("Failed to reject FAQ candidate:", err);
-        showToast("danger", "FAQ 후보 반려에 실패했습니다.");
+        console.error("[FAQ] 반려 실패:", err);
+        let errorMessage = "FAQ 후보 반려에 실패했습니다.";
+        
+        // HttpError인 경우 상세 정보 추출
+        if (err instanceof Error && "status" in err) {
+          const httpError = err as {
+            status?: number;
+            statusText?: string;
+            body?: unknown;
+            message?: string;
+          };
+          
+          console.error("[FAQ] HTTP 에러 상세:", {
+            status: httpError.status,
+            statusText: httpError.statusText,
+            body: httpError.body,
+            message: httpError.message,
+            candidateId,
+            candidate: candidate,
+          });
+          
+          // body를 JSON으로 출력하여 상세 확인
+          if (httpError.body) {
+            console.error("[FAQ] 에러 응답 body 상세:", JSON.stringify(httpError.body, null, 2));
+          }
+          
+          if (httpError.status === 404) {
+            errorMessage = "FAQ 후보를 찾을 수 없습니다.";
+          } else if (httpError.status === 400) {
+            errorMessage = "잘못된 요청입니다.";
+            // 백엔드 에러 메시지 추출
+            if (httpError.body && typeof httpError.body === "object") {
+              const body = httpError.body as { 
+                message?: string; 
+                error?: string; 
+                detail?: string;
+                reason?: string;
+              };
+              if (body.message) {
+                errorMessage = body.message;
+              } else if (body.error) {
+                errorMessage = body.error;
+              } else if (body.detail) {
+                errorMessage = body.detail;
+              } else if (body.reason) {
+                errorMessage = body.reason;
+              } else {
+                errorMessage = "FAQ 후보 상태를 확인해주세요. (이미 처리되었거나 유효하지 않은 상태일 수 있습니다)";
+              }
+            } else if (typeof httpError.body === "string") {
+              errorMessage = httpError.body;
+            } else {
+              errorMessage = "FAQ 후보 상태를 확인해주세요. (이미 처리되었거나 유효하지 않은 상태일 수 있습니다)";
+            }
+          } else if (httpError.status === 401) {
+            errorMessage = "인증이 필요합니다. 다시 로그인해주세요.";
+          } else if (httpError.status === 403) {
+            errorMessage = "관리자 권한이 필요합니다.";
+          } else if (httpError.status === 409) {
+            errorMessage = "이미 처리된 FAQ 후보입니다.";
+          } else if (httpError.status === 500) {
+            errorMessage = "서버 오류가 발생했습니다. 백엔드 서버를 확인해주세요.";
+            if (httpError.body && typeof httpError.body === "object") {
+              const body = httpError.body as { message?: string; error?: string };
+              if (body.message || body.error) {
+                errorMessage += ` (${body.message || body.error})`;
+              }
+            }
+          } else {
+            errorMessage = httpError.message || `HTTP ${httpError.status} ${httpError.statusText || ""}`;
+          }
+        } else if (err instanceof Error) {
+          errorMessage = err.message;
+        }
+        
+        showToast("danger", errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [selectedCandidate, fetchCandidates]
+  );
+
+  // 삭제
+  const handleDelete = useCallback(
+    async (candidate: FAQCandidate, event?: React.MouseEvent) => {
+      // 이벤트 전파 방지 (카드 클릭 이벤트와 충돌 방지)
+      if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+      }
+      
+      const candidateId = candidate.id || candidate.faqDraftId;
+      if (!candidateId) {
+        showToast("danger", "FAQ 후보 ID가 없습니다.");
+        return;
+      }
+      
+      // reviewerId 가져오기 (keycloak token에서)
+      const reviewerId = (keycloak.tokenParsed as { sub?: string })?.sub;
+      if (!reviewerId) {
+        showToast("danger", "사용자 ID를 가져올 수 없습니다. 다시 로그인해주세요.");
+        return;
+      }
+      
+      // 확인 다이얼로그
+      const confirmed = window.confirm(
+        `정말로 이 FAQ 후보를 삭제하시겠습니까?\n\n질문: ${candidate.question}\n상태: ${statusLabel(candidate.status)}`
+      );
+      
+      if (!confirmed) {
+        return;
+      }
+      
+      try {
+        setLoading(true);
+        console.log("[FAQ] 삭제 요청 시작:", { candidateId, candidate, reviewerId });
+        await deleteFAQCandidate(candidateId, reviewerId);
+        console.log("[FAQ] 삭제 성공:", candidateId);
+        showToast("neutral", "FAQ 후보가 삭제되었습니다.");
+        
+        // 선택된 항목 해제
+        const currentId = selectedCandidate?.id || selectedCandidate?.faqDraftId;
+        if (currentId === candidateId) {
+          setSelectedCandidate(null);
+        }
+        
+        // 목록 새로고침
+        await fetchCandidates();
+      } catch (err) {
+        console.error("[FAQ] 삭제 실패:", err);
+        let errorMessage = "FAQ 후보 삭제에 실패했습니다.";
+        
+        // HttpError인 경우 상세 정보 추출
+        if (err instanceof Error && "status" in err) {
+          const httpError = err as {
+            status?: number;
+            statusText?: string;
+            body?: unknown;
+            message?: string;
+          };
+          
+          if (httpError.status === 404) {
+            errorMessage = "FAQ 후보를 찾을 수 없습니다.";
+          } else if (httpError.status === 403) {
+            errorMessage = "삭제 권한이 없습니다.";
+          } else if (httpError.status === 409) {
+            errorMessage = "이미 처리된 FAQ 후보는 삭제할 수 없습니다.";
+          } else {
+            errorMessage = httpError.message || `HTTP ${httpError.status} ${httpError.statusText || ""}`;
+          }
+        } else if (err instanceof Error) {
+          errorMessage = err.message;
+        }
+        
+        showToast("danger", errorMessage);
       } finally {
         setLoading(false);
       }
@@ -335,19 +789,18 @@ const AdminFAQTab: React.FC = () => {
           {/* 좌측: 후보 목록 */}
           <aside className="cb-policy-left">
             <div className="cb-policy-left-header">
-              <div className="cb-policy-left-title">FAQ 후보</div>
-
-              {/* 자동 생성 설정 및 버튼 */}
-              <div className="cb-policy-left-actions">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <div className="cb-policy-left-title">FAQ 후보</div>
                 <div
                   style={{
-                    padding: "12px",
+                    padding: "8px 12px",
                     backgroundColor: "#f0f7ff",
                     borderRadius: "4px",
-                    marginBottom: "12px",
                     fontSize: "12px",
                     color: "#333",
                     lineHeight: "1.5",
+                    flex: "1",
+                    marginLeft: "12px",
                   }}
                 >
                   <strong>💡 안내:</strong> 최근{" "}
@@ -356,6 +809,10 @@ const AdminFAQTab: React.FC = () => {
                   {autoGenSettings.minFrequency ?? 3}회 이상 질문한 항목이
                   자동 생성됩니다.
                 </div>
+              </div>
+
+              {/* 자동 생성 설정 및 버튼 */}
+              <div className="cb-policy-left-actions">
                 <div
                   style={{
                     display: "flex",
@@ -435,7 +892,6 @@ const AdminFAQTab: React.FC = () => {
                     }
                   >
                     <option value="ALL">전체</option>
-                    <option value="NEW">신규</option>
                     <option value="PENDING">대기중</option>
                     <option value="APPROVED">승인됨</option>
                     <option value="REJECTED">반려됨</option>
@@ -482,7 +938,28 @@ const AdminFAQTab: React.FC = () => {
                         <div className="cb-policy-group-docid">
                           {candidate.frequency ? `${candidate.frequency}회 질문` : "자동 생성"}
                         </div>
-                        <div className="cb-policy-group-top-right">
+                        <div className="cb-policy-group-top-right" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          {/* 승인됨/반려됨 상태일 때만 삭제 버튼 표시 */}
+                          {(candidate.status === "APPROVED" || candidate.status === "REJECTED") && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleDelete(candidate, e)}
+                              disabled={loading}
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: "12px",
+                                backgroundColor: "transparent",
+                                border: "1px solid #ddd",
+                                borderRadius: "4px",
+                                cursor: loading ? "not-allowed" : "pointer",
+                                color: "#666",
+                                opacity: loading ? 0.5 : 1,
+                              }}
+                              title="삭제"
+                            >
+                              삭제
+                            </button>
+                          )}
                           <span
                             className={cx(
                               "cb-reviewer-pill",
@@ -638,7 +1115,7 @@ const AdminFAQTab: React.FC = () => {
                     <section className="cb-policy-card">
                       <div className="cb-policy-card-title">승인/반려</div>
                       <div className="cb-policy-review-box">
-                        <div className="cb-policy-review-actions">
+                        <div className="cb-policy-review-actions" style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                           <button
                             type="button"
                             className="cb-admin-primary-btn"
@@ -652,7 +1129,6 @@ const AdminFAQTab: React.FC = () => {
                             className="cb-admin-ghost-btn"
                             onClick={() => handleReject(selectedCandidate)}
                             disabled={loading}
-                            style={{ marginLeft: "8px" }}
                           >
                             반려
                           </button>

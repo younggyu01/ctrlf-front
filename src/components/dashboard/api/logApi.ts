@@ -67,9 +67,9 @@ export function periodToDateRange(period: string): {
       startDate.setDate(startDate.getDate() - 30);
   }
 
-  // 시작일은 00:00:00, 종료일은 23:59:59로 설정
+  // 시작일은 00:00:00, 종료일은 현재 시간으로 설정 (최신 로그 포함)
   startDate.setHours(0, 0, 0, 0);
-  endDate.setHours(23, 59, 59, 999);
+  // endDate는 현재 시간 그대로 사용 (최신 채팅 로그가 즉시 반영되도록)
 
   return {
     startDate: startDate.toISOString(),
@@ -87,6 +87,9 @@ export async function getAdminLogs(
   const queryParams: Record<string, string | number | boolean | undefined> = {
     startDate: params.startDate,
     endDate: params.endDate,
+    // page와 size는 항상 명시적으로 전달 (기본값 사용 방지)
+    page: params.page ?? 0,
+    size: params.size ?? 100, // 기본값 100개 (백엔드 기본값 6 방지)
   };
 
   if (params.domain && params.domain !== "ALL") {
@@ -121,14 +124,6 @@ export async function getAdminLogs(
     queryParams.ragUsed = params.ragUsed;
   }
 
-  if (params.page !== undefined) {
-    queryParams.page = params.page;
-  }
-
-  if (params.size !== undefined) {
-    queryParams.size = params.size;
-  }
-
   if (params.sort) {
     queryParams.sort = params.sort;
   }
@@ -140,6 +135,9 @@ export async function getAdminLogs(
   console.log("[Logs API] 요청 파라미터:", {
     startDate: params.startDate,
     endDate: params.endDate,
+    startDateLocal: new Date(params.startDate).toLocaleString("ko-KR"),
+    endDateLocal: new Date(params.endDate).toLocaleString("ko-KR"),
+    현재시간: new Date().toLocaleString("ko-KR"),
     domain: params.domain,
     route: params.route,
     page: params.page,
@@ -149,12 +147,62 @@ export async function getAdminLogs(
 
   try {
     const response = await fetchJson<LogsResponse>(url);
+    
+    // 백엔드 디버깅을 위한 상세 로그
+    const allLogTimes = response.content?.map((log, idx) => ({
+      index: idx,
+      id: log.id,
+      createdAt: log.createdAt,
+      createdAtLocal: new Date(log.createdAt).toLocaleString("ko-KR"),
+      userId: log.userId,
+      domain: log.domain,
+    })) || [];
+    
     console.log("[Logs API] 응답 성공:", {
       contentLength: response.content?.length ?? 0,
       totalElements: response.totalElements,
       totalPages: response.totalPages,
+      firstLogTime: response.content?.[0]?.createdAt
+        ? new Date(response.content[0].createdAt).toLocaleString("ko-KR")
+        : null,
+      lastLogTime: response.content?.[response.content.length - 1]?.createdAt
+        ? new Date(response.content[response.content.length - 1].createdAt).toLocaleString("ko-KR")
+        : null,
+      // 모든 로그의 시간 정보 (백엔드 확인용)
+      allLogs: allLogTimes,
+      // 요청한 날짜 범위와 비교
+      requestedEndDate: new Date(params.endDate).toLocaleString("ko-KR"),
+      requestedStartDate: new Date(params.startDate).toLocaleString("ko-KR"),
     });
-    return response;
+    
+    // 응답이 배열 형태로 올 수도 있음 (방어적 처리)
+    if (Array.isArray(response)) {
+      return {
+        content: response,
+        page: 0,
+        size: response.length,
+        totalElements: response.length,
+        totalPages: 1,
+        first: true,
+        last: true,
+      };
+    }
+
+    // 응답이 객체 형태인 경우
+    if (response && typeof response === "object" && "content" in response) {
+      return response as LogsResponse;
+    }
+
+    // content 필드가 없는 경우 빈 배열로 반환
+    return {
+      content: [],
+      page: 0,
+      size: 0,
+      totalElements: 0,
+      totalPages: 0,
+      first: true,
+      last: true,
+    };
   } catch (error) {
     console.error("[Logs API] 요청 실패:", {
       url,
@@ -170,34 +218,5 @@ export async function getAdminLogs(
     });
     throw error;
   }
-
-  // 응답이 배열 형태로 올 수도 있음 (방어적 처리)
-  if (Array.isArray(response)) {
-    return {
-      content: response,
-      page: 0,
-      size: response.length,
-      totalElements: response.length,
-      totalPages: 1,
-      first: true,
-      last: true,
-    };
-  }
-
-  // 응답이 객체 형태인 경우
-  if (response && typeof response === "object" && "content" in response) {
-    return response as LogsResponse;
-  }
-
-  // content 필드가 없는 경우 빈 배열로 반환
-  return {
-    content: [],
-    page: 0,
-    size: 0,
-    totalElements: 0,
-    totalPages: 0,
-    first: true,
-    last: true,
-  };
 }
 

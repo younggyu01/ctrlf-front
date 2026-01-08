@@ -500,14 +500,12 @@ export interface PreprocessChunk {
  * 전처리 미리보기 응답 타입
  */
 export interface PreprocessPreviewResponse {
-  documentId: string;
-  version: number;
-  preprocessStatus: "IDLE" | "PROCESSING" | "COMPLETED" | "FAILED";
-  preview?: {
-    totalChunks: number;
-    sampleChunks: PreprocessChunk[];
-  };
-  processedAt?: string; // ISO-8601
+  preprocessStatus: "IDLE" | "PROCESSING" | "READY" | "FAILED";
+  preprocessPages: number | null;
+  preprocessChars: number | null;
+  preprocessExcerpt: string | null;
+  preprocessError: string | null;
+  content: string | null;
 }
 
 /**

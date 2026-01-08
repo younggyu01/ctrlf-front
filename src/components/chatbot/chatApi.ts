@@ -2,6 +2,7 @@
 import keycloak from "../../keycloak";
 import type {
   ChatAction,
+  ChatSource,
   ChatRequest,
   FeedbackValue,
   ChatSendResult,
@@ -534,6 +535,8 @@ type ChatMessageSendResponse = {
   createdAt: string;
   /** AI 응답에 포함된 프론트엔드 액션 정보 */
   action?: ChatAction;
+  /** RAG 참조 문서 목록 (출처 정보) */
+  sources?: ChatSource[];
 };
 
 /**
@@ -722,11 +725,50 @@ async function sendChatMessage(
             : typeof actionData["progressPercent"] === "number"
               ? actionData["progressPercent"]
               : undefined,
+        quizId:
+          nonEmptyString(actionData["quiz_id"]) ??
+          nonEmptyString(actionData["quizId"]) ??
+          undefined,
       };
     }
   }
 
-  return { messageId, role, content, createdAt, action };
+  // sources (RAG 참조 문서) 파싱
+  let sources: ChatSource[] | undefined;
+  if (isRecord(data)) {
+    const sourcesData = data["sources"];
+    if (Array.isArray(sourcesData)) {
+      sources = sourcesData
+        .filter((s): s is JsonRecord => isRecord(s))
+        .map((s) => ({
+          docId:
+            nonEmptyString(s["doc_id"]) ??
+            nonEmptyString(s["docId"]) ??
+            "",
+          title: nonEmptyString(s["title"]) ?? undefined,
+          page:
+            typeof s["page"] === "number" ? s["page"] : undefined,
+          score:
+            typeof s["score"] === "number" ? s["score"] : undefined,
+          snippet: nonEmptyString(s["snippet"]) ?? undefined,
+          articleLabel:
+            nonEmptyString(s["article_label"]) ??
+            nonEmptyString(s["articleLabel"]) ??
+            undefined,
+          articlePath:
+            nonEmptyString(s["article_path"]) ??
+            nonEmptyString(s["articlePath"]) ??
+            undefined,
+          sourceType:
+            nonEmptyString(s["source_type"]) ??
+            nonEmptyString(s["sourceType"]) ??
+            undefined,
+        }))
+        .filter((s) => s.docId); // docId가 있는 것만 유효
+    }
+  }
+
+  return { messageId, role, content, createdAt, action, sources };
 }
 
 /**
@@ -807,6 +849,7 @@ export async function sendChatToAI(req: ChatRequest): Promise<ChatSendResult> {
     content: sent.content || "응답이 비어 있습니다.",
     createdAt: sent.createdAt,
     action: sent.action,
+    sources: sent.sources,
   };
 }
 
@@ -829,20 +872,19 @@ function toScore(feedback: FeedbackValue): number | null {
 export async function sendFeedbackToAI(req: ChatFeedbackRequest): Promise<void> {
   const token = await ensureFreshToken();
   if (!token) {
-    console.warn("[chatApi] feedback skipped: not authenticated");
-    return;
+    throw new Error("Not authenticated: Keycloak token is missing.");
   }
 
   if (!isUuidLike(req.sessionId) || !isUuidLike(req.messageId)) {
-    console.warn(
-      "[chatApi] feedback skipped: sessionId/messageId must be UUID",
-      req
-    );
-    return;
+    throw new Error("Feedback failed: sessionId/messageId must be UUID.");
   }
 
   const score = toScore(req.feedback);
-  if (score == null) return;
+  if (score == null) {
+    // null 피드백(평가 해제)은 백엔드에서 지원하지 않으므로 무시
+    console.warn("[chatApi] feedback skipped: null feedback not supported");
+    return;
+  }
 
   const payload: UpstreamChatFeedbackRequest = {
     score,
@@ -865,9 +907,8 @@ export async function sendFeedbackToAI(req: ChatFeedbackRequest): Promise<void> 
 
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
-    console.warn(
-      `[chatApi] feedback failed: ${res.status} ${res.statusText}`,
-      bodyText
+    throw new Error(
+      `Feedback failed: ${res.status} ${res.statusText}${bodyText ? ` - ${bodyText}` : ""}`
     );
   }
 }
@@ -979,7 +1020,44 @@ export async function retryMessage(
             : typeof actionData["progressPercent"] === "number"
               ? actionData["progressPercent"]
               : undefined,
+        quizId:
+          nonEmptyString(actionData["quiz_id"]) ??
+          nonEmptyString(actionData["quizId"]) ??
+          undefined,
       };
+    }
+
+    // sources (RAG 참조 문서) 파싱
+    let sources: ChatSource[] | undefined;
+    const sourcesData = parsed["sources"];
+    if (Array.isArray(sourcesData)) {
+      sources = sourcesData
+        .filter((s): s is JsonRecord => isRecord(s))
+        .map((s) => ({
+          docId:
+            nonEmptyString(s["doc_id"]) ??
+            nonEmptyString(s["docId"]) ??
+            "",
+          title: nonEmptyString(s["title"]) ?? undefined,
+          page:
+            typeof s["page"] === "number" ? s["page"] : undefined,
+          score:
+            typeof s["score"] === "number" ? s["score"] : undefined,
+          snippet: nonEmptyString(s["snippet"]) ?? undefined,
+          articleLabel:
+            nonEmptyString(s["article_label"]) ??
+            nonEmptyString(s["articleLabel"]) ??
+            undefined,
+          articlePath:
+            nonEmptyString(s["article_path"]) ??
+            nonEmptyString(s["articlePath"]) ??
+            undefined,
+          sourceType:
+            nonEmptyString(s["source_type"]) ??
+            nonEmptyString(s["sourceType"]) ??
+            undefined,
+        }))
+        .filter((s) => s.docId);
     }
 
     return {
@@ -989,6 +1067,7 @@ export async function retryMessage(
       content: extractedContent.trim() ? extractedContent : "응답이 비어 있습니다.",
       createdAt,
       action,
+      sources,
     };
   }
 
@@ -1232,6 +1311,30 @@ export async function fetchFaqList(domain: ChatServiceDomain): Promise<FaqItem[]
   }
 
   return items;
+}
+
+/**
+ * FAQ 목록 캐시 무효화 (특정 도메인 또는 전체)
+ * 승인/반려 후 챗봇 UI의 FAQ 목록을 갱신하기 위해 사용
+ */
+export function invalidateFaqListCache(domain?: ChatServiceDomain): void {
+  if (domain) {
+    const key = String(domain).toUpperCase();
+    faqListCache.delete(key);
+    console.log(`[FAQ API] 캐시 무효화: ${key}`);
+  } else {
+    faqListCache.clear();
+    console.log(`[FAQ API] 전체 FAQ 캐시 무효화`);
+  }
+}
+
+/**
+ * FAQ Home 캐시 무효화
+ */
+export function invalidateFaqHomeCache(): void {
+  faqHomeCache.fetchedAt = 0;
+  faqHomeCache.items = [];
+  console.log(`[FAQ API] FAQ Home 캐시 무효화`);
 }
 
 async function postJsonWithAuth(

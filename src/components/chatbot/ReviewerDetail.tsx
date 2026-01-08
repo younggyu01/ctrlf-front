@@ -221,13 +221,17 @@ const ReviewerDetail: React.FC<ReviewerDetailProps> = ({
   detailTab,
   setDetailTab,
   selectedItem,
-  notesById,
-  setNotesById,
-  onSaveNote,
+  notesById: _notesById,
+  setNotesById: _setNotesById,
+  onSaveNote: _onSaveNote,
   onOpenPreview,
   onRequestPolicyRetryIndexing,
   onRequestPolicyRollback,
 }) => {
+  // 현재 미사용이지만 향후 노트 기능 구현 시 사용 예정
+  void _notesById;
+  void _setNotesById;
+  void _onSaveNote;
   // Hooks는 반드시 early return 이전에 호출되어야 함
   const policyVersions = useSyncExternalStore(
     subscribePolicyStore,

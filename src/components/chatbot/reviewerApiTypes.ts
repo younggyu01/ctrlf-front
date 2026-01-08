@@ -61,7 +61,7 @@ export interface ReviewDetailResponse {
   educationTitle: string;
   videoTitle: string;
   status: "SCRIPT_REVIEW_REQUESTED" | "FINAL_REVIEW_REQUESTED" | "PUBLISHED" | string;
-  reviewStage: "1차" | "2차" | "승인됨" | "1차 반려" | "2차 반려";
+  reviewStage: "1차" | "2차" | "승인됨" | "1차 반려" | "2차 반려" | "SCRIPT" | "FINAL";
   creatorDepartment?: string;
   creatorName?: string;
   creatorUuid?: string;

@@ -9,11 +9,9 @@ import { DEPARTMENT_OPTIONS } from "../../adminDashboardMocks";
 import {
   searchUsers,
   getUser,
-  getRoles,
   updateUser,
   updateUserRoles,
   type User,
-  type Role,
 } from "../../api/userApi";
 
 /** 롤 한글 라벨 매핑 (요약 표시용) */
@@ -79,7 +77,6 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [userList, setUserList] = useState<AdminUserSummary[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedRoles, setSelectedRoles] = useState<RoleKey[]>([]);
   const [creatorType, setCreatorType] = useState<CreatorType>(null);
@@ -88,6 +85,7 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
     null
   );
   const [userSearchKeyword, setUserSearchKeyword] = useState("");
+  const [debouncedSearchKeyword, setDebouncedSearchKeyword] = useState("");
   const [userDeptFilter, setUserDeptFilter] = useState("ALL");
   const [userRoleFilter, setUserRoleFilter] = useState<RoleKey | "ALL">("ALL");
   const [currentPage, setCurrentPage] = useState(0);
@@ -101,6 +99,15 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
     creatorDeptScope: string[];
   } | null>(null);
 
+  // 검색어 디바운싱 (500ms 지연)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchKeyword(userSearchKeyword);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [userSearchKeyword]);
+
   // 사용자 목록 및 역할 목록 로드
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -112,23 +119,19 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
           ? undefined
           : DEPT_CODE_TO_NAME_MAP[userDeptFilter] || userDeptFilter;
       const role = userRoleFilter === "ALL" ? undefined : userRoleFilter;
-      const search = userSearchKeyword.trim() || undefined;
+      const search = debouncedSearchKeyword.trim() || undefined;
 
-      const [usersRes, rolesRes] = await Promise.all([
-        searchUsers({
-          search,
-          department,
-          role,
-          page: currentPage,
-          size: pageSize,
-        }),
-        getRoles(),
-      ]);
+      const usersRes = await searchUsers({
+        search,
+        department,
+        role,
+        page: currentPage,
+        size: pageSize,
+      });
 
       const convertedUsers = usersRes.items.map(convertUserToAdminUserSummary);
       setUserList(convertedUsers);
       setTotalUsers(usersRes.total);
-      setRoles(rolesRes);
     } catch (err) {
       setError(
         err instanceof Error
@@ -139,7 +142,7 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
     } finally {
       setLoading(false);
     }
-  }, [userSearchKeyword, userDeptFilter, userRoleFilter, currentPage]);
+  }, [debouncedSearchKeyword, userDeptFilter, userRoleFilter, currentPage]);
 
   useEffect(() => {
     fetchUsers();
@@ -148,7 +151,7 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
   // 필터 변경 시 첫 페이지로 리셋
   useEffect(() => {
     setCurrentPage(0);
-  }, [userSearchKeyword, userDeptFilter, userRoleFilter]);
+  }, [debouncedSearchKeyword, userDeptFilter, userRoleFilter]);
 
   // 선택된 사용자 상세 정보 로드
   const fetchSelectedUser = useCallback(async () => {
@@ -252,27 +255,27 @@ const AdminAccountsTab: React.FC<AdminAccountsTabProps> = () => {
       await updateUserRoles(selectedUserId, selectedRoles);
 
       // VIDEO_CREATOR 관련 속성 업데이트
-      if (selectedRoles.includes("VIDEO_CREATOR")) {
-        const attributes: Record<string, string[]> = {};
-        if (creatorType) {
-          attributes.creatorType = [creatorType];
-        }
-        if (creatorDeptScope.length > 0) {
-          attributes.creatorDeptScope = creatorDeptScope;
-        }
+      // if (selectedRoles.includes("VIDEO_CREATOR")) {
+      //   const attributes: Record<string, string[]> = {};
+      //   if (creatorType) {
+      //     attributes.creatorType = [creatorType];
+      //   }
+      //   if (creatorDeptScope.length > 0) {
+      //     attributes.creatorDeptScope = creatorDeptScope;
+      //   }
 
-        await updateUser(selectedUserId, {
-          attributes,
-        });
-      } else {
-        // VIDEO_CREATOR 역할이 없으면 속성 제거
-        await updateUser(selectedUserId, {
-          attributes: {
-            creatorType: [],
-            creatorDeptScope: [],
-          },
-        });
-      }
+      //   await updateUser(selectedUserId, {
+      //     attributes,
+      //   });
+      // } else {
+      //   // VIDEO_CREATOR 역할이 없으면 속성 제거
+      //   await updateUser(selectedUserId, {
+      //     attributes: {
+      //       creatorType: [],
+      //       creatorDeptScope: [],
+      //     },
+      //   });
+      // }
 
       setAccountMessage({
         type: "success",

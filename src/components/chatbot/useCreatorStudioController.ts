@@ -33,6 +33,8 @@ import {
 // 공용 auth fetch (Authorization 포함)
 import { fetchJson } from "../common/api/authHttp";
 import keycloak from "../../keycloak";
+import { uploadDocument } from "./ragDocumentsApi";
+import { getVideo } from "./creatorApi";
 
 type ToastKind = "success" | "error" | "info";
 
@@ -55,6 +57,14 @@ export interface UseCreatorStudioControllerOptions {
    * - 미지정이면 전부서 허용
    */
   allowedDeptIds?: string[] | null;
+
+  /**
+   * 문서 업로드 시 사용할 domain
+   * - "EDU": 교육 컨텐츠 페이지에서 열었을 때
+   * - "POLICY": 관리자 사규탭 페이지에서 열었을 때
+   * - 미지정 시 "EDU" 기본값 사용
+   */
+  sourceDomain?: "EDU" | "POLICY";
 }
 
 /**
@@ -89,7 +99,6 @@ const INFRA_BASE = String(ENV.VITE_INFRA_API_BASE ?? "/api-infra").replace(
   /\/$/,
   ""
 );
-const RAG_BASE = String(ENV.VITE_RAG_API_BASE ?? INFRA_BASE).replace(/\/$/, "");
 
 /**
  * Creator Studio “실 API” 기본값 (env로 오버라이드 가능)
@@ -192,10 +201,6 @@ const INFRA_PRESIGN_UPLOAD_ENDPOINT = envStr(
 const INFRA_PRESIGN_UPLOAD_PUT_PROXY_ENDPOINT = envStr(
   "VITE_INFRA_PRESIGN_UPLOAD_PUT_PROXY_ENDPOINT",
   `${INFRA_BASE}/infra/files/presign/upload/put`
-);
-const RAG_DOCUMENT_UPLOAD_ENDPOINT = envStr(
-  "VITE_RAG_DOCUMENT_UPLOAD_ENDPOINT",
-  `${RAG_BASE}/rag/documents/upload`
 );
 
 function expandEndpoint(tpl: string, params: Record<string, string>): string {
@@ -664,7 +669,7 @@ function normalizeCreatorSourceFilesForItem(
     src.push({
       id: `src-legacy-${it.id}`,
       name: it.assets.sourceFileName,
-      size: it.assets.sourceFileSize ?? 0,
+      size: 0, // 백엔드에서 제공하지 않음
       mime: it.assets.sourceFileMime ?? "",
       addedAt: it.updatedAt,
     });
@@ -678,7 +683,6 @@ function normalizeCreatorSourceFilesForItem(
       ...it.assets,
       sourceFiles: src,
       sourceFileName: primary?.name ?? it.assets.sourceFileName ?? "",
-      sourceFileSize: primary ? primary.size : it.assets.sourceFileSize ?? 0,
       sourceFileMime: primary?.mime ?? it.assets.sourceFileMime ?? "",
     },
   };
@@ -690,89 +694,10 @@ function normalizeCreatorSourceFiles(
   return items.map(normalizeCreatorSourceFilesForItem);
 }
 
-// 세션 스토리지에 파일 정보 저장/복원 (브라우저 종료 시 자동 정리)
-// TODO: 장기적으로는 서버 응답에 파일 정보가 포함되어야 함 (백엔드 협업 필요)
-const STORAGE_PREFIX = "creator-source-files";
-
-function getStorageKey(videoId: string): string {
-  return `${STORAGE_PREFIX}:${videoId}`;
-}
-
-function saveSourceFilesToStorage(
-  videoId: string,
-  sourceFiles: CreatorSourceFile[],
-  sourceFileName: string,
-  sourceFileSize: number,
-  sourceFileMime: string
-): void {
-  try {
-    const data = {
-      sourceFiles,
-      sourceFileName,
-      sourceFileSize,
-      sourceFileMime,
-      savedAt: Date.now(),
-    };
-    // 세션 스토리지 사용 (브라우저 종료 시 자동 정리)
-    sessionStorage.setItem(getStorageKey(videoId), JSON.stringify(data));
-  } catch {
-    // sessionStorage 실패는 조용히 무시
-  }
-}
-
-function loadSourceFilesFromStorage(videoId: string): {
-  sourceFiles: CreatorSourceFile[];
-  sourceFileName: string;
-  sourceFileSize: number;
-  sourceFileMime: string;
-} | null {
-  try {
-    const raw = sessionStorage.getItem(getStorageKey(videoId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-
-    const sourceFiles = Array.isArray(parsed.sourceFiles)
-      ? parsed.sourceFiles
-      : [];
-    const sourceFileName =
-      typeof parsed.sourceFileName === "string" ? parsed.sourceFileName : "";
-    const sourceFileSize =
-      typeof parsed.sourceFileSize === "number" ? parsed.sourceFileSize : 0;
-    const sourceFileMime =
-      typeof parsed.sourceFileMime === "string" ? parsed.sourceFileMime : "";
-
-    // 실제 documentId가 있는 파일만 반환 (레거시나 임시 ID 제외)
-    const realFiles = sourceFiles.filter(
-      (f: CreatorSourceFile) =>
-        f &&
-        typeof f === "object" &&
-        "id" in f &&
-        typeof f.id === "string" &&
-        !f.id.startsWith("src-legacy-") &&
-        !f.id.startsWith("SRC_TMP")
-    );
-
-    if (realFiles.length === 0 && !sourceFileName) return null;
-
-    return {
-      sourceFiles: realFiles.length > 0 ? realFiles : sourceFiles,
-      sourceFileName,
-      sourceFileSize,
-      sourceFileMime,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function removeSourceFilesFromStorage(videoId: string): void {
-  try {
-    sessionStorage.removeItem(getStorageKey(videoId));
-  } catch {
-    // sessionStorage 실패는 조용히 무시
-  }
-}
+// 세션 스토리지 관련 코드 제거됨
+// 이제 API 응답에서 sourceFileName, sourceFileUrl을 받아와서 사용합니다
+// 백엔드 API 응답 (GET /video/{videoId}, GET /admin/edus/with-videos)에서
+// sourceFileName, sourceFileUrl 필드를 제공하므로 세션 스토리지가 불필요합니다
 
 type EduSummary = {
   educationId: string;
@@ -930,26 +855,66 @@ function deriveDepartmentOptionsFromEducations(
       .filter(Boolean)
   );
 
-  const idsFromScope = uniq(
+  const namesFromScope = uniq(
     edus
       .flatMap((e) =>
         Array.isArray(e.departmentScope) ? e.departmentScope : []
       )
-      .filter(Boolean)
+      .filter((x) => x && String(x).trim().length > 0)
+      .filter((x) => {
+        const s = String(x).trim();
+        // "전체 부서"는 제외
+        return s !== "전체 부서" && s !== "전사" && s.toLowerCase() !== "all";
+      })
   );
 
-  // scope(이름)도 deptId로 최대한 변환
-  const mappedScopeIds = normalizeDepartmentScopeToDeptIds(idsFromScope, known);
-
-  const all = uniq([...idsFromTarget, ...mappedScopeIds]).filter(
-    (x) => String(x).trim().length > 0
+  // scope(이름)를 deptId로 최대한 변환 시도
+  const mappedScopeIds = normalizeDepartmentScopeToDeptIds(
+    namesFromScope,
+    known
   );
 
-  // id→name(알 수 없으면 id 그대로)
+  // 매핑 실패한 경우: 부서명 자체를 ID로 사용 (id와 name이 같음)
+  const unmappedNames = namesFromScope.filter((name) => {
+    const normalized = String(name).trim().toLowerCase();
+    return !mappedScopeIds.some((id) => {
+      const idLower = String(id).trim().toLowerCase();
+      const knownDept = known.find((d) => d.id === id);
+      const knownName = knownDept?.name?.trim().toLowerCase();
+      return idLower === normalized || knownName === normalized;
+    });
+  });
+
+  // targetDeptIds, 매핑된 scope IDs, 매핑 실패한 scope 이름들을 모두 합침
+  const all = uniq([
+    ...idsFromTarget,
+    ...mappedScopeIds,
+    ...unmappedNames,
+  ]).filter((x) => String(x).trim().length > 0);
+
+  // id→name 매핑 구축
   const byId = new Map<string, string>();
+
+  // 기존 known 부서 카탈로그에서 매핑
   for (const d of known) {
     if (!d?.id) continue;
     byId.set(d.id, (d.name ?? deptLabel(d.id) ?? d.id).trim());
+  }
+
+  // 매핑된 scope ID들의 이름 설정
+  for (const id of mappedScopeIds) {
+    if (!byId.has(id)) {
+      const knownDept = known.find((d) => d.id === id);
+      byId.set(id, (knownDept?.name ?? deptLabel(id) ?? id).trim());
+    }
+  }
+
+  // 매핑 실패한 scope 이름들: 이름 자체를 ID와 name으로 사용
+  for (const name of unmappedNames) {
+    const id = String(name).trim();
+    if (!byId.has(id)) {
+      byId.set(id, id);
+    }
   }
 
   return all.map(
@@ -1218,7 +1183,7 @@ function normalizeCreatorWorkItemFromEduVideoPair(
   const sourceFilesRaw =
     readArr(videoRaw, "sourceFiles") ?? readArr(videoRaw, "attachments") ?? [];
   const sourceFileName = readStr(videoRaw, "sourceFileName") ?? "";
-  const sourceFileSize = readNum(videoRaw, "sourceFileSize") ?? 0;
+  const sourceFileUrl = readStr(videoRaw, "sourceFileUrl") ?? "";
   const sourceFileMime = readStr(videoRaw, "sourceFileMime") ?? "";
 
   // 서버 응답에서 documentId 또는 documentIds 읽기
@@ -1259,6 +1224,8 @@ function normalizeCreatorWorkItemFromEduVideoPair(
   }
 
   // 2. sourceFiles가 없고 documentId/documentIds가 있는 경우
+  // ⚠️ 주의: 백엔드가 리스트 조회 응답에서 잘못된 documentIds를 공통으로 반환할 수 있음
+  // 따라서 sourceFileUrl이 실제로 해당 video와 연결되어 있는지 확인 필요
   if (sourceFiles.length === 0 && (documentId || documentIds.length > 0)) {
     const ids = documentId
       ? [documentId]
@@ -1267,12 +1234,29 @@ function normalizeCreatorWorkItemFromEduVideoPair(
       : [];
     const validIds = ids.filter((id) => id.trim().length > 0);
 
-    if (validIds.length > 0 && sourceFileName) {
-      // documentId가 있고 sourceFileName이 있으면 sourceFiles 재구성
+    // UUID 형식인지 확인 (백엔드가 sourceFileName에 UUID를 넣는 버그 대응)
+    const isUuidLike = (v: string): boolean => {
+      return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+        v
+      );
+    };
+
+    // sourceFileUrl과 sourceFileName이 모두 있어야만 documentId를 신뢰
+    // (백엔드가 리스트 조회 시 잘못된 documentIds를 반환할 수 있음)
+    const hasValidSourceFileInfo =
+      sourceFileUrl &&
+      sourceFileUrl.trim().length > 0 &&
+      sourceFileName &&
+      sourceFileName.trim().length > 0 &&
+      !isUuidLike(sourceFileName);
+
+    if (validIds.length > 0 && hasValidSourceFileInfo) {
+      // documentId가 있고 sourceFileUrl과 실제 파일명이 있으면 sourceFiles 재구성
+      // size는 백엔드에서 제공하지 않으므로 0으로 설정
       sourceFiles = validIds.map((id) => ({
         id: id.trim(),
         name: sourceFileName,
-        size: sourceFileSize,
+        size: 0, // 백엔드에서 제공하지 않음
         mime: sourceFileMime || undefined,
         addedAt: updatedAt,
       }));
@@ -1298,8 +1282,26 @@ function normalizeCreatorWorkItemFromEduVideoPair(
     createdByName,
     assets: {
       sourceFiles,
-      sourceFileName,
-      sourceFileSize,
+      // 백엔드가 sourceFileName에 UUID를 넣는 버그가 있으므로 UUID인 경우 무시
+      // sourceFiles 배열에 실제 파일명이 있으면 그것을 우선 사용
+      sourceFileName: (() => {
+        const isUuidLike = (v: string): boolean => {
+          return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+            v
+          );
+        };
+        // sourceFiles 배열에 실제 파일명이 있으면 그것을 사용
+        if (sourceFiles.length > 0 && sourceFiles[0].name) {
+          return sourceFiles[0].name;
+        }
+        // sourceFileName이 UUID가 아니면 사용
+        if (sourceFileName && !isUuidLike(sourceFileName)) {
+          return sourceFileName;
+        }
+        // UUID이거나 비어있으면 빈 문자열
+        return "";
+      })(),
+      sourceFileUrl,
       sourceFileMime,
       script: scriptPreview,
       videoUrl: fileUrl,
@@ -1939,11 +1941,6 @@ type PresignUploadResponse = {
   key?: string;
 };
 
-type RagUploadResponse = {
-  documentId?: string;
-  id?: string;
-};
-
 async function requestPresignUpload(args: {
   fileName: string;
   contentType?: string;
@@ -2067,31 +2064,6 @@ async function putToS3WithFallback(args: {
   }
 }
 
-async function registerDocumentToRag(args: {
-  fileUrl: string;
-  fileName: string;
-  contentType?: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const res = await safeFetchJson<unknown>(RAG_DOCUMENT_UPLOAD_ENDPOINT, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      fileUrl: args.fileUrl,
-      fileName: args.fileName,
-      contentType: args.contentType,
-    }),
-    signal: args.signal,
-  });
-
-  const r = (res ?? {}) as RagUploadResponse;
-  const docId = (r.documentId ?? r.id ?? "").trim();
-
-  if (!docId)
-    throw new Error("RAG 업로드 응답에서 documentId를 찾지 못했습니다.");
-  return docId;
-}
-
 /* -----------------------------
  * validation
  * ----------------------------- */
@@ -2129,10 +2101,11 @@ function validateForReview(
     );
   }
 
-  if (
-    item.assets.sourceFileSize &&
-    item.assets.sourceFileSize > MAX_SOURCE_FILE_SIZE_BYTES
-  ) {
+  // 파일 크기 검증: sourceFiles 배열의 각 항목에서 확인
+  const oversizedFiles = srcFiles.filter(
+    (f) => f.size > MAX_SOURCE_FILE_SIZE_BYTES
+  );
+  if (oversizedFiles.length > 0) {
     issues.push("교육 자료 파일이 너무 큽니다. (최대 50MB)");
   }
 
@@ -2246,6 +2219,7 @@ export function useCreatorStudioController(
 ) {
   const creatorName = options?.creatorName ?? "VIDEO_CREATOR";
   const allowedDeptIds = options?.allowedDeptIds ?? null;
+  const sourceDomain = options?.sourceDomain ?? "EDU";
 
   const creatorType: CreatorType =
     options?.creatorType ??
@@ -2258,6 +2232,12 @@ export function useCreatorStudioController(
   // 서버 로딩
   const [items, setItems] = useState<CreatorWorkItem[]>([]);
   const [educations, setEducations] = useState<EduSummary[]>([]);
+  
+  // items 상태의 최신 값을 보장하기 위한 ref
+  const itemsRef = useRef<CreatorWorkItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   type CreatorCatalogState = {
     categories: CategoryOption[];
@@ -2290,6 +2270,9 @@ export function useCreatorStudioController(
 
   const [toast, setToast] = useState<CreatorToast | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  // 초안 생성 후 자동 선택을 위한 ref
+  const pendingCreatedVideoIdRef = useRef<string | null>(null);
 
   // polling
   const pollRef = useRef<number | null>(null);
@@ -2590,7 +2573,8 @@ export function useCreatorStudioController(
 
     const sorted = sortItems(allowedItems, "updated_desc");
     const byTab = sorted.filter((it) => tabMatchesStatus(tab, it));
-    const fallback = (byTab[0] ?? sorted[0] ?? null)?.id ?? null;
+    // 탭에 맞는 아이템이 있으면 첫 번째를, 없으면 null 반환 (다른 탭의 아이템을 선택하지 않음)
+    const fallback = (byTab[0] ?? null)?.id ?? null;
 
     if (!rawSelectedId) return fallback;
 
@@ -2598,8 +2582,9 @@ export function useCreatorStudioController(
     if (!exists) return fallback;
 
     const cur = allowedItems.find((it) => it.id === rawSelectedId) ?? null;
+    // 현재 선택된 아이템이 탭과 맞지 않으면, 탭에 맞는 첫 번째 아이템을 선택 (없으면 null)
     if (cur && !tabMatchesStatus(tab, cur)) {
-      return (byTab[0] ?? null)?.id ?? null;
+      return fallback;
     }
 
     return rawSelectedId;
@@ -2726,18 +2711,42 @@ export function useCreatorStudioController(
                 const existingSourceFiles = Array.isArray(it.assets.sourceFiles)
                   ? it.assets.sourceFiles
                   : [];
-                const sourceFileName =
-                  readStr(raw, "sourceFileName") ??
-                  it.assets.sourceFileName ??
-                  "";
-                const sourceFileSize =
-                  readNum(raw, "sourceFileSize") ??
-                  it.assets.sourceFileSize ??
-                  0;
+                const rawSourceFileName = readStr(raw, "sourceFileName") ?? "";
                 const sourceFileMime =
                   readStr(raw, "sourceFileMime") ??
                   it.assets.sourceFileMime ??
                   "";
+
+                // UUID 형식인지 확인 (백엔드가 sourceFileName에 UUID를 넣는 버그 대응)
+                const isUuidLike = (v: string): boolean => {
+                  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+                    v
+                  );
+                };
+
+                // sourceFileName 결정: UUID가 아닌 실제 파일명을 우선 사용
+                const sourceFileName = (() => {
+                  // 기존 sourceFiles에 실제 파일명이 있으면 그것을 사용
+                  if (
+                    existingSourceFiles.length > 0 &&
+                    existingSourceFiles[0].name
+                  ) {
+                    return existingSourceFiles[0].name;
+                  }
+                  // 백엔드 응답이 UUID가 아니면 사용
+                  if (rawSourceFileName && !isUuidLike(rawSourceFileName)) {
+                    return rawSourceFileName;
+                  }
+                  // 기존 값이 UUID가 아니면 사용
+                  if (
+                    it.assets.sourceFileName &&
+                    !isUuidLike(it.assets.sourceFileName)
+                  ) {
+                    return it.assets.sourceFileName;
+                  }
+                  // 모두 UUID이거나 비어있으면 빈 문자열
+                  return "";
+                })();
 
                 const next: CreatorWorkItem = {
                   ...it,
@@ -2750,10 +2759,7 @@ export function useCreatorStudioController(
                       existingSourceFiles.length > 0
                         ? existingSourceFiles
                         : it.assets.sourceFiles,
-                    sourceFileName:
-                      sourceFileName || it.assets.sourceFileName || "",
-                    sourceFileSize:
-                      sourceFileSize || it.assets.sourceFileSize || 0,
+                    sourceFileName,
                     sourceFileMime:
                       sourceFileMime || it.assets.sourceFileMime || "",
                     script: readStr(raw, "scriptText") ?? it.assets.script,
@@ -2908,6 +2914,27 @@ export function useCreatorStudioController(
 
   const selectItem = (id: string) => setRawSelectedId(id);
 
+  // 초안 생성 후 sortMode가 created_desc로 변경되고 items가 업데이트되면 첫 번째 항목 자동 선택
+  useEffect(() => {
+    if (
+      sortMode === "created_desc" &&
+      pendingCreatedVideoIdRef.current &&
+      filteredItems.length > 0
+    ) {
+      const targetId = pendingCreatedVideoIdRef.current;
+      const found = filteredItems.find((it) => it.id === targetId);
+      if (found) {
+        // 새로 생성된 항목이 filteredItems에 있고, created_desc 정렬로 맨 위에 있어야 함
+        // 첫 번째 항목이 새로 생성된 항목인지 확인
+        if (filteredItems[0].id === targetId) {
+          setRawSelectedId(targetId);
+          setTab("draft");
+          pendingCreatedVideoIdRef.current = null;
+        }
+      }
+    }
+  }, [sortMode, filteredItems, setTab]);
+
   /* -----------------------------
    * Server: list/load
    * ----------------------------- */
@@ -2933,9 +2960,23 @@ export function useCreatorStudioController(
       );
 
       // 기존 items의 sourceFiles와 script 정보 보존 (로컬에 저장된 파일 정보 유지)
-      // items 상태를 직접 참조하여 merged 계산 (setItems 콜백과 동일한 로직)
+      // itemsRef를 사용하여 최신 상태를 보장 (setItems 직후 refreshItems 호출 시 이전 상태 참조 방지)
       // normalizeCreatorSourceFiles 호출 전에 prevMap을 생성하여 기존 파일 정보를 보존
-      const prevMap = new Map(items.map((it) => [it.id, it]));
+      const currentItems = itemsRef.current;
+      const prevMap = new Map(currentItems.map((it) => [it.id, it]));
+      
+      // 디버깅: refreshItems 호출 시점 확인
+      console.log("[refreshItems] 호출됨:", {
+        itemsCount: currentItems.length,
+        prevMapSize: prevMap.size,
+        itemsWithSourceFiles: currentItems.filter(it => 
+          Array.isArray(it.assets?.sourceFiles) && it.assets.sourceFiles.length > 0
+        ).map(it => ({
+          id: it.id,
+          sourceFilesCount: Array.isArray(it.assets?.sourceFiles) ? it.assets.sourceFiles.length : 0,
+          sourceFileName: it.assets?.sourceFileName ?? "",
+        })),
+      });
 
       const normalized = normalizeCreatorSourceFiles(videos);
 
@@ -3010,26 +3051,21 @@ export function useCreatorStudioController(
 
       const merged = normalizedWithScriptIds.map((newItem) => {
         const prevItem = prevMap.get(newItem.id);
+        
+        // 디버깅: prevItem 확인
+        if (prevItem && Array.isArray(prevItem.assets.sourceFiles) && prevItem.assets.sourceFiles.length > 0) {
+          console.log("[refreshItems] prevItem 발견:", {
+            videoId: newItem.id,
+            prevSourceFilesCount: prevItem.assets.sourceFiles.length,
+            prevSourceFileName: prevItem.assets.sourceFileName,
+            newSourceFilesCount: Array.isArray(newItem.assets.sourceFiles) ? newItem.assets.sourceFiles.length : 0,
+            newSourceFileName: newItem.assets.sourceFileName,
+          });
+        }
 
         // prevItem이 없는 경우 (페이지를 처음 열거나 닫았다가 다시 열었을 때)
-        // 로컬 스토리지에서 파일 정보 복원 시도
+        // API 응답에서 받아온 sourceFileName, sourceFileUrl을 사용 (세션 스토리지 대신)
         if (!prevItem) {
-          const stored = loadSourceFilesFromStorage(newItem.id);
-          if (stored && stored.sourceFiles.length > 0) {
-            // 로컬 스토리지에 저장된 파일 정보가 있으면 복원
-            const restored: CreatorWorkItem = {
-              ...newItem,
-              assets: {
-                ...newItem.assets,
-                sourceFiles: stored.sourceFiles,
-                sourceFileName: stored.sourceFileName,
-                sourceFileSize: stored.sourceFileSize,
-                sourceFileMime: stored.sourceFileMime,
-              },
-            };
-            return normalizeCreatorSourceFilesForItem(restored);
-          }
-          // 로컬 스토리지에도 없으면 normalizeCreatorSourceFilesForItem 적용
           return normalizeCreatorSourceFilesForItem(newItem);
         }
 
@@ -3053,6 +3089,25 @@ export function useCreatorStudioController(
             !f.id.startsWith("src-legacy-") &&
             !f.id.startsWith("SRC_TMP")
         );
+        
+        // 디버깅: prevSourceFiles 구조 확인
+        if (prevSourceFiles.length > 0 && prevRealSourceFiles.length === 0) {
+          console.log("[refreshItems] prevSourceFiles 필터링 결과:", {
+            videoId: newItem.id,
+            prevSourceFilesCount: prevSourceFiles.length,
+            prevRealSourceFilesCount: prevRealSourceFiles.length,
+            prevSourceFilesSample: prevSourceFiles.slice(0, 2).map(f => ({
+              id: f?.id,
+              name: f?.name,
+              hasId: "id" in (f || {}),
+              idType: typeof f?.id,
+              idStartsWith: f?.id ? {
+                srcLegacy: f.id.startsWith("src-legacy-"),
+                srcTmp: f.id.startsWith("SRC_TMP"),
+              } : null,
+            })),
+          });
+        }
 
         // 새 sourceFiles 중 실제 업로드된 파일(레거시가 아닌, 임시 ID가 아닌) 확인
         const newRealSourceFiles = newSourceFiles.filter(
@@ -3071,10 +3126,17 @@ export function useCreatorStudioController(
         const newScriptId = readMetaStrFromItem(newItem, "scriptId");
         const newScript = newItem.assets.script || "";
 
+        // UUID 형식인지 확인 (백엔드가 sourceFileName에 UUID를 넣는 버그 대응)
+        const isUuidLike = (v: string): boolean => {
+          return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+            v
+          );
+        };
+
         // sourceFiles 보존 여부 확인
-        // 기존에 실제 업로드된 파일이 있고, 새 것에는 실제 업로드된 파일이 없으면 보존
-        // 서버 응답에 sourceFiles 정보가 없을 수 있으므로, 기존에 실제 파일이 있으면 보존
-        // 또는 기존에 sourceFileName이 있고 새 것에는 없으면 보존 (파일이 업로드되었음을 의미)
+        // ⚠️ 백엔드가 리스트 조회 시 잘못된 documentIds를 공통으로 반환할 수 있음
+        // ⚠️ 백엔드가 파일 업로드 직후 sourceFileName/sourceFileUrl을 즉시 업데이트하지 않을 수 있음
+        // 기존에 실제 업로드된 파일이 있으면 항상 보존 (백엔드의 잘못된 응답 무시)
         const prevHasSourceFileName = Boolean(
           prevItem.assets.sourceFileName &&
             prevItem.assets.sourceFileName.trim().length > 0
@@ -3083,11 +3145,42 @@ export function useCreatorStudioController(
           newItem.assets.sourceFileName &&
             newItem.assets.sourceFileName.trim().length > 0
         );
+
+        // 기존에 실제 파일명( UUID가 아닌)이 있으면 보존
+        const prevHasRealFileName =
+          prevHasSourceFileName &&
+          prevItem.assets.sourceFileName &&
+          !isUuidLike(prevItem.assets.sourceFileName);
+
+        // 새 응답의 sourceFileName이 UUID인지 확인
+        const newFileNameIsUuid =
+          newHasSourceFileName &&
+          newItem.assets.sourceFileName &&
+          isUuidLike(newItem.assets.sourceFileName);
+
+        // 기존 sourceFiles에 실제 파일명이 있는지 확인
+        const prevHasRealFileInfo =
+          prevRealSourceFiles.length > 0 &&
+          prevRealSourceFiles.some(
+            (f) => f.name && f.name.trim().length > 0 && !isUuidLike(f.name)
+          );
+
+        // sourceFiles 보존 조건:
+        // 1. 기존에 실제 업로드된 파일이 있으면 항상 보존
+        // 2. 기존에 실제 파일명이 있고, 새 것이 없거나 UUID이면 보존
+        // 3. 백엔드 응답에 sourceFiles가 없거나 빈 경우 보존
+        // 4. 새 응답의 documentId가 기존 것과 다르면 보존 (백엔드가 잘못된 documentId를 반환할 수 있음)
+        // 5. 기존 sourceFiles가 있고 새 sourceFiles가 비어있으면 항상 보존 (파일 업로드 직후 백엔드가 아직 반영하지 않은 경우)
         const shouldPreserveSourceFiles =
-          (prevRealSourceFiles.length > 0 && newRealSourceFiles.length === 0) ||
-          (prevHasSourceFileName &&
-            !newHasSourceFileName &&
-            prevRealSourceFiles.length > 0);
+          prevRealSourceFiles.length > 0 || // 기존에 실제 업로드된 파일이 있으면 항상 보존
+          prevHasRealFileInfo || // 기존 sourceFiles에 실제 파일명이 있으면 보존
+          (prevHasRealFileName &&
+            (!newHasSourceFileName || newFileNameIsUuid)) || // 기존에 실제 파일명이 있고, 새 것이 없거나 UUID이면 보존
+          (newRealSourceFiles.length === 0 && prevRealSourceFiles.length > 0) || // 백엔드 응답에 sourceFiles가 없거나 빈 경우 보존
+          (prevRealSourceFiles.length > 0 &&
+            newRealSourceFiles.length > 0 &&
+            prevRealSourceFiles[0].id !== newRealSourceFiles[0].id) || // 기존과 새 것의 documentId가 다르면 기존 것 보존
+          (prevSourceFiles.length > 0 && newSourceFiles.length === 0); // 기존 sourceFiles가 있고 새 것이 비어있으면 보존 (파일 업로드 직후 보호)
         // script 보존 여부 확인 (기존 script가 있으면 항상 보존, 새 것이 없거나 비어있으면 보존)
         // scriptId가 있으면 scriptText도 보존 (스크립트가 생성되었음을 의미)
         const shouldPreserveScript =
@@ -3117,6 +3210,19 @@ export function useCreatorStudioController(
           shouldPreserveScript ||
           shouldPreserveScriptApprovedAt
         ) {
+          // 디버깅: sourceFiles 보존 여부 확인
+          if (shouldPreserveSourceFiles) {
+            console.log("[refreshItems] sourceFiles 보존:", {
+              videoId: newItem.id,
+              prevSourceFilesCount: prevSourceFiles.length,
+              newSourceFilesCount: newSourceFiles.length,
+              prevRealSourceFilesCount: prevRealSourceFiles.length,
+              newRealSourceFilesCount: newRealSourceFiles.length,
+              prevSourceFileName: prevItem.assets.sourceFileName,
+              newSourceFileName: newItem.assets.sourceFileName,
+            });
+          }
+          
           // 기존 sourceFiles, script, scriptId, scriptApprovedAt 보존
           const mergedItem = {
             ...newItem,
@@ -3128,16 +3234,51 @@ export function useCreatorStudioController(
               sourceFiles: shouldPreserveSourceFiles
                 ? prevSourceFiles
                 : newItem.assets.sourceFiles,
-              sourceFileName: shouldPreserveSourceFiles
-                ? prevItem.assets.sourceFileName ||
-                  newItem.assets.sourceFileName ||
+              sourceFileName: (() => {
+                const newFileName = shouldPreserveSourceFiles
+                  ? newItem.assets.sourceFileName ||
+                    prevItem.assets.sourceFileName ||
+                    ""
+                  : newItem.assets.sourceFileName ||
+                    prevItem.assets.sourceFileName ||
+                    "";
+                const prevFileName = prevItem.assets.sourceFileName;
+
+                // UUID 형식인지 확인 (예: "3251ec73-8860-4655-9027-ce87c00384c4")
+                const isUuidLike = (v: string): boolean => {
+                  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+                    v
+                  );
+                };
+
+                // 새 값이 있으면
+                if (newFileName && newFileName.trim().length > 0) {
+                  // UUID 형식이 아니면 사용 (실제 파일명)
+                  if (!isUuidLike(newFileName)) {
+                    return newFileName;
+                  }
+                  // UUID 형식이면 기존 값 사용 (백엔드 버그 대응)
+                  if (
+                    prevFileName &&
+                    prevFileName.trim().length > 0 &&
+                    !isUuidLike(prevFileName)
+                  ) {
+                    return prevFileName;
+                  }
+                  // 기존 값도 없으면 새 값 사용 (최소한 UUID라도)
+                  return newFileName;
+                }
+
+                // 새 값이 없으면 기존 값 사용
+                return prevFileName || "";
+              })(),
+              sourceFileUrl: shouldPreserveSourceFiles
+                ? prevItem.assets.sourceFileUrl ||
+                  newItem.assets.sourceFileUrl ||
                   ""
-                : newItem.assets.sourceFileName,
-              sourceFileSize: shouldPreserveSourceFiles
-                ? prevItem.assets.sourceFileSize ||
-                  newItem.assets.sourceFileSize ||
-                  0
-                : newItem.assets.sourceFileSize,
+                : newItem.assets.sourceFileUrl ||
+                  prevItem.assets.sourceFileUrl ||
+                  "",
               sourceFileMime: shouldPreserveSourceFiles
                 ? prevItem.assets.sourceFileMime ||
                   newItem.assets.sourceFileMime ||
@@ -3178,22 +3319,56 @@ export function useCreatorStudioController(
             scriptApprovedAt: prevScriptApprovedAt ?? newItem.scriptApprovedAt,
             assets: {
               ...newItem.assets,
+              // 백엔드 응답이 null이면 기존 sourceFiles 보존 (파일 업로드 직후 백엔드가 즉시 업데이트하지 않을 수 있음)
               sourceFiles: shouldPreserveSourceFiles
                 ? prevSourceFiles
                 : prevSourceFiles.length > 0
                 ? prevSourceFiles
-                : newItem.assets.sourceFiles,
-              sourceFileName:
-                prevItem.assets.sourceFileName ||
-                newItem.assets.sourceFileName ||
+                : newItem.assets.sourceFiles &&
+                  newItem.assets.sourceFiles.length > 0
+                ? newItem.assets.sourceFiles
+                : prevSourceFiles,
+              // 백엔드 응답이 null이거나 UUID 형식이면 기존 값 보존
+              // 백엔드가 sourceFileName에 UUID를 넣는 버그가 있을 수 있으므로 방어적으로 처리
+              sourceFileName: (() => {
+                const newFileName = newItem.assets.sourceFileName;
+                const prevFileName = prevItem.assets.sourceFileName;
+
+                // UUID 형식인지 확인 (예: "3251ec73-8860-4655-9027-ce87c00384c4")
+                const isUuidLike = (v: string): boolean => {
+                  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+                    v
+                  );
+                };
+
+                // 새 값이 있으면
+                if (newFileName && newFileName.trim().length > 0) {
+                  // UUID 형식이 아니면 사용 (실제 파일명)
+                  if (!isUuidLike(newFileName)) {
+                    return newFileName;
+                  }
+                  // UUID 형식이면 기존 값 사용 (백엔드 버그 대응)
+                  if (
+                    prevFileName &&
+                    prevFileName.trim().length > 0 &&
+                    !isUuidLike(prevFileName)
+                  ) {
+                    return prevFileName;
+                  }
+                  // 기존 값도 없으면 새 값 사용 (최소한 UUID라도)
+                  return newFileName;
+                }
+
+                // 새 값이 없으면 기존 값 사용
+                return prevFileName || "";
+              })(),
+              sourceFileUrl:
+                newItem.assets.sourceFileUrl ||
+                prevItem.assets.sourceFileUrl ||
                 "",
-              sourceFileSize:
-                prevItem.assets.sourceFileSize ||
-                newItem.assets.sourceFileSize ||
-                0,
               sourceFileMime:
-                prevItem.assets.sourceFileMime ||
                 newItem.assets.sourceFileMime ||
+                prevItem.assets.sourceFileMime ||
                 "",
             },
           };
@@ -3254,11 +3429,9 @@ export function useCreatorStudioController(
         return newItem;
       });
 
-      // 최근 생성순 정렬 유지 (createdAt 내림차순)
-      const sorted = sortItems(merged, "created_desc");
-
-      // setItems로 상태 업데이트 (동일한 로직 사용)
-      setItems(() => sorted);
+      // 정렬은 filteredItems에서 수행하므로 여기서는 정렬하지 않음
+      // setItems로 상태 업데이트
+      setItems(() => merged);
 
       setEducations(edus);
 
@@ -3288,9 +3461,10 @@ export function useCreatorStudioController(
       });
 
       setSelectedEducationId((cur) => cur ?? edus[0]?.educationId ?? null);
-      setRawSelectedId((cur) => cur ?? sorted[0]?.id ?? null);
+      // 정렬은 filteredItems에서 수행되므로, 여기서는 첫 번째 항목을 선택하지 않음
+      // (filteredItems가 업데이트된 후 자동으로 선택됨)
 
-      return { educations: edus, items: sorted };
+      return { educations: edus, items: merged };
     } catch (e) {
       // 스테일(이미 다른 refresh가 시작됨) / Abort는 "정상 흐름"으로 간주하고 조용히 무시
       const isStale = listAbortRef.current !== ac;
@@ -3419,10 +3593,13 @@ export function useCreatorStudioController(
 
       showToast("success", "새 초안이 생성되었습니다.");
 
+      // 새로 생성된 파일이 맨 위에 오도록 정렬 모드를 생성일 기준 내림차순으로 변경
+      setSortMode("created_desc");
+
       const loaded = await refreshItems({ silent: true });
 
       // 서버가 videoId를 바로 안 주는 케이스(또는 source-sets fallback) 대비:
-      // educationId 기준으로 “가장 최근” 항목을 찾아 선택
+      // educationId 기준으로 "가장 최근" 항목을 찾아 선택
       const nextId =
         (createdVideoId && createdVideoId.trim().length > 0
           ? createdVideoId.trim()
@@ -3432,6 +3609,9 @@ export function useCreatorStudioController(
           : null);
 
       if (nextId) {
+        // useEffect에서 자동 선택하도록 ref에 저장
+        pendingCreatedVideoIdRef.current = nextId;
+        // 즉시 선택도 시도 (useEffect가 트리거되지 않을 수 있으므로)
         setRawSelectedId(nextId);
         setTab("draft");
       }
@@ -3576,7 +3756,6 @@ export function useCreatorStudioController(
           // sourceFiles는 유지
           sourceFiles: selectedItem.assets.sourceFiles,
           sourceFileName: selectedItem.assets.sourceFileName,
-          sourceFileSize: selectedItem.assets.sourceFileSize,
           sourceFileMime: selectedItem.assets.sourceFileMime,
         },
         pipeline: resetPipeline(),
@@ -3773,9 +3952,6 @@ export function useCreatorStudioController(
       setItems((prev) => prev.filter((it) => it.id !== id));
       setRawSelectedId(null);
 
-      // 로컬 스토리지에서도 제거
-      removeSourceFilesFromStorage(id);
-
       showToast("success", "초안이 삭제되었습니다.");
       await refreshItems({ silent: true });
     } catch (e) {
@@ -3831,10 +4007,15 @@ export function useCreatorStudioController(
         showToast("error", v.issues[0] ?? "파일 검증에 실패했습니다.", 3500);
         return;
       }
+
       if (v.warnings.length > 0) showToast("info", v.warnings[0]);
 
       const key = v.name.trim().toLowerCase();
-      if (existingNames.has(key)) continue;
+      if (existingNames.has(key)) {
+        showToast("error", "이미 존재하는 파일입니다.", 3500);
+        continue;
+      }
+
       existingNames.add(key);
 
       const tmpId = makeId("SRC_TMP");
@@ -3865,7 +4046,6 @@ export function useCreatorStudioController(
             ...clearGeneratedAllAssets(it),
             sourceFiles: nextFiles,
             sourceFileName: primary?.name ?? "",
-            sourceFileSize: primary?.size ?? 0,
             sourceFileMime: primary?.mime ?? "",
           },
           // pipeline은 변경하지 않음 (파일 업로드만으로는 진행률이 올라가지 않음)
@@ -3885,6 +4065,39 @@ export function useCreatorStudioController(
     try {
       showToast("info", "자료 업로드/등록을 시작합니다…", 1800);
 
+      // domain 결정: sourceDomain과 category에 따라 결정
+      // sourceDomain이 "POLICY"면 "POLICY", "EDU"면 category에 따라 결정
+      let domain = "EDU"; // 기본값
+
+      if (sourceDomain === "POLICY") {
+        domain = "POLICY";
+      } else if (sourceDomain === "EDU") {
+        // 비디오 상세조회 API를 통해 category 확인
+        try {
+          const videoDetail = await getVideo(videoIdSnapshot);
+          const category = videoDetail.category;
+
+          if (category === "JOB_DUTY") {
+            domain = "직무교육";
+          } else if (category === "DISABILITY_AWARENESS") {
+            domain = "장애인인식개선교육";
+          } else if (category === "WORKPLACE_BULLYING") {
+            domain = "직장내괴롭힘교육";
+          } else if (category === "SEXUAL_HARASSMENT_PREVENTION") {
+            domain = "직장내성희롱교육";
+          } else if (category === "PERSONAL_INFO_PROTECTION") {
+            domain = "정보보안교육";
+          }
+          // category가 없거나 매칭되지 않으면 기본값 "EDU" 사용
+        } catch (error) {
+          console.warn(
+            "[uploadDocument] 비디오 상세조회 실패, 기본값 사용:",
+            error
+          );
+          // 에러 발생 시 기본값 "EDU" 사용
+        }
+      }
+
       for (const { file, meta } of validFiles) {
         const presign = await requestPresignUpload({
           fileName: meta.name,
@@ -3899,16 +4112,27 @@ export function useCreatorStudioController(
           signal: ac.signal,
         });
 
-        const documentId = await registerDocumentToRag({
+        console.log("[uploadDocument] 호출 전:", {
+          title: meta.name,
+          domain,
           fileUrl: presign.fileUrl,
-          fileName: meta.name,
-          contentType: meta.mime || file.type || undefined,
-          signal: ac.signal,
+          sourceDomain,
         });
 
-        // id를 documentId로 치환
-        setItems((prev) =>
-          prev.map((it) => {
+        const result = await uploadDocument({
+          title: meta.name,
+          domain,
+          fileUrl: presign.fileUrl,
+          uploaderUuid: keycloak.tokenParsed?.sub,
+        });
+
+        console.log("[uploadDocument] 호출 후:", result);
+        const documentId = result.documentId;
+
+        // id를 documentId로 치환하고 sourceFileUrl도 설정
+        // itemsRef를 즉시 업데이트하여 refreshItems가 최신 상태를 참조하도록 보장
+        setItems((prev) => {
+          const updated = prev.map((it) => {
             if (it.id !== videoIdSnapshot) return it;
             const sf = Array.isArray(it.assets.sourceFiles)
               ? it.assets.sourceFiles
@@ -3947,33 +4171,53 @@ export function useCreatorStudioController(
             }
 
             const primary2 = patched[0];
-            const updated = {
+            const updatedItem = {
               ...it,
               assets: {
                 ...it.assets,
                 sourceFiles: patched,
                 sourceFileName:
                   primary2?.name ?? it.assets.sourceFileName ?? "",
-                sourceFileSize: primary2?.size ?? it.assets.sourceFileSize ?? 0,
+                sourceFileUrl: presign.fileUrl ?? it.assets.sourceFileUrl ?? "",
                 sourceFileMime:
                   primary2?.mime ?? it.assets.sourceFileMime ?? "",
               },
               updatedAt: Date.now(),
             };
+            
+            // 디버깅: 파일 업로드 후 상태 업데이트 확인
+            console.log("[addSourceFilesToSelected] 상태 업데이트:", {
+              videoId: videoIdSnapshot,
+              documentId,
+              sourceFilesCount: patched.length,
+              sourceFileName: updatedItem.assets.sourceFileName,
+              sourceFiles: patched.map(f => ({ id: f.id, name: f.name })),
+            });
 
-            // 로컬 스토리지에 저장
-            saveSourceFilesToStorage(
-              videoIdSnapshot,
-              patched,
-              updated.assets.sourceFileName,
-              updated.assets.sourceFileSize,
-              updated.assets.sourceFileMime
-            );
-
-            return updated;
-          })
-        );
+            return updatedItem;
+          });
+          
+          // itemsRef를 즉시 업데이트하여 refreshItems가 최신 상태를 참조하도록 보장
+          itemsRef.current = updated;
+          console.log("[addSourceFilesToSelected] itemsRef 업데이트:", {
+            itemsCount: updated.length,
+            itemsWithSourceFiles: updated.filter(it => 
+              Array.isArray(it.assets?.sourceFiles) && it.assets.sourceFiles.length > 0
+            ).map(it => ({
+              id: it.id,
+              sourceFilesCount: Array.isArray(it.assets?.sourceFiles) ? it.assets.sourceFiles.length : 0,
+              sourceFileName: it.assets?.sourceFileName ?? "",
+            })),
+          });
+          return updated;
+        });
       }
+
+      // 파일 업로드 완료 시 최신 정보 가져오기
+      // ⚠️ 백엔드가 즉시 sourceFileName, sourceFileUrl을 업데이트하지 않을 수 있으므로
+      // refreshItems를 호출하지 않고 로컬 상태만 유지
+      // 필요한 경우 나중에 사용자가 수동으로 새로고침하거나 다른 액션 시 자동으로 갱신됨
+      // await refreshItems({ silent: true }); // 파일 업로드 직후는 refreshItems 호출하지 않음 (백엔드가 아직 업데이트하지 않았을 수 있음)
 
       // 파일 업로드 완료 시 pipeline은 변경하지 않음 (IDLE 상태 유지)
       // 스크립트 생성을 눌러야 pipeline이 진행됨
@@ -3983,6 +4227,7 @@ export function useCreatorStudioController(
       );
     } catch (e) {
       if (ac.signal.aborted) return;
+      console.error("[addSourceFilesToSelected] 에러 발생:", e);
       const msg =
         e instanceof Error ? e.message : "자료 업로드/등록에 실패했습니다.";
       showToast("error", msg, 3500);
@@ -4022,7 +4267,6 @@ export function useCreatorStudioController(
 
     const primary = nextFiles[0];
     const nextFileName = primary?.name ?? "";
-    const nextFileSize = primary?.size ?? 0;
     const nextFileMime = primary?.mime ?? "";
 
     updateSelected({
@@ -4030,7 +4274,6 @@ export function useCreatorStudioController(
         ...clearGeneratedAllAssets(selectedItem),
         sourceFiles: nextFiles,
         sourceFileName: nextFileName,
-        sourceFileSize: nextFileSize,
         sourceFileMime: nextFileMime,
       },
       pipeline: resetPipeline(),
@@ -4038,20 +4281,8 @@ export function useCreatorStudioController(
       videoStatusRaw: "DRAFT",
     });
 
-    // 로컬 스토리지 업데이트
-    if (nextFiles.length === 0) {
-      // 모든 파일이 삭제되면 로컬 스토리지에서도 제거
-      removeSourceFilesFromStorage(selectedItem.id);
-    } else {
-      // 일부 파일만 삭제된 경우 업데이트
-      saveSourceFilesToStorage(
-        selectedItem.id,
-        nextFiles,
-        nextFileName,
-        nextFileSize,
-        nextFileMime
-      );
-    }
+    // 세션 스토리지 대신 API 응답에서 받아온 정보 사용
+    // 파일 삭제 후 필요시 refreshItems()로 최신 정보를 가져옴
 
     showToast(
       "success",
@@ -4094,7 +4325,8 @@ export function useCreatorStudioController(
           (id) =>
             typeof id === "string" &&
             id.trim().length > 0 &&
-            !id.startsWith("SRC_TMP")
+            !id.startsWith("SRC_TMP") &&
+            !id.startsWith("src-legacy-")
         )
     );
   }
@@ -4138,10 +4370,29 @@ export function useCreatorStudioController(
             prev.map((it) => {
               if (it.id !== videoId) return it;
 
+              // 백엔드가 DRAFT를 반환하더라도, 로컬에서 이미 SCRIPT_GENERATING 상태라면
+              // 진행 중 상태를 유지 (백엔드 상태 업데이트 지연 대응)
+              const currentVideoStatusRaw = getVideoStatusRawOfItem(it);
+              const currentUpper = String(
+                currentVideoStatusRaw ?? ""
+              ).toUpperCase();
+              const isCurrentlyGenerating =
+                currentUpper === "SCRIPT_GENERATING" ||
+                it.pipeline.state === "RUNNING";
+
+              // 백엔드가 DRAFT를 반환하고 현재 로컬이 SCRIPT_GENERATING 상태라면
+              // pipeline 상태를 유지 (백엔드 상태 업데이트 대기)
+              const shouldPreservePipeline =
+                upper === "DRAFT" &&
+                isCurrentlyGenerating &&
+                pipeline.state === "IDLE";
+
               const next: CreatorWorkItem = {
                 ...it,
                 status: legacy,
-                pipeline: { ...it.pipeline, ...pipeline },
+                pipeline: shouldPreservePipeline
+                  ? it.pipeline // 진행 중 상태 유지
+                  : { ...it.pipeline, ...pipeline }, // 백엔드 상태 반영
                 assets: {
                   ...it.assets,
                   script: readStr(raw, "scriptText") ?? it.assets.script,
@@ -4162,8 +4413,11 @@ export function useCreatorStudioController(
                 scriptApprovedAt: scriptApprovedAt ?? it.scriptApprovedAt,
               };
 
+              // 진행 중 상태를 유지하는 경우 videoStatusRaw도 함께 유지
               (next as unknown as Record<string, unknown>)["videoStatusRaw"] =
-                String(statusRaw ?? "");
+                shouldPreservePipeline && currentVideoStatusRaw
+                  ? currentVideoStatusRaw // 진행 중 상태 유지
+                  : String(statusRaw ?? ""); // 백엔드 상태 반영
               (next as unknown as Record<string, unknown>)["jobId"] =
                 readStr(raw, "jobId") ?? readMetaStrFromItem(it, "jobId");
               const newScriptId =
@@ -4588,6 +4842,48 @@ export function useCreatorStudioController(
       return;
     }
 
+    // documentIds 검증 및 디버깅 로그
+    console.log("[소스셋 생성] documentIds:", docIds);
+    console.log(
+      "[소스셋 생성] sourceFiles:",
+      sourceFiles.map((f) => ({ id: f.id, name: f.name }))
+    );
+
+    // UUID 형식 검증 (백엔드가 잘못된 documentId를 반환할 수 있음)
+    const isUuidLike = (v: string): boolean => {
+      return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(
+        v
+      );
+    };
+
+    const validDocIds = docIds.filter((id) => {
+      const isValid = isUuidLike(id);
+      if (!isValid) {
+        console.warn(`[소스셋 생성] 잘못된 documentId 형식: ${id}`);
+      }
+      return isValid;
+    });
+
+    if (validDocIds.length === 0) {
+      console.error("[소스셋 생성] 유효한 documentId가 없습니다:", docIds);
+      showToast(
+        "error",
+        "유효한 문서 ID(documentId)를 찾을 수 없습니다. 파일을 다시 업로드해 주세요.",
+        4000
+      );
+      return;
+    }
+
+    if (validDocIds.length !== docIds.length) {
+      console.warn(
+        `[소스셋 생성] 일부 documentId가 잘못되었습니다. 유효한 것만 사용합니다.`,
+        {
+          전체: docIds,
+          유효한것: validDocIds,
+        }
+      );
+    }
+
     updateSelected({
       status: "GENERATING",
       pipeline: {
@@ -4602,6 +4898,38 @@ export function useCreatorStudioController(
     });
 
     try {
+      // domain 결정: sourceDomain과 category에 따라 결정
+      let domain = "EDU"; // 기본값
+
+      if (sourceDomain === "POLICY") {
+        domain = "POLICY";
+      } else if (sourceDomain === "EDU") {
+        // 비디오 상세조회 API를 통해 category 확인
+        try {
+          const videoDetail = await getVideo(selectedItem.id);
+          const category = videoDetail.category;
+
+          if (category === "JOB_DUTY") {
+            domain = "직무교육";
+          } else if (category === "DISABILITY_AWARENESS") {
+            domain = "장애인인식개선교육";
+          } else if (category === "WORKPLACE_BULLYING") {
+            domain = "직장내괴롭힘교육";
+          } else if (category === "SEXUAL_HARASSMENT_PREVENTION") {
+            domain = "직장내성희롱교육";
+          } else if (category === "PERSONAL_INFO_PROTECTION") {
+            domain = "정보보안교육";
+          }
+          // category가 없거나 매칭되지 않으면 기본값 "EDU" 사용
+        } catch (error) {
+          console.warn(
+            "[소스셋 생성] 비디오 상세조회 실패, 기본값 사용:",
+            error
+          );
+          // 에러 발생 시 기본값 "EDU" 사용
+        }
+      }
+
       await safeFetchJson(VIDEO_SOURCESET_CREATE_ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -4609,16 +4937,12 @@ export function useCreatorStudioController(
           // swagger 필수
           educationId,
           videoId: selectedItem.id,
-          documentIds: docIds,
+          documentIds: validDocIds, // 유효한 documentId만 전달
 
           // swagger 필수(또는 서버에서 사실상 요구하는 경우가 많음)
           title: (selectedItem.title ?? "").trim() || "교육 자료",
-          // domain 값은 백엔드 enum에 맞춰야 함
-          // - 직무면 JOB_TRAINING, 의무면 FOUR_MANDATORY로 가정(스웨거 예시 기준)
-          // categoryId를 기준으로 판단 (jobTrainingId는 직무 카테고리에서만 사용)
-          domain: isJobCategory(selectedItem.categoryId)
-            ? "JOB_TRAINING"
-            : "FOUR_MANDATORY",
+          // domain 값은 sourceDomain과 category에 따라 결정
+          domain,
 
           // 과거 스펙/백엔드 호환용 alias
           eduId: educationId,
@@ -4627,6 +4951,7 @@ export function useCreatorStudioController(
 
       // 스크립트 생성 요청 성공 시 진행 단계 전이
       updateSelected({
+        status: "GENERATING", // 명시적으로 status 업데이트
         pipeline: {
           mode: "SCRIPT_ONLY" as CreatorWorkItem["pipeline"]["mode"],
           state: "RUNNING",
@@ -4634,8 +4959,11 @@ export function useCreatorStudioController(
           rawStage: "SCRIPT_GENERATING",
           progress: 0,
         },
+        failedReason: undefined, // 실패 사유 초기화
         videoStatusRaw: "SCRIPT_GENERATING",
       });
+
+      console.log("[소스셋 생성] 요청 성공, 상태를 GENERATING으로 업데이트");
 
       showToast(
         "info",
@@ -5212,9 +5540,12 @@ export function useCreatorStudioController(
               : undefined,
         });
 
+        // 새로 생성된 파일이 맨 위에 오도록 정렬 모드를 생성일 기준 내림차순으로 변경
+        setSortMode("created_desc");
+
         const loaded = await refreshItems({ silent: true });
 
-        // 서버가 videoId를 바로 안 주는 케이스 대비: educationId 기준으로 “가장 최근” 항목을 찾아 선택
+        // 서버가 videoId를 바로 안 주는 케이스 대비: educationId 기준으로 "가장 최근" 항목을 찾아 선택
         const vid =
           (createdVideoId && createdVideoId.trim().length > 0
             ? createdVideoId.trim()
@@ -5228,7 +5559,9 @@ export function useCreatorStudioController(
           return null;
         }
 
-        // 선택 + 탭 이동(초안은 항상 draft 탭으로)
+        // useEffect에서 자동 선택하도록 ref에 저장
+        pendingCreatedVideoIdRef.current = vid;
+        // 즉시 선택도 시도 (useEffect가 트리거되지 않을 수 있으므로)
         selectItem(vid);
         setTab("draft");
 

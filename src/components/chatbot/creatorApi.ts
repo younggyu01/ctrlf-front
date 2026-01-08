@@ -18,7 +18,10 @@ function envStr(key: string, fallback: string): string {
 }
 
 const EDU_BASE = String(ENV.VITE_EDU_API_BASE ?? "/api-edu").replace(/\/$/, "");
-const SCRIPT_BASE = String(ENV.VITE_SCRIPT_API_BASE ?? EDU_BASE).replace(/\/$/, "");
+const SCRIPT_BASE = String(ENV.VITE_SCRIPT_API_BASE ?? EDU_BASE).replace(
+  /\/$/,
+  ""
+);
 
 // (컨트롤러와 동일한 기본 엔드포인트 구성)
 const ADMIN_EDUS_WITH_VIDEOS_ENDPOINT = envStr(
@@ -34,7 +37,10 @@ const ADMIN_EDU_CREATE_ENDPOINT = envStr(
   `${EDU_BASE}/admin/edu`
 );
 
-const ADMIN_VIDEOS_ENDPOINT = envStr("VITE_ADMIN_VIDEOS_ENDPOINT", `${EDU_BASE}/admin/videos`);
+const ADMIN_VIDEOS_ENDPOINT = envStr(
+  "VITE_ADMIN_VIDEOS_ENDPOINT",
+  `${EDU_BASE}/admin/videos`
+);
 const ADMIN_VIDEO_DETAIL_ENDPOINT = envStr(
   "VITE_ADMIN_VIDEO_DETAIL_ENDPOINT",
   `${ADMIN_VIDEOS_ENDPOINT}/{videoId}`
@@ -47,7 +53,10 @@ const ADMIN_VIDEO_REVIEW_REQUEST_ENDPOINT = envStr(
 );
 
 // video service (user/common)
-const VIDEO_GET_ENDPOINT = envStr("VITE_VIDEO_GET_ENDPOINT", `${EDU_BASE}/video/{videoId}`);
+const VIDEO_GET_ENDPOINT = envStr(
+  "VITE_VIDEO_GET_ENDPOINT",
+  `${EDU_BASE}/video/{videoId}`
+);
 const VIDEO_SOURCESET_CREATE_ENDPOINT = envStr(
   "VITE_VIDEO_SOURCESET_CREATE_ENDPOINT",
   `${EDU_BASE}/video/source-sets`
@@ -57,15 +66,24 @@ const VIDEO_SOURCESET_PATCH_ENDPOINT = envStr(
   `${EDU_BASE}/video/source-sets/{sourceSetId}`
 );
 
-const VIDEO_JOB_CREATE_ENDPOINT = envStr("VITE_VIDEO_JOB_CREATE_ENDPOINT", `${EDU_BASE}/video/job`);
+const VIDEO_JOB_CREATE_ENDPOINT = envStr(
+  "VITE_VIDEO_JOB_CREATE_ENDPOINT",
+  `${EDU_BASE}/video/job`
+);
 const VIDEO_JOB_STATUS_ENDPOINT = envStr(
   "VITE_VIDEO_JOB_STATUS_ENDPOINT",
   `${EDU_BASE}/video/job/{jobId}`
 );
 
 // script service
-const SCRIPT_LOOKUP_ENDPOINT = envStr("VITE_SCRIPT_LOOKUP_ENDPOINT", `${SCRIPT_BASE}/scripts/lookup`);
-const SCRIPT_DETAIL_ENDPOINT = envStr("VITE_SCRIPT_DETAIL_ENDPOINT", `${SCRIPT_BASE}/scripts/{scriptId}`);
+const SCRIPT_LOOKUP_ENDPOINT = envStr(
+  "VITE_SCRIPT_LOOKUP_ENDPOINT",
+  `${SCRIPT_BASE}/scripts/lookup`
+);
+const SCRIPT_DETAIL_ENDPOINT = envStr(
+  "VITE_SCRIPT_DETAIL_ENDPOINT",
+  `${SCRIPT_BASE}/scripts/{scriptId}`
+);
 
 // ------------------------------
 // Types (minimum shapes)
@@ -93,6 +111,8 @@ export type AdminVideoSummary = {
   createdAt?: string;
   updatedAt?: string;
   isPublished?: boolean;
+  sourceFileName?: string | null;
+  sourceFileUrl?: string | null;
 };
 
 export type AdminEducationWithVideosItem = {
@@ -117,6 +137,9 @@ export type VideoDetail = {
   jobId?: string | null;
   thumbnailUrl?: string | null;
   scriptText?: string | null;
+  sourceFileName?: string | null;
+  sourceFileUrl?: string | null;
+  category?: string | null;
 };
 
 // ------------------------------
@@ -202,7 +225,10 @@ function extractHttpStatus(err: unknown): number | null {
   return null;
 }
 
-async function safeFetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+async function safeFetchJson<T = unknown>(
+  url: string,
+  init?: RequestInit
+): Promise<T> {
   const MAX_ATTEMPTS = 3;
 
   let lastErr: unknown = null;
@@ -222,30 +248,36 @@ async function safeFetchJson<T = unknown>(url: string, init?: RequestInit): Prom
     }
   }
 
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "요청 실패"));
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(String(lastErr ?? "요청 실패"));
 }
 
 function normalizeEducationDetail(raw: unknown): AdminEducationDetail {
   const id =
     pickId(raw, ["educationId", "id"]) ??
-    (isRecord(raw) && isRecord(raw["data"]) ? pickId(raw["data"], ["educationId", "id"]) : null) ??
+    (isRecord(raw) && isRecord(raw["data"])
+      ? pickId(raw["data"], ["educationId", "id"])
+      : null) ??
     "";
 
   const title =
     readStr(raw, "title") ??
-    (isRecord(raw) && isRecord(raw["data"]) ? readStr(raw["data"], "title") : undefined) ??
+    (isRecord(raw) && isRecord(raw["data"])
+      ? readStr(raw["data"], "title")
+      : undefined) ??
     "";
 
   // departmentScope는 JSON string으로 올 수 있음 (스펙: docs/education_api_spec.md 2.1, 2.2)
   const deptScopeRaw = isRecord(raw) ? raw["departmentScope"] : undefined;
   let departmentScope: string[] = [];
-  
+
   if (typeof deptScopeRaw === "string" && deptScopeRaw.trim()) {
     // JSON string인 경우 파싱
     try {
       const parsed = JSON.parse(deptScopeRaw);
-      departmentScope = Array.isArray(parsed) 
-        ? parsed.filter(x => typeof x === "string" && x.trim().length > 0)
+      departmentScope = Array.isArray(parsed)
+        ? parsed.filter((x) => typeof x === "string" && x.trim().length > 0)
         : [];
     } catch {
       // 파싱 실패 시 빈 배열
@@ -285,10 +317,15 @@ function normalizeVideoSummary(raw: unknown): AdminVideoSummary | null {
     createdAt: readStr(raw, "createdAt"),
     updatedAt: readStr(raw, "updatedAt"),
     isPublished: readBool(raw, "isPublished"),
+    sourceFileName: (readStr(raw, "sourceFileName") ?? null) as string | null,
+    sourceFileUrl: (readStr(raw, "sourceFileUrl") ?? null) as string | null,
   };
 }
 
-function normalizeVideoDetail(raw: unknown, fallbackVideoId: string): VideoDetail {
+function normalizeVideoDetail(
+  raw: unknown,
+  fallbackVideoId: string
+): VideoDetail {
   const id = pickId(raw, ["videoId", "id"]) ?? fallbackVideoId;
 
   return {
@@ -296,14 +333,21 @@ function normalizeVideoDetail(raw: unknown, fallbackVideoId: string): VideoDetai
     title: readStr(raw, "title") ?? "",
     educationId: readStr(raw, "educationId") ?? readStr(raw, "eduId"),
     status: readStr(raw, "status") ?? readStr(raw, "videoStatus") ?? "DRAFT",
-    fileUrl: (readStr(raw, "fileUrl") ?? readStr(raw, "videoUrl") ?? null) as string | null,
+    fileUrl: (readStr(raw, "fileUrl") ?? readStr(raw, "videoUrl") ?? null) as
+      | string
+      | null,
     thumbnailUrl: (readStr(raw, "thumbnailUrl") ?? null) as string | null,
     createdAt: readStr(raw, "createdAt"),
     updatedAt: readStr(raw, "updatedAt"),
     isPublished: readBool(raw, "isPublished"),
     scriptId: (readStr(raw, "scriptId") ?? null) as string | null,
     jobId: (readStr(raw, "jobId") ?? null) as string | null,
-    scriptText: (readStr(raw, "scriptText") ?? readStr(raw, "script") ?? null) as string | null,
+    scriptText: (readStr(raw, "scriptText") ??
+      readStr(raw, "script") ??
+      null) as string | null,
+    sourceFileName: (readStr(raw, "sourceFileName") ?? null) as string | null,
+    sourceFileUrl: (readStr(raw, "sourceFileUrl") ?? null) as string | null,
+    category: (readStr(raw, "category") ?? null) as string | null,
   };
 }
 
@@ -329,7 +373,9 @@ export async function adminCreateEducation(payload: {
   return normalizeEducationDetail(raw);
 }
 
-export async function adminGetEducation(educationId: string): Promise<AdminEducationDetail> {
+export async function adminGetEducation(
+  educationId: string
+): Promise<AdminEducationDetail> {
   const url = expandEndpoint(ADMIN_EDU_DETAIL_ENDPOINT, { educationId });
   const raw = await safeFetchJson<unknown>(url, { method: "GET" });
   return normalizeEducationDetail(raw);
@@ -341,17 +387,19 @@ export async function adminGetEducationsWithVideos(params?: {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
 
-  const url = `${ADMIN_EDUS_WITH_VIDEOS_ENDPOINT}${qs.toString() ? `?${qs.toString()}` : ""}`;
+  const url = `${ADMIN_EDUS_WITH_VIDEOS_ENDPOINT}${
+    qs.toString() ? `?${qs.toString()}` : ""
+  }`;
   const raw = await safeFetchJson<unknown>(url, { method: "GET" });
 
   // 응답이 배열 또는 {items|educations} 형태일 수 있으므로 흡수
   const list: unknown[] = Array.isArray(raw)
     ? raw
     : isRecord(raw) && Array.isArray(raw["items"])
-      ? (raw["items"] as unknown[])
-      : isRecord(raw) && Array.isArray(raw["educations"])
-        ? (raw["educations"] as unknown[])
-        : [];
+    ? (raw["items"] as unknown[])
+    : isRecord(raw) && Array.isArray(raw["educations"])
+    ? (raw["educations"] as unknown[])
+    : [];
 
   const out: AdminEducationWithVideosItem[] = [];
 
@@ -361,21 +409,24 @@ export async function adminGetEducationsWithVideos(params?: {
     const eduId = pickId(node, ["educationId", "eduId", "id"]) ?? "";
     if (!eduId) continue;
 
-    const videosRaw = readArr(node, "videos") ?? readArr(node, "videoList") ?? [];
-    const videos: AdminVideoSummary[] = (Array.isArray(videosRaw) ? videosRaw : [])
+    const videosRaw =
+      readArr(node, "videos") ?? readArr(node, "videoList") ?? [];
+    const videos: AdminVideoSummary[] = (
+      Array.isArray(videosRaw) ? videosRaw : []
+    )
       .map(normalizeVideoSummary)
       .filter((v): v is AdminVideoSummary => Boolean(v));
 
     // departmentScope는 JSON string으로 올 수 있음 (스펙: docs/education_api_spec.md 2.1, 2.2)
     const deptScopeRaw = node["departmentScope"] ?? node["deptIds"];
     let departmentScope: string[] = [];
-    
+
     if (typeof deptScopeRaw === "string" && deptScopeRaw.trim()) {
       // JSON string인 경우 파싱
       try {
         const parsed = JSON.parse(deptScopeRaw);
-        departmentScope = Array.isArray(parsed) 
-          ? parsed.filter(x => typeof x === "string" && x.trim().length > 0)
+        departmentScope = Array.isArray(parsed)
+          ? parsed.filter((x) => typeof x === "string" && x.trim().length > 0)
           : [];
       } catch {
         // 파싱 실패 시 빈 배열
@@ -419,7 +470,8 @@ export async function adminCreateVideo(payload: {
   jobTrainingId?: string;
 }): Promise<{ id: string }> {
   const educationId = (payload.educationId ?? payload.eduId ?? "").trim();
-  if (!educationId) throw new Error("adminCreateVideo: educationId가 필요합니다.");
+  if (!educationId)
+    throw new Error("adminCreateVideo: educationId가 필요합니다.");
 
   // 백엔드 API 문서 기준: POST /admin/videos
   // 필수: educationId, title
@@ -441,8 +493,12 @@ export async function adminCreateVideo(payload: {
 
   const id =
     pickId(raw, ["videoId", "id"]) ??
-    (isRecord(raw) && isRecord(raw["data"]) ? pickId(raw["data"], ["videoId", "id"]) : null) ??
-    (isRecord(raw) && isRecord(raw["video"]) ? pickId(raw["video"], ["videoId", "id"]) : null);
+    (isRecord(raw) && isRecord(raw["data"])
+      ? pickId(raw["data"], ["videoId", "id"])
+      : null) ??
+    (isRecord(raw) && isRecord(raw["video"])
+      ? pickId(raw["video"], ["videoId", "id"])
+      : null);
 
   if (!id) throw new Error("영상 생성 응답에서 video id를 찾지 못했습니다.");
   return { id };
@@ -469,7 +525,7 @@ export async function getVideo(videoId: string): Promise<VideoDetail> {
  */
 export async function requestVideoReview(videoId: string): Promise<void> {
   const url = expandEndpoint(ADMIN_VIDEO_REVIEW_REQUEST_ENDPOINT, { videoId });
-  
+
   // 백엔드 API 문서 기준: Body 없음
   await safeFetchJson(url, {
     method: "PUT",
@@ -486,11 +542,16 @@ export async function requestVideoReview(videoId: string): Promise<void> {
  *
  * 백엔드 구현 편차(eduId)를 흡수하기 위해 educationId + eduId를 함께 보냅니다.
  */
-export async function createSourceSet(payload: CreatorSourceSetCreatePayload): Promise<{ id: string }> {
+export async function createSourceSet(
+  payload: CreatorSourceSetCreatePayload
+): Promise<{ id: string }> {
   const educationId = payload.educationId?.trim();
-  if (!educationId) throw new Error("createSourceSet: educationId가 필요합니다.");
-  if (!payload.videoId?.trim()) throw new Error("createSourceSet: videoId가 필요합니다.");
-  if (!payload.title?.trim()) throw new Error("createSourceSet: title이 필요합니다.");
+  if (!educationId)
+    throw new Error("createSourceSet: educationId가 필요합니다.");
+  if (!payload.videoId?.trim())
+    throw new Error("createSourceSet: videoId가 필요합니다.");
+  if (!payload.title?.trim())
+    throw new Error("createSourceSet: title이 필요합니다.");
   if (!Array.isArray(payload.documentIds) || payload.documentIds.length === 0) {
     throw new Error("createSourceSet: documentIds가 필요합니다.");
   }
@@ -512,8 +573,12 @@ export async function createSourceSet(payload: CreatorSourceSetCreatePayload): P
 
   const id =
     pickId(raw, ["sourceSetId", "id"]) ??
-    (isRecord(raw) && isRecord(raw["data"]) ? pickId(raw["data"], ["sourceSetId", "id"]) : null) ??
-    (isRecord(raw) && isRecord(raw["sourceSet"]) ? pickId(raw["sourceSet"], ["sourceSetId", "id"]) : null) ??
+    (isRecord(raw) && isRecord(raw["data"])
+      ? pickId(raw["data"], ["sourceSetId", "id"])
+      : null) ??
+    (isRecord(raw) && isRecord(raw["sourceSet"])
+      ? pickId(raw["sourceSet"], ["sourceSetId", "id"])
+      : null) ??
     "";
 
   return { id };
@@ -523,14 +588,20 @@ export async function createSourceSet(payload: CreatorSourceSetCreatePayload): P
  * 설계안: PATCH /video/source-sets/{sourceSetId}
  * body: { addDocumentIds?:[], removeDocumentIds?:[] }
  */
-export async function patchSourceSet(sourceSetId: string, payload: CreatorSourceSetPatchPayload): Promise<void> {
+export async function patchSourceSet(
+  sourceSetId: string,
+  payload: CreatorSourceSetPatchPayload
+): Promise<void> {
   const sid = sourceSetId.trim();
   if (!sid) throw new Error("patchSourceSet: sourceSetId가 필요합니다.");
 
-  const url = expandEndpoint(VIDEO_SOURCESET_PATCH_ENDPOINT, { sourceSetId: sid });
+  const url = expandEndpoint(VIDEO_SOURCESET_PATCH_ENDPOINT, {
+    sourceSetId: sid,
+  });
 
   const body: Record<string, unknown> = {};
-  if (payload.addDocumentIds && payload.addDocumentIds.length > 0) body.addDocumentIds = payload.addDocumentIds;
+  if (payload.addDocumentIds && payload.addDocumentIds.length > 0)
+    body.addDocumentIds = payload.addDocumentIds;
   if (payload.removeDocumentIds && payload.removeDocumentIds.length > 0)
     body.removeDocumentIds = payload.removeDocumentIds;
 
@@ -545,12 +616,17 @@ export async function patchSourceSet(sourceSetId: string, payload: CreatorSource
  * 설계안: GET /scripts/lookup?videoId=...
  * - 백엔드가 educationId까지 받는 구현도 있을 수 있어 optional로 허용
  */
-export async function lookupScript(params: { videoId: string; educationId?: string }): Promise<string | null> {
+export async function lookupScript(params: {
+  videoId: string;
+  educationId?: string;
+}): Promise<string | null> {
   const qs = new URLSearchParams();
   qs.set("videoId", params.videoId);
   if (params.educationId) qs.set("educationId", params.educationId);
 
-  const url = `${SCRIPT_LOOKUP_ENDPOINT}${SCRIPT_LOOKUP_ENDPOINT.includes("?") ? "&" : "?"}${qs.toString()}`;
+  const url = `${SCRIPT_LOOKUP_ENDPOINT}${
+    SCRIPT_LOOKUP_ENDPOINT.includes("?") ? "&" : "?"
+  }${qs.toString()}`;
   const raw = await safeFetchJson<unknown>(url, { method: "GET" });
 
   const direct = pickId(raw, ["scriptId", "id"]);
@@ -564,7 +640,9 @@ export async function lookupScript(params: { videoId: string; educationId?: stri
   return null;
 }
 
-export async function getScript(scriptId: string): Promise<CreatorScriptDetail> {
+export async function getScript(
+  scriptId: string
+): Promise<CreatorScriptDetail> {
   const sid = scriptId?.trim() ?? "";
   if (!sid || sid.length === 0) {
     throw new Error("getScript: scriptId가 필요합니다.");
@@ -578,7 +656,10 @@ export async function getScript(scriptId: string): Promise<CreatorScriptDetail> 
  * - 1) chapters 전체 교체 payload
  * - 2) 또는 string(script/rawPayload) payload
  */
-export async function putScript(scriptId: string, payload: CreatorPutScriptPayload): Promise<CreatorScriptDetail> {
+export async function putScript(
+  scriptId: string,
+  payload: CreatorPutScriptPayload
+): Promise<CreatorScriptDetail> {
   const sid = scriptId?.trim() ?? "";
   if (!sid || sid.length === 0) {
     throw new Error("putScript: scriptId가 필요합니다.");
@@ -620,9 +701,12 @@ export async function startVideoJob(payload: {
 
   const jobId =
     pickId(raw, ["jobId", "id"]) ??
-    (isRecord(raw) && isRecord(raw["data"]) ? pickId(raw["data"], ["jobId", "id"]) : null);
+    (isRecord(raw) && isRecord(raw["data"])
+      ? pickId(raw["data"], ["jobId", "id"])
+      : null);
 
-  if (!jobId) throw new Error("영상 생성 job 응답에서 jobId를 찾지 못했습니다.");
+  if (!jobId)
+    throw new Error("영상 생성 job 응답에서 jobId를 찾지 못했습니다.");
   return jobId;
 }
 

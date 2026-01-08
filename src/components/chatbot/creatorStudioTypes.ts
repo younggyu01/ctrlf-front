@@ -126,10 +126,10 @@ export interface CreatorAssets {
   sourceFiles?: CreatorSourceFile[];
 
   sourceFileName?: string;
-  sourceFileSize?: number; // bytes
-  sourceFileMime?: string; // file.type
+  sourceFileUrl?: string;
+  sourceFileMime?: string; // file.type (호환성 유지용, 백엔드에서는 제공하지 않을 수 있음)
 
-  /** Creator Studio에서 사용 중인 “평문 스크립트(요약/미리보기용)” */
+  /** Creator Studio에서 사용 중인 "평문 스크립트(요약/미리보기용)" */
   script?: string;
 
   videoUrl?: string;

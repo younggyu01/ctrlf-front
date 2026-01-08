@@ -655,6 +655,30 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
   // 전송 중 상태
   const [isSending, setIsSending] = useState(false);
 
+  // 피드백 요청 중인 메시지 ID Set (in-flight 차단용)
+  const [feedbackLoadingIds, setFeedbackLoadingIds] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  // 재시도 요청 중인 메시지 ID (in-flight 차단용)
+  const [retryLoadingMessageId, setRetryLoadingMessageId] = useState<string | null>(null);
+
+  // 토스트 메시지 상태 (에러 알림용)
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+
+  // 토스트 표시 헬퍼
+  const showToast = useCallback((message: string, durationMs = 3000) => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage(message);
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimeoutRef.current = null;
+    }, durationMs);
+  }, []);
+
   const resizeRef = useRef<ResizeState>({
     resizing: false,
     dir: null,
@@ -1653,7 +1677,19 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
           .find((m) => m.role === "assistant");
         const targetMessageId = nextAssistant?.serverId;
 
-        if (targetMessageId && isUuidLike(targetMessageId)) {
+        if (!targetMessageId || !isUuidLike(targetMessageId)) {
+          // targetMessageId가 없거나 UUID가 아니면 일반 재전송으로 fallback
+          console.warn(
+            "[ChatbotApp] retry skipped: targetMessageId invalid, falling back to resend"
+          );
+          // 일반 메시지로 재전송 (아래 fallthrough로 처리됨)
+        } else {
+          // 재시도 로딩 상태 설정 (in-flight 차단)
+          const retryingLocalId = nextAssistant?.id ?? null;
+          if (retryingLocalId) {
+            setRetryLoadingMessageId(retryingLocalId);
+          }
+
           void (async () => {
             try {
               setIsSending(true);
@@ -1808,6 +1844,7 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               await processSendMessage(base);
             } finally {
               setIsSending(false);
+              setRetryLoadingMessageId(null);
             }
           })();
           return;
@@ -1827,14 +1864,38 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
     value: FeedbackValue
   ) => {
     if (!activeSessionId) return;
-    const now = Date.now();
 
+    // in-flight 차단: 이미 해당 메시지에 대한 피드백 요청이 진행 중이면 무시
+    if (feedbackLoadingIds.has(localMessageId)) {
+      console.warn(
+        "[ChatbotApp] feedback skipped: already in-flight",
+        localMessageId
+      );
+      return;
+    }
+
+    const now = Date.now();
     const s = sessionsRef.current.find((x) => x.id === activeSessionId) ?? null;
     const serverSessionId = s?.serverId;
-    const serverMessageId = s?.messages.find(
-      (x) => x.id === localMessageId
-    )?.serverId;
+    const targetMessage = s?.messages.find((x) => x.id === localMessageId);
+    const serverMessageId = targetMessage?.serverId;
+    const prevFeedback = targetMessage?.feedback ?? null;
 
+    // 서버 ID가 없으면 피드백 불가
+    if (!serverSessionId) {
+      console.warn(
+        "[ChatbotApp] feedback skipped: server sessionId is missing"
+      );
+      return;
+    }
+    if (!serverMessageId) {
+      console.warn(
+        "[ChatbotApp] feedback skipped: server messageId is missing"
+      );
+      return;
+    }
+
+    // 1. Optimistic Update: 즉시 UI 반영
     setSessions((prev) =>
       prev.map((session) => {
         if (session.id !== activeSessionId) return session;
@@ -1851,24 +1912,53 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
       })
     );
 
-    if (!serverSessionId) {
-      console.warn(
-        "[ChatbotApp] feedback skipped: server sessionId is missing"
-      );
-      return;
-    }
-    if (!serverMessageId) {
-      console.warn(
-        "[ChatbotApp] feedback skipped: server messageId is missing"
-      );
-      return;
-    }
-
-    void sendFeedbackToAI({
-      sessionId: serverSessionId,
-      messageId: serverMessageId,
-      feedback: value,
+    // 2. 로딩 상태 설정 (in-flight 표시)
+    setFeedbackLoadingIds((prev) => {
+      const next = new Set(prev);
+      next.add(localMessageId);
+      return next;
     });
+
+    // 3. API 호출 (비동기)
+    void (async () => {
+      try {
+        await sendFeedbackToAI({
+          sessionId: serverSessionId,
+          messageId: serverMessageId,
+          feedback: value,
+        });
+        // 성공: 상태 유지 (이미 Optimistic Update 완료)
+      } catch (error) {
+        console.error("[ChatbotApp] feedback failed:", error);
+
+        // 4. 실패 시 롤백: 이전 상태로 복원
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (session.id !== activeSessionId) return session;
+
+            const rolledBackMessages = session.messages.map((m) =>
+              m.id === localMessageId ? { ...m, feedback: prevFeedback } : m
+            );
+
+            return {
+              ...session,
+              messages: rolledBackMessages,
+              updatedAt: Date.now(),
+            };
+          })
+        );
+
+        // 5. 토스트로 에러 알림
+        showToast("피드백 저장에 실패했습니다");
+      } finally {
+        // 6. 로딩 상태 해제
+        setFeedbackLoadingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(localMessageId);
+          return next;
+        });
+      }
+    })();
   };
 
   const handleSubmitReport = (payload: ReportPayload) => {
@@ -1993,6 +2083,32 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
 
   return (
     <div className="cb-genie-wrapper">
+      {/* 토스트 알림 */}
+      {toastMessage && (
+        <div
+          className="cb-toast"
+          role="alert"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(40, 40, 40, 0.95)",
+            color: "#fff",
+            padding: "12px 24px",
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 500,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            zIndex: 10001,
+            animation: "cb-toast-fade-in 0.2s ease-out",
+          }}
+        >
+          {toastMessage}
+        </div>
+      )}
+
       <div
         ref={wrapperRef}
         className={`cb-chatbot-wrapper ${genieClass}`}
@@ -2091,6 +2207,8 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               onFaqQuickSend={handleFaqQuickSend}
               onRetryFromMessage={handleRetryFromMessage}
               onFeedbackChange={handleFeedbackChange}
+              feedbackLoadingIds={feedbackLoadingIds}
+              retryLoadingMessageId={retryLoadingMessageId}
               onReportSubmit={handleSubmitReport}
               userRole={userRole}
             />

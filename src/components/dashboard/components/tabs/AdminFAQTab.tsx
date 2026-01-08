@@ -789,19 +789,18 @@ const AdminFAQTab: React.FC = () => {
           {/* 좌측: 후보 목록 */}
           <aside className="cb-policy-left">
             <div className="cb-policy-left-header">
-              <div className="cb-policy-left-title">FAQ 후보</div>
-
-              {/* 자동 생성 설정 및 버튼 */}
-              <div className="cb-policy-left-actions">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <div className="cb-policy-left-title">FAQ 후보</div>
                 <div
                   style={{
-                    padding: "12px",
+                    padding: "8px 12px",
                     backgroundColor: "#f0f7ff",
                     borderRadius: "4px",
-                    marginBottom: "12px",
                     fontSize: "12px",
                     color: "#333",
                     lineHeight: "1.5",
+                    flex: "1",
+                    marginLeft: "12px",
                   }}
                 >
                   <strong>💡 안내:</strong> 최근{" "}
@@ -810,6 +809,10 @@ const AdminFAQTab: React.FC = () => {
                   {autoGenSettings.minFrequency ?? 3}회 이상 질문한 항목이
                   자동 생성됩니다.
                 </div>
+              </div>
+
+              {/* 자동 생성 설정 및 버튼 */}
+              <div className="cb-policy-left-actions">
                 <div
                   style={{
                     display: "flex",

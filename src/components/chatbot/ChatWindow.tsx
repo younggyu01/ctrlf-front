@@ -23,6 +23,7 @@ import feedbackBadIcon from "../../assets/chat-bad.png"; // 별로예요 아이�
 import type {
   ChatDomain,
   ChatSession,
+  ChatSource,
   FeedbackValue,
   ReportPayload,
   ChatServiceDomain,
@@ -84,6 +85,8 @@ interface UiChatMessage {
   feedback?: FeedbackValue;
   // 서버 메시지 UUID (피드백/재시도에 필요)
   serverId?: string;
+  // RAG 참조 문서 목록 (출처 정보)
+  sources?: ChatSource[];
 }
 
 type FaqFilterDomain = ChatServiceDomain | null; // null = HOME(추천)
@@ -809,6 +812,146 @@ function renderMarkdownLite(
     </div>
   );
 }
+
+/**
+ * 출처(Sources) 컴포넌트
+ * - 접기/펼치기 기능
+ * - 문서 제목, 조항 라벨, 스니펫 표시
+ */
+const SourcesSection: React.FC<{ sources: ChatSource[]; messageId: string }> = ({
+  sources,
+  messageId,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  if (!sources || sources.length === 0) return null;
+
+  const sourceTypeLabel = (type?: string) => {
+    if (!type) return "";
+    if (type === "POLICY") return "정책문서";
+    if (type === "TRAINING_SCRIPT") return "교육자료";
+    return type;
+  };
+
+  return (
+    <div className="cb-sources-section" style={{ marginTop: 8 }}>
+      <button
+        type="button"
+        className="cb-sources-toggle"
+        onClick={() => setIsExpanded(!isExpanded)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "4px 8px",
+          fontSize: "0.85em",
+          color: "#666",
+          background: "rgba(0,0,0,0.04)",
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ fontSize: "0.9em" }}>📚</span>
+        <span>참고 근거 ({sources.length})</span>
+        <span style={{ fontSize: "0.8em", marginLeft: 2 }}>
+          {isExpanded ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div
+          className="cb-sources-list"
+          style={{
+            marginTop: 6,
+            padding: "8px 10px",
+            background: "rgba(0,0,0,0.02)",
+            borderRadius: 8,
+            border: "1px solid rgba(0,0,0,0.06)",
+          }}
+        >
+          {sources.map((src, idx) => (
+            <div
+              key={`${messageId}-src-${idx}`}
+              className="cb-source-item"
+              style={{
+                padding: "6px 0",
+                borderBottom: idx < sources.length - 1 ? "1px solid rgba(0,0,0,0.06)" : "none",
+              }}
+            >
+              <div
+                className="cb-source-header"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  marginBottom: 2,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "0.8em",
+                    fontWeight: 600,
+                    color: "#333",
+                  }}
+                >
+                  {src.title || src.docId}
+                </span>
+                {src.sourceType && (
+                  <span
+                    style={{
+                      fontSize: "0.7em",
+                      padding: "1px 5px",
+                      background: src.sourceType === "POLICY" ? "#e3f2fd" : "#fff3e0",
+                      color: src.sourceType === "POLICY" ? "#1565c0" : "#e65100",
+                      borderRadius: 4,
+                    }}
+                  >
+                    {sourceTypeLabel(src.sourceType)}
+                  </span>
+                )}
+                {src.page && (
+                  <span style={{ fontSize: "0.75em", color: "#888" }}>
+                    p.{src.page}
+                  </span>
+                )}
+              </div>
+
+              {src.articleLabel && (
+                <div
+                  style={{
+                    fontSize: "0.78em",
+                    color: "#555",
+                    marginBottom: 2,
+                  }}
+                >
+                  {src.articleLabel}
+                </div>
+              )}
+
+              {src.snippet && (
+                <div
+                  className="cb-source-snippet"
+                  style={{
+                    fontSize: "0.78em",
+                    color: "#666",
+                    lineHeight: 1.4,
+                    overflow: "hidden",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                  }}
+                >
+                  "{src.snippet}"
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
   activeSession,
@@ -1538,6 +1681,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                         )}
                       </div>
                     </div>
+
+                    {/* 출처 정보 표시 (assistant 메시지에만) */}
+                    {isAssistant && msg.sources && msg.sources.length > 0 && (
+                      <SourcesSection sources={msg.sources} messageId={msg.id} />
+                    )}
 
                     {allowActions && (
                       <div className="cb-chat-bubble-actions">

@@ -2,6 +2,7 @@
 import keycloak from "../../keycloak";
 import type {
   ChatAction,
+  ChatSource,
   ChatRequest,
   FeedbackValue,
   ChatSendResult,
@@ -534,6 +535,8 @@ type ChatMessageSendResponse = {
   createdAt: string;
   /** AI 응답에 포함된 프론트엔드 액션 정보 */
   action?: ChatAction;
+  /** RAG 참조 문서 목록 (출처 정보) */
+  sources?: ChatSource[];
 };
 
 /**
@@ -722,11 +725,50 @@ async function sendChatMessage(
             : typeof actionData["progressPercent"] === "number"
               ? actionData["progressPercent"]
               : undefined,
+        quizId:
+          nonEmptyString(actionData["quiz_id"]) ??
+          nonEmptyString(actionData["quizId"]) ??
+          undefined,
       };
     }
   }
 
-  return { messageId, role, content, createdAt, action };
+  // sources (RAG 참조 문서) 파싱
+  let sources: ChatSource[] | undefined;
+  if (isRecord(data)) {
+    const sourcesData = data["sources"];
+    if (Array.isArray(sourcesData)) {
+      sources = sourcesData
+        .filter((s): s is JsonRecord => isRecord(s))
+        .map((s) => ({
+          docId:
+            nonEmptyString(s["doc_id"]) ??
+            nonEmptyString(s["docId"]) ??
+            "",
+          title: nonEmptyString(s["title"]) ?? undefined,
+          page:
+            typeof s["page"] === "number" ? s["page"] : undefined,
+          score:
+            typeof s["score"] === "number" ? s["score"] : undefined,
+          snippet: nonEmptyString(s["snippet"]) ?? undefined,
+          articleLabel:
+            nonEmptyString(s["article_label"]) ??
+            nonEmptyString(s["articleLabel"]) ??
+            undefined,
+          articlePath:
+            nonEmptyString(s["article_path"]) ??
+            nonEmptyString(s["articlePath"]) ??
+            undefined,
+          sourceType:
+            nonEmptyString(s["source_type"]) ??
+            nonEmptyString(s["sourceType"]) ??
+            undefined,
+        }))
+        .filter((s) => s.docId); // docId가 있는 것만 유효
+    }
+  }
+
+  return { messageId, role, content, createdAt, action, sources };
 }
 
 /**
@@ -807,6 +849,7 @@ export async function sendChatToAI(req: ChatRequest): Promise<ChatSendResult> {
     content: sent.content || "응답이 비어 있습니다.",
     createdAt: sent.createdAt,
     action: sent.action,
+    sources: sent.sources,
   };
 }
 
@@ -977,7 +1020,44 @@ export async function retryMessage(
             : typeof actionData["progressPercent"] === "number"
               ? actionData["progressPercent"]
               : undefined,
+        quizId:
+          nonEmptyString(actionData["quiz_id"]) ??
+          nonEmptyString(actionData["quizId"]) ??
+          undefined,
       };
+    }
+
+    // sources (RAG 참조 문서) 파싱
+    let sources: ChatSource[] | undefined;
+    const sourcesData = parsed["sources"];
+    if (Array.isArray(sourcesData)) {
+      sources = sourcesData
+        .filter((s): s is JsonRecord => isRecord(s))
+        .map((s) => ({
+          docId:
+            nonEmptyString(s["doc_id"]) ??
+            nonEmptyString(s["docId"]) ??
+            "",
+          title: nonEmptyString(s["title"]) ?? undefined,
+          page:
+            typeof s["page"] === "number" ? s["page"] : undefined,
+          score:
+            typeof s["score"] === "number" ? s["score"] : undefined,
+          snippet: nonEmptyString(s["snippet"]) ?? undefined,
+          articleLabel:
+            nonEmptyString(s["article_label"]) ??
+            nonEmptyString(s["articleLabel"]) ??
+            undefined,
+          articlePath:
+            nonEmptyString(s["article_path"]) ??
+            nonEmptyString(s["articlePath"]) ??
+            undefined,
+          sourceType:
+            nonEmptyString(s["source_type"]) ??
+            nonEmptyString(s["sourceType"]) ??
+            undefined,
+        }))
+        .filter((s) => s.docId);
     }
 
     return {
@@ -987,6 +1067,7 @@ export async function retryMessage(
       content: extractedContent.trim() ? extractedContent : "응답이 비어 있습니다.",
       createdAt,
       action,
+      sources,
     };
   }
 

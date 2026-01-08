@@ -69,6 +69,9 @@ export interface ChatMessage {
    * - user 메시지는 서버에 저장/리턴되지 않을 수 있어 undefined일 수 있음
    */
   serverId?: string;
+
+  /** RAG 참조 문서 목록 (출처 정보) - assistant 메시지에만 존재 */
+  sources?: ChatSource[];
 }
 
 /** 세션 엔티티 */
@@ -139,10 +142,37 @@ export interface ChatRequest {
 /** 프론트엔드에서 실행할 액션 타입 */
 export type ChatActionType = "PLAY_VIDEO" | "OPEN_EDU_PANEL" | "OPEN_QUIZ";
 
+// =============================================================================
+// ChatSource: AI 응답에 포함된 RAG 참조 문서 (출처) 정보
+// =============================================================================
+
+/** RAG 참조 문서 소스 유형 */
+export type ChatSourceType = "POLICY" | "TRAINING_SCRIPT" | (string & {});
+
+/** AI 응답에 포함된 RAG 참조 문서 정보 */
+export interface ChatSource {
+  /** 문서 ID */
+  docId: string;
+  /** 문서 제목 */
+  title?: string;
+  /** 페이지 번호 */
+  page?: number;
+  /** 검색 관련도 점수 (0.0 ~ 1.0) */
+  score?: number;
+  /** 문서 발췌 내용 */
+  snippet?: string;
+  /** 조항 라벨 (예: "제10조 (연차휴가) 제1항") */
+  articleLabel?: string;
+  /** 조항 경로 (예: "제3장 휴가 > 제10조 > 제1항") */
+  articlePath?: string;
+  /** 소스 유형: POLICY(정책문서), TRAINING_SCRIPT(교육스크립트) */
+  sourceType?: ChatSourceType;
+}
+
 /** AI 응답에 포함된 프론트엔드 액션 정보 */
 export interface ChatAction {
   type: ChatActionType;
-  /** 교육 ID (영상 재생 시 필수) */
+  /** 교육 ID (영상 재생, 퀴즈 시작 시 사용) */
   educationId?: string;
   /** 영상 ID (영상 재생 시 필수) */
   videoId?: string;
@@ -154,6 +184,8 @@ export interface ChatAction {
   videoTitle?: string;
   /** 현재 진도율(%) */
   progressPercent?: number;
+  /** 퀴즈 ID (퀴즈 시작 시 선택) */
+  quizId?: string;
 }
 
 /**
@@ -176,6 +208,8 @@ export interface ChatSendResult {
   createdAt?: string;
   /** 프론트엔드에서 실행할 액션 정보 (영상 재생 등) */
   action?: ChatAction;
+  /** RAG 참조 문서 목록 (출처 정보) */
+  sources?: ChatSource[];
 }
 
 // 신고 모달에서 넘어가는 신고 데이터

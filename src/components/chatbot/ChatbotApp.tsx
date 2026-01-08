@@ -1560,6 +1560,14 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
                   resumePositionSeconds: f.action.resumePositionSeconds,
                 });
               }
+              // AI 응답에 퀴즈 패널 열기 액션이 있으면 처리
+              if (f.action?.type === "OPEN_QUIZ") {
+                onOpenQuizPanel?.(f.action.educationId || f.action.quizId);
+              }
+              // AI 응답에 교육 패널 열기 액션이 있으면 처리
+              if (f.action?.type === "OPEN_EDU_PANEL") {
+                onOpenEduPanel?.();
+              }
             },
           });
 
@@ -1602,6 +1610,14 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
               videoId: reply.action.videoId,
               resumePositionSeconds: reply.action.resumePositionSeconds,
             });
+          }
+          // AI 응답에 퀴즈 패널 열기 액션이 있으면 처리
+          if (reply.action?.type === "OPEN_QUIZ") {
+            onOpenQuizPanel?.(reply.action.educationId || reply.action.quizId);
+          }
+          // AI 응답에 교육 패널 열기 액션이 있으면 처리
+          if (reply.action?.type === "OPEN_EDU_PANEL") {
+            onOpenEduPanel?.();
           }
         }
       } catch (error) {
@@ -1788,6 +1804,14 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
                           resumePositionSeconds: f.action.resumePositionSeconds,
                         });
                       }
+                      // AI 응답에 퀴즈 패널 열기 액션이 있으면 처리
+                      if (f.action?.type === "OPEN_QUIZ") {
+                        onOpenQuizPanel?.(f.action.educationId || f.action.quizId);
+                      }
+                      // AI 응답에 교육 패널 열기 액션이 있으면 처리
+                      if (f.action?.type === "OPEN_EDU_PANEL") {
+                        onOpenEduPanel?.();
+                      }
                     },
                   }
                 );
@@ -1834,6 +1858,14 @@ const ChatbotApp: React.FC<ChatbotAppProps> = ({
                     videoId: res.action.videoId,
                     resumePositionSeconds: res.action.resumePositionSeconds,
                   });
+                }
+                // AI 응답에 퀴즈 패널 열기 액션이 있으면 처리
+                if (res.action?.type === "OPEN_QUIZ") {
+                  onOpenQuizPanel?.(res.action.educationId || res.action.quizId);
+                }
+                // AI 응답에 교육 패널 열기 액션이 있으면 처리
+                if (res.action?.type === "OPEN_EDU_PANEL") {
+                  onOpenEduPanel?.();
                 }
               }
             } catch (e) {

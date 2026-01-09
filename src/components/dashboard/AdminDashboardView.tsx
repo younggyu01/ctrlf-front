@@ -7,6 +7,7 @@ import {
 } from "../../utils/chat";
 import type { CommonFilterState } from "./adminFilterTypes";
 import AdminPolicyTab from "./components/tabs/AdminPolicyTab";
+import AdminNotifications from "./AdminNotifications";
 import type {
   AdminTabId,
   PeriodFilter,
@@ -202,6 +203,16 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       setShowRagGapView(false);
     }
   }, [activeTab, showRagGapView]);
+
+  // 알림 관련 상태
+  const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+
+  // 알림 모달 열기 핸들러
+  // 읽음 처리는 AdminNotifications 컴포넌트 내부에서 처리
+  const handleOpenNotificationModal = () => {
+    setIsNotificationModalOpen(true);
+  };
 
   /**
    * === 패널 크기 + 위치 (EduPanel / QuizPanel 과 동일 패턴) ===
@@ -776,17 +787,55 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             </div>
           </div>
 
-          {onClose && (
+          <div className="cb-admin-header-actions">
+            {/* 알림 버튼 */}
             <button
               type="button"
-              className="cb-admin-header-close-btn"
-              onClick={onClose}
-              aria-label="관리자 대시보드 닫기"
+              className="cb-admin-notif-btn"
+              onClick={handleOpenNotificationModal}
+              aria-label="알림"
             >
-              ✕
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+              {unreadNotificationCount > 0 && (
+                <span className="cb-admin-notif-badge">
+                  {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                </span>
+              )}
             </button>
-          )}
+
+            {/* 닫기 버튼 */}
+            {onClose && (
+              <button
+                type="button"
+                className="cb-admin-header-close-btn"
+                onClick={onClose}
+                aria-label="관리자 대시보드 닫기"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </header>
+
+        {/* 알림 모달 */}
+        <AdminNotifications
+          isOpen={isNotificationModalOpen}
+          onClose={() => setIsNotificationModalOpen(false)}
+          unreadCount={unreadNotificationCount}
+          onUnreadCountChange={setUnreadNotificationCount}
+        />
 
         <nav className="cb-admin-tabs" aria-label="관리자 대시보드 탭">
           <button

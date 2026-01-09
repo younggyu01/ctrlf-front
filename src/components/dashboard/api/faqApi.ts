@@ -286,12 +286,21 @@ export async function autoGenerateFAQCandidates(
     daysBack: params.daysBack ?? 30,
   };
   
-  console.log("[FAQ API] 요청 URL:", `${FAQ_API_BASE}/drafts/auto-generate`);
+  const requestUrl = `${FAQ_API_BASE}/drafts/auto-generate`;
+  console.log("[FAQ API] 요청 URL:", requestUrl);
   console.log("[FAQ API] 요청 Body:", JSON.stringify(requestBody, null, 2));
+  console.log("[FAQ API] 요청 시간:", new Date().toISOString());
+  console.log("[FAQ API] 검색 조건:", {
+    minFrequency: requestBody.minFrequency,
+    daysBack: requestBody.daysBack,
+    설명: `최근 ${requestBody.daysBack}일 내 ${requestBody.minFrequency}회 이상 질문한 항목`,
+    검색시작일시: new Date(Date.now() - (requestBody.daysBack ?? 30) * 24 * 60 * 60 * 1000).toISOString(),
+    현재일시: new Date().toISOString(),
+  });
   
   try {
     const response = await fetchJson<AutoGenerateResponse>(
-      `${FAQ_API_BASE}/drafts/auto-generate`,
+      requestUrl,
       {
         method: "POST",
         headers: {
@@ -301,6 +310,15 @@ export async function autoGenerateFAQCandidates(
       }
     );
     console.log("[FAQ API] 응답 성공:", response);
+    console.log("[FAQ API] 응답 상세:", {
+      status: response?.status,
+      candidatesFound: response?.candidatesFound,
+      draftsGenerated: response?.draftsGenerated,
+      draftsFailed: response?.draftsFailed,
+      draftsCount: response?.drafts?.length ?? 0,
+      errorMessage: response?.errorMessage,
+      응답시간: new Date().toISOString(),
+    });
     return response;
   } catch (error) {
     console.error("[FAQ API] 요청 실패:", error);

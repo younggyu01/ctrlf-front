@@ -167,11 +167,39 @@ const AdminFAQTab: React.FC = () => {
       });
       
       if (candidatesFound === 0) {
+        const searchStartDate = new Date(Date.now() - (autoGenSettings.daysBack ?? 30) * 24 * 60 * 60 * 1000);
+        console.warn("=".repeat(60));
         console.warn("[FAQ] ⚠️ 후보가 0개입니다. 확인 필요:");
+        console.warn("=".repeat(60));
         console.warn("  1. 최근", autoGenSettings.daysBack ?? 30, "일 내 질문이 있는지");
         console.warn("  2. 여러 사용자가 같은 질문을 했는지 (한 사용자가 여러 번은 제외)");
         console.warn("  3. 질문이", autoGenSettings.minFrequency ?? 3, "회 이상인지");
         console.warn("  4. 백엔드에서 유사도 검사가 너무 엄격한지");
+        console.warn("  5. 질문 후 시간이 지났는지 확인 (클러스터링 처리 시간 필요)");
+        console.warn("  6. 백엔드 로그 확인: /admin/chat/logs 에서 최근 질문 확인");
+        console.warn("");
+        console.warn("  [디버깅] 현재 요청 정보:");
+        console.warn(JSON.stringify({
+          minFrequency: autoGenSettings.minFrequency ?? 3,
+          daysBack: autoGenSettings.daysBack ?? 30,
+          검색시작일시: searchStartDate.toISOString(),
+          검색시작일시_로컬: searchStartDate.toLocaleString("ko-KR"),
+          현재일시: new Date().toISOString(),
+          현재일시_로컬: new Date().toLocaleString("ko-KR"),
+          검색기간: `${autoGenSettings.daysBack ?? 30}일`,
+          최소빈도: `${autoGenSettings.minFrequency ?? 3}회`,
+        }, null, 2));
+        console.warn("");
+        console.warn("  [디버깅] 백엔드 응답:");
+        console.warn(JSON.stringify({
+          status: response?.status,
+          candidatesFound: response?.candidatesFound,
+          draftsGenerated: response?.draftsGenerated,
+          draftsFailed: response?.draftsFailed,
+          errorMessage: response?.errorMessage,
+          draftsCount: response?.drafts?.length ?? 0,
+        }, null, 2));
+        console.warn("=".repeat(60));
       }
       console.log("=".repeat(50));
       
@@ -181,9 +209,10 @@ const AdminFAQTab: React.FC = () => {
           `FAQ 후보 자동 생성에 실패했습니다: ${response?.errorMessage || "알 수 없는 오류"}`
         );
       } else if (candidatesFound === 0) {
+        // 토스트 메시지는 간결하게, 상세 정보는 콘솔에만 출력
         showToast(
           "warn",
-          `조건에 맞는 FAQ 후보가 없습니다. (발견된 후보: ${candidatesFound}개)\n최근 ${autoGenSettings.daysBack ?? 30}일 내 여러 사용자가 ${autoGenSettings.minFrequency ?? 3}회 이상 질문한 항목이 있는지 확인해주세요.`
+          `조건에 맞는 FAQ 후보가 없습니다. (발견: ${candidatesFound}개)\n최근 ${autoGenSettings.daysBack ?? 30}일 내 ${autoGenSettings.minFrequency ?? 3}회 이상 질문한 항목이 있는지 확인하거나, 콘솔 로그를 확인해주세요.`
         );
       } else if (draftsGenerated === 0) {
         showToast(
@@ -939,27 +968,25 @@ const AdminFAQTab: React.FC = () => {
                           {candidate.frequency ? `${candidate.frequency}회 질문` : "자동 생성"}
                         </div>
                         <div className="cb-policy-group-top-right" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                          {/* 승인됨/반려됨 상태일 때만 삭제 버튼 표시 */}
-                          {(candidate.status === "APPROVED" || candidate.status === "REJECTED") && (
-                            <button
-                              type="button"
-                              onClick={(e) => handleDelete(candidate, e)}
-                              disabled={loading}
-                              style={{
-                                padding: "4px 8px",
-                                fontSize: "12px",
-                                backgroundColor: "transparent",
-                                border: "1px solid #ddd",
-                                borderRadius: "4px",
-                                cursor: loading ? "not-allowed" : "pointer",
-                                color: "#666",
-                                opacity: loading ? 0.5 : 1,
-                              }}
-                              title="삭제"
-                            >
-                              삭제
-                            </button>
-                          )}
+                          {/* 모든 상태에서 삭제 버튼 표시 (초안 포함) */}
+                          <button
+                            type="button"
+                            onClick={(e) => handleDelete(candidate, e)}
+                            disabled={loading}
+                            style={{
+                              padding: "4px 8px",
+                              fontSize: "12px",
+                              backgroundColor: "transparent",
+                              border: "1px solid #ddd",
+                              borderRadius: "4px",
+                              cursor: loading ? "not-allowed" : "pointer",
+                              color: "#666",
+                              opacity: loading ? 0.5 : 1,
+                            }}
+                            title="삭제"
+                          >
+                            삭제
+                          </button>
                           <span
                             className={cx(
                               "cb-reviewer-pill",
@@ -1132,9 +1159,47 @@ const AdminFAQTab: React.FC = () => {
                           >
                             반려
                           </button>
+                          <button
+                            type="button"
+                            className="cb-admin-ghost-btn"
+                            onClick={() => handleDelete(selectedCandidate)}
+                            disabled={loading}
+                            style={{
+                              borderColor: "#dc3545",
+                              color: "#dc3545",
+                            }}
+                          >
+                            삭제
+                          </button>
                         </div>
                         <div className="cb-policy-hint" style={{ marginTop: "12px" }}>
-                          승인하면 FAQ로 등록되고, 반려하면 목록에서 제외됩니다.
+                          승인하면 FAQ로 등록되고, 반려하면 목록에서 제외됩니다. 삭제하면 초안이 완전히 제거됩니다.
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* 초안이 아닌 상태에서도 삭제 가능하도록 삭제 섹션 추가 */}
+                  {(selectedCandidate.status === "APPROVED" || selectedCandidate.status === "REJECTED") && (
+                    <section className="cb-policy-card">
+                      <div className="cb-policy-card-title">삭제</div>
+                      <div className="cb-policy-review-box">
+                        <div className="cb-policy-review-actions" style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                          <button
+                            type="button"
+                            className="cb-admin-ghost-btn"
+                            onClick={() => handleDelete(selectedCandidate)}
+                            disabled={loading}
+                            style={{
+                              borderColor: "#dc3545",
+                              color: "#dc3545",
+                            }}
+                          >
+                            삭제
+                          </button>
+                        </div>
+                        <div className="cb-policy-hint" style={{ marginTop: "12px" }}>
+                          이 FAQ 후보를 완전히 삭제합니다. 삭제된 항목은 복구할 수 없습니다.
                         </div>
                       </div>
                     </section>

@@ -67,9 +67,11 @@ export function periodToDateRange(period: string): {
       startDate.setDate(startDate.getDate() - 30);
   }
 
-  // 시작일은 00:00:00, 종료일은 현재 시간으로 설정 (최신 로그 포함)
+  // 시작일은 00:00:00, 종료일은 현재 시간 + 여유분(1분)으로 설정
+  // (최신 채팅 로그가 즉시 반영되도록, 시간 동기화 차이 보정)
   startDate.setHours(0, 0, 0, 0);
-  // endDate는 현재 시간 그대로 사용 (최신 채팅 로그가 즉시 반영되도록)
+  // endDate는 현재 시간 + 1분으로 설정하여 최신 로그 포함 보장
+  endDate.setMinutes(endDate.getMinutes() + 1);
 
   return {
     startDate: startDate.toISOString(),

@@ -127,12 +127,18 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
         lastLogTime: response.content?.[response.content.length - 1]?.createdAt
           ? new Date(response.content[response.content.length - 1].createdAt).toLocaleString("ko-KR")
           : null,
-        logs: response.content?.slice(0, 3).map((log) => ({
+        현재시간: new Date().toLocaleString("ko-KR"),
+        요청한종료일시: new Date(filters.endDate).toLocaleString("ko-KR"),
+        최신로그와현재시간차이: response.content?.[0]?.createdAt
+          ? `${Math.round((new Date().getTime() - new Date(response.content[0].createdAt).getTime()) / 1000)}초`
+          : "로그 없음",
+        logs: response.content?.slice(0, 5).map((log) => ({
           id: log.id,
           createdAt: log.createdAt,
           createdAtLocal: new Date(log.createdAt).toLocaleString("ko-KR"),
           userId: log.userId,
           domain: log.domain,
+          question: log.questionMasked?.substring(0, 50) || "N/A",
         })),
       });
 
@@ -157,13 +163,22 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
         };
         
         if (httpError.status === 500) {
-          errorMessage = "서버 오류가 발생했습니다. 백엔드 서버를 확인해주세요.";
+          errorMessage = "서버 오류가 발생했습니다.";
           // 백엔드 에러 메시지가 있으면 추가
           if (httpError.body && typeof httpError.body === "object") {
-            const body = httpError.body as { message?: string; error?: string };
-            if (body.message || body.error) {
-              errorMessage += ` (${body.message || body.error})`;
+            const body = httpError.body as { message?: string; error?: string; detail?: string };
+            const errorDetail = body.message || body.error || body.detail || "";
+            
+            // Elasticsearch 인덱스 관련 에러 확인
+            if (errorDetail.includes("index_not_found") || errorDetail.includes("faq_log")) {
+              errorMessage = "Elasticsearch 인덱스가 없습니다. 백엔드에서 인덱스를 생성해주세요.\n(에러: " + errorDetail + ")";
+            } else if (errorDetail) {
+              errorMessage += `\n${errorDetail}`;
+            } else {
+              errorMessage += " 백엔드 서버를 확인해주세요.";
             }
+          } else {
+            errorMessage += " 백엔드 서버를 확인해주세요.";
           }
         } else if (httpError.status === 400) {
           errorMessage = "잘못된 요청입니다. 날짜 범위를 확인해주세요.";
@@ -208,11 +223,11 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
     void fetchLogs();
   }, [fetchLogs]);
 
-  // 자동 새로고침: 30초마다 최신 로그 확인
+  // 자동 새로고침: 5초마다 최신 채팅 로그 확인 (실시간 업데이트)
   useEffect(() => {
     const intervalId = setInterval(() => {
       void fetchLogs();
-    }, 30000); // 30초마다 새로고침
+    }, 5000); // 5초마다 새로고침
 
     // 컴포넌트 언마운트 시 인터벌 정리
     return () => {
@@ -408,14 +423,19 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
                       >
                         <td>
                           {item.createdAt
-                            ? new Date(item.createdAt).toLocaleString("ko-KR", {
-                                year: "numeric",
-                                month: "2-digit",
-                                day: "2-digit",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                second: "2-digit",
-                              })
+                            ? (() => {
+                                const date = new Date(item.createdAt);
+                                return isNaN(date.getTime())
+                                  ? "-"
+                                  : date.toLocaleString("ko-KR", {
+                                      year: "numeric",
+                                      month: "2-digit",
+                                      day: "2-digit",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                    });
+                              })()
                             : "-"}
                         </td>
                         <td>{item.userId}</td>
@@ -435,7 +455,7 @@ const AdminLogsTab: React.FC<AdminLogsTabProps> = ({
                             "-"
                           )}
                         </td>
-                        <td>{item.latencyMsTotal.toLocaleString()}</td>
+                        <td>{item.latencyMsTotal != null ? item.latencyMsTotal.toLocaleString() : "-"}</td>
                         <td>
                           {hasError ? (
                             <span className="cb-admin-log-error-code">

@@ -2364,6 +2364,29 @@ export default function AdminPolicyTab() {
                       await replaceFile(selected.documentId, selected.version, {
                         fileUrl: presignResponse.fileUrl,
                       });
+                      
+                      // replaceFile 성공 후 즉시 버전 정보 새로고침 (linkedId 매칭을 위해)
+                      try {
+                        const detail = await getPolicyVersion(
+                          selected.documentId,
+                          selected.version
+                        );
+                        const updatedVersion = convertVersionDetailToPolicyDocVersion(detail);
+                        setSelectedVersion(updatedVersion);
+                        
+                        // 그룹 정보도 업데이트
+                        const policyDetail = await getPolicy(selected.documentId);
+                        const updatedGroup = convertPolicyDetailToGroup(policyDetail);
+                        setGroups((prevGroups) =>
+                          prevGroups.map((prevGroup) =>
+                            prevGroup.documentId === selected.documentId
+                              ? updatedGroup
+                              : prevGroup
+                          )
+                        );
+                      } catch (refreshError) {
+                        console.error("Failed to refresh version after replaceFile:", refreshError);
+                      }
                     } else {
                       // 추가 파일: updateVersion으로 fileUrl 업데이트 (API가 여러 파일을 지원하는 경우)
                       // 현재 API는 단일 파일만 지원하므로 첫 번째 파일만 처리
@@ -2412,39 +2435,17 @@ export default function AdminPolicyTab() {
               }
             }
 
-            // 버전이 이미 존재하는 경우 업로드 후 정보 새로고침
+            // 버전이 이미 존재하는 경우 업로드 후 토스트 메시지 표시
+            // (첫 번째 파일의 경우 이미 replaceFile 직후 새로고침했으므로 여기서는 토스트만 표시)
             if (selected.version > 0 && results.some((r) => r.ok)) {
-              try {
-                // 버전 정보 다시 로드
-                const detail = await getPolicyVersion(
-                  selected.documentId,
-                  selected.version
+              const successCount = results.filter((r) => r.ok).length;
+              if (successCount === fs.length) {
+                showToast("neutral", `${successCount}개 파일이 업로드되었습니다.`);
+              } else {
+                showToast(
+                  "warn",
+                  `${successCount}/${fs.length}개 파일이 업로드되었습니다.`
                 );
-                const updatedVersion = convertVersionDetailToPolicyDocVersion(detail);
-                setSelectedVersion(updatedVersion);
-
-                // 그룹 정보도 업데이트
-                const policyDetail = await getPolicy(selected.documentId);
-                const updatedGroup = convertPolicyDetailToGroup(policyDetail);
-                setGroups((prevGroups) =>
-                  prevGroups.map((prevGroup) =>
-                    prevGroup.documentId === selected.documentId
-                      ? updatedGroup
-                      : prevGroup
-                  )
-                );
-
-                const successCount = results.filter((r) => r.ok).length;
-                if (successCount === fs.length) {
-                  showToast("neutral", `${successCount}개 파일이 업로드되었습니다.`);
-                } else {
-                  showToast(
-                    "warn",
-                    `${successCount}/${fs.length}개 파일이 업로드되었습니다.`
-                  );
-                }
-              } catch (refreshError) {
-                console.error("Failed to refresh version:", refreshError);
               }
             } else if (selected.version === 0 && results.some((r) => r.ok)) {
               const successCount = results.filter((r) => r.ok).length;

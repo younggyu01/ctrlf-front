@@ -19,7 +19,6 @@ import {
   getQuizTimer,
   getQuizWrongs,
   postQuizLeave,
-  putQuizTimer,
   saveQuizAnswers,
   startQuiz,
   submitQuizAnswers,
@@ -51,8 +50,8 @@ type DragState = {
 };
 
 const MIN_WIDTH = 520;
-const MIN_HEIGHT = 420;
-const INITIAL_SIZE: Size = { width: 540, height: 420 };
+const MIN_HEIGHT = 600;
+const INITIAL_SIZE: Size = { width: 540, height: 600 };
 
 // local UI 기준(서버가 내려주는 passScore는 result에서 확인 가능)
 const DEFAULT_PASSING_SCORE = 80;
@@ -1035,18 +1034,18 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         const [list, retryInfoApi] = await Promise.all([
           needAttempts
             ? (async () => {
-                // 문서 플로우 우선: my-attempts (educationId 필수)
-                try {
-                  return await raceUiTimeout(
-                    "응시 내역 조회(my-attempts)",
-                    getQuizMyAttempts({ educationId: courseId }),
-                    10_000
-                  );
-                } catch {
-                  // 폴백: 기존 education-attempts
-                  return await raceUiTimeout("응시 내역 조회", getQuizEducationAttempts(courseId), 10_000);
-                }
-              })()
+              // 문서 플로우 우선: my-attempts (educationId 필수)
+              try {
+                return await raceUiTimeout(
+                  "응시 내역 조회(my-attempts)",
+                  getQuizMyAttempts({ educationId: courseId }),
+                  10_000
+                );
+              } catch {
+                // 폴백: 기존 education-attempts
+                return await raceUiTimeout("응시 내역 조회", getQuizEducationAttempts(courseId), 10_000);
+              }
+            })()
             : Promise.resolve(attemptsByCourseId[courseId] ?? []),
 
           needRetryMeta ? raceUiTimeout("재응시 정보 조회", getQuizRetryInfo(courseId), 8_000) : Promise.resolve(null),
@@ -1196,6 +1195,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   // 패널 높이 자동 조정 (ResizeObserver)
   // =========================
   const scheduleAutoHeightRef = useRef<(() => void) | null>(null);
+  const lastHeightRef = useRef<number>(INITIAL_SIZE.height);
+  const throttleTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!hasDOM) return;
@@ -1210,6 +1211,15 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
       if (resizeRef.current.resizing || dragRef.current.dragging) return;
 
+      // 스로틀링: 최소 200ms 간격으로 실행
+      if (throttleTimeoutRef.current !== null) {
+        return;
+      }
+
+      throttleTimeoutRef.current = window.setTimeout(() => {
+        throttleTimeoutRef.current = null;
+      }, 200);
+
       window.cancelAnimationFrame(raf);
       raf = window.requestAnimationFrame(() => {
         const contentEl = contentRef.current;
@@ -1218,10 +1228,20 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         const contentHeight = contentEl.offsetHeight;
         const minTop = getMinTop(topSafeRef.current);
 
-        const desiredHeight = Math.min(Math.max(contentHeight + 40, MIN_HEIGHT), window.innerHeight - 40);
+        // 최대 높이를 더 엄격하게 제한 (viewport의 90%를 넘지 않도록)
+        const maxHeight = Math.floor(window.innerHeight * 0.9);
+        const desiredHeight = Math.min(Math.max(contentHeight + 40, MIN_HEIGHT), maxHeight);
+
+        // 높이 변경이 실제로 필요한지 더 엄격하게 체크 (5px 이상 차이일 때만)
+        const heightDiff = Math.abs(lastHeightRef.current - desiredHeight);
+        if (heightDiff < 5) {
+          return;
+        }
+
+        lastHeightRef.current = desiredHeight;
 
         setSize((prev) => {
-          if (Math.abs(prev.height - desiredHeight) < 2) return prev;
+          if (Math.abs(prev.height - desiredHeight) < 5) return prev;
           return { ...prev, height: desiredHeight };
         });
 
@@ -1245,6 +1265,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       return () => {
         window.removeEventListener("resize", onWinResize);
         window.cancelAnimationFrame(raf);
+        if (throttleTimeoutRef.current !== null) {
+          clearTimeout(throttleTimeoutRef.current);
+          throttleTimeoutRef.current = null;
+        }
         scheduleAutoHeightRef.current = null;
       };
     }
@@ -1259,6 +1283,10 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     return () => {
       ro.disconnect();
       window.cancelAnimationFrame(raf);
+      if (throttleTimeoutRef.current !== null) {
+        clearTimeout(throttleTimeoutRef.current);
+        throttleTimeoutRef.current = null;
+      }
       scheduleAutoHeightRef.current = null;
     };
   }, [hasDOM]);
@@ -1610,12 +1638,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       if (timerPushInFlightRef.current) return;
       timerPushInFlightRef.current = true;
 
-      const rs = Math.max(0, remainingRef.current);
-      raceUiTimeout("타이머 저장", putQuizTimer(solve.attemptId, { remainingSeconds: rs }), 4_000)
-        .catch(() => undefined)
-        .finally(() => {
-          timerPushInFlightRef.current = false;
-        });
+      // 타이머 저장 기능은 문서에 없고 백엔드에 미구현이므로 호출하지 않음
+      timerPushInFlightRef.current = false;
     }, TIMER_PUSH_INTERVAL_MS);
 
     const pull = window.setInterval(async () => {
@@ -1739,9 +1763,20 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   useEffect(() => {
     if (!solve) return;
 
+    // 타이머가 아직 초기화되지 않았으면 자동 제출하지 않음
+    // remainingSeconds가 0이고 timeLimit도 0이면 아직 초기화되지 않은 상태
+    if (remainingSeconds <= 0 && timeLimit <= 0) return;
+
     const expired = serverExpired || remainingSeconds <= 0;
     if (!expired) return;
     if (autoSubmitOnceRef.current) return;
+
+    // 답안이 하나도 없으면 자동 제출하지 않음 (사용자가 아직 답을 선택하지 않은 경우)
+    const hasAnyAnswer = selectedAnswers.some((ans) => ans >= 0);
+    if (!hasAnyAnswer) {
+      // 답안이 없으면 자동 제출하지 않고 타이머만 만료 상태로 표시
+      return;
+    }
 
     autoSubmitOnceRef.current = true;
 
@@ -1792,9 +1827,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
         }
 
         const retryDesc = retryInfo
-          ? ` / 재응시 ${retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"} (남은 ${
-              retryInfo.remainingAttempts ?? "-"
-            } / ${retryInfo.maxAttempts ?? "-"})`
+          ? ` / 재응시 ${retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"} (남은 ${retryInfo.remainingAttempts ?? "-"
+          } / ${retryInfo.maxAttempts ?? "-"})`
           : "";
 
         const score = pickNumber((submitRes as unknown as { score?: unknown }).score) ?? resultUi?.score ?? null;
@@ -1809,8 +1843,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
           showResultMessage(
             pickBoolean((submitRes as unknown as { passed?: unknown }).passed) ? "success" : "info",
             "시간 만료로 자동 제출되었습니다",
-            `점수 ${score !== null ? Math.round(score) : "-"}점 (정답 ${correctCount ?? "-"}/${totalCount ?? "-"})${
-              passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""
+            `점수 ${score !== null ? Math.round(score) : "-"}점 (정답 ${correctCount ?? "-"}/${totalCount ?? "-"})${passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""
             }${retryDesc}`
           );
         }
@@ -1840,6 +1873,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
   }, [
     serverExpired,
     remainingSeconds,
+    timeLimit,
+    selectedAnswers,
     solve,
     flushSaveNow,
     buildAnswerPayload,
@@ -1861,8 +1896,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
       flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
 
-      const rs = Math.max(0, remainingRef.current);
-      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+      // 타이머 저장 기능은 문서에 없고 백엔드에 미구현이므로 호출하지 않음
 
       recordLeave(attemptId, "HIDDEN", true);
     };
@@ -1870,8 +1904,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     const onBeforeUnload = () => {
       flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
 
-      const rs = Math.max(0, remainingRef.current);
-      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+      // 타이머 저장 기능은 문서에 없고 백엔드에 미구현이므로 호출하지 않음
 
       recordLeave(attemptId, "UNLOAD", true);
     };
@@ -1895,8 +1928,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
     return () => {
       flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
 
-      const rs = Math.max(0, remainingRef.current);
-      putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+      // 타이머 저장 기능은 문서에 없고 백엔드에 미구현이므로 호출하지 않음
 
       recordLeave(attemptId, "CLOSE", true);
     };
@@ -1994,12 +2026,20 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       try {
         const t = await raceUiTimeout("타이머 조회", getQuizTimer(started.attemptId), 6_000);
         // null = 제한 없음이므로 0으로 처리 (UI 호환)
-        setTimeLimit(t.timeLimit ?? 0);
-        setRemainingSeconds(t.remainingSeconds ?? 0);
-        setServerExpired(t.isExpired);
+        const timeLimitValue = t.timeLimit ?? 0;
+        const remainingValue = t.remainingSeconds ?? 0;
+        const isExpiredValue = t.isExpired ?? false;
+
+        // 타이머 정보를 동시에 설정하여 자동 제출이 트리거되지 않도록 함
+        setTimeLimit(timeLimitValue);
+        setRemainingSeconds(remainingValue);
+        setServerExpired(isExpiredValue);
       } catch {
-        setTimeLimit(20 * 60);
-        setRemainingSeconds(20 * 60);
+        // 에러 발생 시 기본값 설정 (20분)
+        const defaultTimeLimit = 20 * 60;
+        setTimeLimit(defaultTimeLimit);
+        setRemainingSeconds(defaultTimeLimit);
+        setServerExpired(false);
       }
     } catch (e) {
       showResultMessage("warning", "퀴즈 시작 실패", safeErrorMessage(e));
@@ -2078,9 +2118,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       }
 
       const retryDesc = retryInfo
-        ? ` / 재응시 ${retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"} (남은 ${
-            retryInfo.remainingAttempts ?? "-"
-          } / ${retryInfo.maxAttempts ?? "-"})`
+        ? ` / 재응시 ${retryInfo.canRetry === null ? "-" : retryInfo.canRetry ? "가능" : "불가"} (남은 ${retryInfo.remainingAttempts ?? "-"
+        } / ${retryInfo.maxAttempts ?? "-"})`
         : "";
 
       const score = pickNumber((submitRes as unknown as { score?: unknown }).score) ?? resultUi?.score ?? null;
@@ -2095,8 +2134,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       showResultMessage(
         passed ? "success" : "info",
         passed ? "합격입니다" : "제출 완료",
-        `점수 ${score !== null ? Math.round(score) : "-"}점 (정답 ${correctCount ?? "-"}/${totalCount ?? "-"}, 오답 ${
-          wrongCount ?? "-"
+        `점수 ${score !== null ? Math.round(score) : "-"}점 (정답 ${correctCount ?? "-"}/${totalCount ?? "-"}, 오답 ${wrongCount ?? "-"
         })${passScore !== null ? ` / 합격 기준 ${Math.round(passScore)}점` : ""}${retryDesc}`
       );
 
@@ -2128,8 +2166,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
       }
       await flushSaveNow();
       if (solve) {
-        const rs = Math.max(0, remainingRef.current);
-        await putQuizTimer(solve.attemptId, { remainingSeconds: rs }).catch(() => undefined);
+        // 타이머 저장 기능은 문서에 없고 백엔드에 미구현이므로 호출하지 않음
         await recordLeave(solve.attemptId, "BACK", false);
       }
     } catch {
@@ -2361,8 +2398,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
                 flushSaveNow({ keepalive: true, silent: true }).catch(() => undefined);
 
-                const rs = Math.max(0, remainingRef.current);
-                putQuizTimer(attemptId, { remainingSeconds: rs }, { keepalive: true }).catch(() => undefined);
+                // 타이머 저장 기능은 문서에 없고 백엔드에 미구현이므로 호출하지 않음
 
                 recordLeave(attemptId, "CLOSE", true);
               }
@@ -2373,7 +2409,7 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
             ✕
           </button>
 
-          <div className="cb-quiz-panel-inner" ref={contentRef} style={{ position: "relative" }}>
+          <div className="cb-quiz-panel-inner" ref={contentRef} style={{ position: "relative", height: "100%" }}>
             {resultMessage && (
               <div
                 style={{
@@ -2558,7 +2594,12 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                         ◀
                       </button>
 
-                      <div className="cb-quiz-course-list">
+                      <div
+                        className="cb-quiz-course-list"
+                        style={
+                          ({ ["--cb-quiz-cols" as unknown as string]: quizPageSize } as React.CSSProperties)
+                        }
+                      >
                         {visibleCourses.map((course) => {
                           const isLocked = !course.unlocked;
 
@@ -2594,11 +2635,8 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
 
                           const submitted = isSubmittedAttempt(attemptFromApi);
 
-                          const hasAnySubmitted = submitted
-                            ? true
-                            : Array.isArray(attempts)
-                              ? attempts.some((a) => isSubmittedAttempt(a))
-                              : false;
+                          // 현재 선택된 회차가 제출되었는지만 확인 (전체 attempts가 아닌)
+                          const hasAnySubmitted = submitted;
 
                           const meta = courseMetaById[course.id];
 
@@ -2888,10 +2926,6 @@ const QuizPanel: React.FC<QuizPanelProps> = ({
                             ? `${solveRetryDisplay.remainingAttempts ?? "-"} / ${solveRetryDisplay.maxAttempts ?? "-"}`
                             : "-"}
                         </span>
-                      </div>
-
-                      <div className="cb-quiz-opacity-90">
-                        서버 DTO가 아직 내려오지 않는 환경에서는 기본 합격 기준 {DEFAULT_PASSING_SCORE}점으로 표시됩니다.
                       </div>
                     </div>
                   </div>

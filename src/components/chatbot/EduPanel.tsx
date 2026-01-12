@@ -1112,7 +1112,13 @@ const EduPanel: React.FC<EduPanelProps> = ({
     if (educations.length === 0) return;
 
     for (const edu of educations) {
-      void ensureVideosLoaded(edu.id);
+      // /edus/me API 응답에 videos가 포함되어 있고 비어있지 않으면 별도 요청 불필요
+      // videos가 없거나 빈 배열인 경우에는 getEducationVideos 호출
+      // (백엔드가 /edus/me에서 빈 배열을 반환할 수 있으므로 항상 확인)
+      const hasVideos = edu.videos && edu.videos.length > 0;
+      if (!hasVideos) {
+        void ensureVideosLoaded(edu.id);
+      }
     }
   }, [hasDOM, educations, ensureVideosLoaded]);
 

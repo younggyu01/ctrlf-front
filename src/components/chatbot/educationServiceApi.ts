@@ -1,6 +1,6 @@
 // src/components/chatbot/educationServiceApi.ts
 import keycloak from "../../keycloak";
-import { fetchJson } from "../common/api/authHttp";
+import { fetchJson, HttpError } from "../common/api/authHttp";
 import * as infraPresignApi from "./infraPresignApi";
 
 type EnvLike = Record<string, string | undefined>;
@@ -165,8 +165,7 @@ async function directFetchJson<T>(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `[EDU_API] ${context}: fallback fetch HTTP ${res.status} ${
-        res.statusText
+      `[EDU_API] ${context}: fallback fetch HTTP ${res.status} ${res.statusText
       }${text ? ` - ${text.slice(0, 300)}` : ""}`
     );
   }
@@ -185,8 +184,7 @@ async function directFetchJson<T>(
     return JSON.parse(text) as T;
   } catch {
     throw new Error(
-      `[EDU_API] ${context}: fallback fetch 응답이 JSON이 아닙니다. content-type=${
-        ct || "unknown"
+      `[EDU_API] ${context}: fallback fetch 응답이 JSON이 아닙니다. content-type=${ct || "unknown"
       } body=${text.slice(0, 200)}`
     );
   }
@@ -346,7 +344,10 @@ async function eduFetch<T>(
     logDebug(`${context} primary failed`, e);
 
     if (!fallbackCandidate) {
-      // 진짜 서버 에러/파싱 에러는 그대로 표면화(조용히 무한로딩 방지)
+      // HttpError는 status 판별을 위해 그대로 던진다(예: 409 Conflict 등)
+      if (e instanceof HttpError) throw e;
+
+      // 그 외 서버 에러/파싱 에러는 메시지로 표면화
       throw new Error(`[EDU_API] ${context}: ${safeMsg(e)}`);
     }
   }
@@ -628,8 +629,8 @@ function normalizeVideoRecord(
     typeof it.watchStatus === "string"
       ? it.watchStatus
       : typeof it.status === "string"
-      ? it.status
-      : undefined;
+        ? it.status
+        : undefined;
 
   // departmentScope는 JSON string으로 올 수 있음 (스펙: docs/education_api_spec.md 2.1)
   const deptScopeRaw = it.departmentScope;
@@ -702,11 +703,11 @@ export async function getMyEducations(
   const list = Array.isArray(u)
     ? u
     : extractArrayOrThrow<Record<string, unknown>>(
-        u,
-        ["edus", "eduList", "educations", "items", "list", "data", "result"],
-        (x): x is Record<string, unknown> => isRecord(x),
-        "GET /edus/me"
-      );
+      u,
+      ["edus", "eduList", "educations", "items", "list", "data", "result"],
+      (x): x is Record<string, unknown> => isRecord(x),
+      "GET /edus/me"
+    );
 
   return list
     .map((it): EducationItem | null => {
@@ -740,8 +741,29 @@ export async function getMyEducations(
           ? progressPercent >= 100
           : undefined);
 
+      // 백엔드 EducationListItem.videos는 List<EducationVideosResponse.VideoItem> 타입
+      // videos 필드가 null이거나 빈 배열일 수 있으므로 명시적으로 확인
       const videosRaw = (it.videos ?? it.videoList ?? it.items) as unknown;
       const videosArr = Array.isArray(videosRaw) ? videosRaw : [];
+
+      // 디버깅: videos 필드가 배열이 아닌 경우만 경고 (빈 배열은 정상)
+      if (import.meta.env.DEV && !Array.isArray(videosRaw) && videosRaw !== undefined && videosRaw !== null) {
+        console.warn("[EDU_API] getMyEducations: videos 필드가 배열이 아님", {
+          educationId: id,
+          videosRaw,
+          videosRawType: typeof videosRaw,
+          itKeys: Object.keys(it),
+        });
+      }
+
+      // 디버깅: 빈 배열인 경우 로그 (백엔드가 빈 배열을 반환하는지 확인)
+      if (import.meta.env.DEV && videosArr.length === 0 && Array.isArray(videosRaw)) {
+        console.log("[EDU_API] getMyEducations: videos가 빈 배열입니다. /edu/{id}/videos API를 호출합니다.", {
+          educationId: id,
+          title,
+        });
+      }
+
       const videos = videosArr
         .map((v): EducationVideoItem | null =>
           isRecord(v) ? normalizeVideoRecord(v) : null
@@ -1173,8 +1195,8 @@ export async function getQuizAvailableEducations(
         typeof it.category === "string"
           ? it.category
           : typeof it.eduCategory === "string"
-          ? it.eduCategory
-          : null;
+            ? it.eduCategory
+            : null;
 
       const eduType = typeof it.eduType === "string" ? it.eduType : null;
 
@@ -1245,11 +1267,12 @@ export async function startQuiz(
         ? (choicesRaw.filter((x) => typeof x === "string") as string[])
         : [];
 
-      // 복원 시 userSelectedIndex가 question에 포함될 수 있음
-      const userSelectedIndex =
-        toNumOrNull(q.userSelectedIndex ?? q.user_selected_index) ?? null;
-
+      // 복원 시 백엔드는 answerIndex로 저장된 답안을 반환함
+      // 백엔드 QuestionItem에는 answerIndex만 있고, 이것이 복원 시 userSelectedIndex 역할을 함
       const answerIndex = toNumOrNull(q.answerIndex ?? q.answer_index);
+      const userSelectedIndex =
+        toNumOrNull(q.userSelectedIndex ?? q.user_selected_index) ??
+        (answerIndex !== null ? answerIndex : null); // answerIndex가 있으면 userSelectedIndex로 사용
       const correctOption = toNumOrNull(q.correctOption);
 
       return {
@@ -1328,15 +1351,17 @@ export async function getQuizTimer(
 }
 
 /**
+/**
  * (문서에는 PUT이 없음) 백엔드가 PUT /timer를 지원하지 않으므로 no-op 처리
  * - 서버에는 GET /quiz/attempt/{attemptId}/timer만 존재
+ * @deprecated 문서에 없는 기능이므로 사용하지 않습니다. 타이머는 GET으로만 조회합니다.
  */
 export async function putQuizTimer(
-  _attemptId: string | number,
-  _payload: { remainingSeconds: number },
-  _init?: Pick<RequestInit, "signal" | "keepalive">
+  attemptId: string | number,
+  payload: { remainingSeconds: number },
+  init?: Pick<RequestInit, "signal" | "keepalive">
 ): Promise<{ updated: boolean } | null> {
-  // 백엔드가 PUT timer를 지원하지 않으므로 no-op으로 처리
+  // 백엔드가 PUT timer를 지원하지 않으므로 no-op
   return null;
 }
 
@@ -1484,8 +1509,8 @@ export async function getQuizAttemptResult(
     typeof dto.finishedAt === "string"
       ? dto.finishedAt
       : typeof dto.submittedAt === "string"
-      ? dto.submittedAt
-      : undefined;
+        ? dto.submittedAt
+        : undefined;
 
   return {
     score,
@@ -1716,9 +1741,9 @@ export async function getQuizRetryInfo(
       );
       const currentAttemptCount = toNumOrNull(
         dto.currentAttemptCount ??
-          dto.current_attempt_count ??
-          dto.usedAttempts ??
-          dto.used
+        dto.current_attempt_count ??
+        dto.usedAttempts ??
+        dto.used
       );
       const maxAttempts = toNumOrNull(dto.maxAttempts ?? dto.max_attempts);
       const remainingAttempts = toNumOrNull(
@@ -1741,8 +1766,8 @@ export async function getQuizRetryInfo(
         typeof dto.educationTitle === "string"
           ? dto.educationTitle
           : typeof dto.education_title === "string"
-          ? (dto.education_title as string)
-          : undefined;
+            ? (dto.education_title as string)
+            : undefined;
 
       const lastAttemptAt =
         typeof dto.lastAttemptAt === "string" ? dto.lastAttemptAt : undefined;
@@ -1827,25 +1852,34 @@ export async function postQuizLeave(
     String(attemptId)
   )}/leave`;
 
-  const raw = await eduFetch<unknown>(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: init?.signal,
-      keepalive: init?.keepalive,
-    },
-    "POST /quiz/attempt/:id/leave"
-  );
+  try {
+    const raw = await eduFetch<unknown>(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: init?.signal,
+        keepalive: init?.keepalive,
+      },
+      "POST /quiz/attempt/:id/leave"
+    );
 
-  const dto = unwrapRecord(raw);
-  if (!dto) return { recorded: true };
+    const dto = unwrapRecord(raw);
+    if (!dto) return { recorded: true };
 
-  const recorded = (toBoolOrNull(dto.recorded) ?? true) as boolean;
-  const leaveCount = toNumOrNull(dto.leaveCount) ?? undefined;
-  const lastLeaveAt =
-    typeof dto.lastLeaveAt === "string" ? dto.lastLeaveAt : undefined;
+    const recorded = (toBoolOrNull(dto.recorded) ?? true) as boolean;
+    const leaveCount = toNumOrNull(dto.leaveCount) ?? undefined;
+    const lastLeaveAt =
+      typeof dto.lastLeaveAt === "string" ? dto.lastLeaveAt : undefined;
 
-  return { recorded, leaveCount, lastLeaveAt };
+    return { recorded, leaveCount, lastLeaveAt };
+  } catch (e) {
+    // 409 Conflict: 이미 제출/종료된 attempt라 기록할 필요 없는 정상 케이스로 간주
+    if (e instanceof HttpError && e.status === 409) {
+      return null;
+    }
+    if (isAbortLikeError(e)) throw e;
+    throw e;
+  }
 }

@@ -322,17 +322,34 @@ const FloatingChatbotRoot: React.FC<FloatingChatbotRootProps> = ({
 
   const isChatbotOpen = panels.open.chat;
 
+  // 포커스 모드(배경 완전 차단) 활성 조건:
+  // 챗봇/교육/퀴즈/관리자/검토/제작 중 하나라도 열려 있으면 배경을 가린다.
+  const isFocusOverlayActive =
+    panels.open.chat ||
+    panels.open.edu ||
+    panels.open.quiz ||
+    panels.open.admin ||
+    panels.open.reviewer ||
+    panels.open.creator;
+
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof document === "undefined") return;
 
-    const handleResize = () => {
-      setDockInstanceKey((prev) => prev + 1);
-      setAnchor((prev) => (prev ? clampAnchorToViewport(prev) : prev));
+    // 포커스 모드(배경 차단)일 때만 body 스크롤을 잠금
+    if (!isFocusOverlayActive) {
+      document.body.classList.remove("cb-focus-open");
+      return;
+    }
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.body.classList.add("cb-focus-open");
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.classList.remove("cb-focus-open");
     };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  }, [isFocusOverlayActive]);
 
   const getZIndexForPanel = (id: PanelId): number => {
     const base = 1000;
@@ -476,6 +493,11 @@ const FloatingChatbotRoot: React.FC<FloatingChatbotRootProps> = ({
         isChatbotOpen={isChatbotOpen}
         onToggleChatbot={handleDockToggleChatbot}
       />
+
+      {/* 포커스 모드: 배경 완전 차단 오버레이 */}
+      {isFocusOverlayActive && (
+        <div className="cb-focus-overlay" aria-hidden="true" />
+      )}
 
       {/* CHATBOT 패널 (Genie 애니메이션 + 플로팅) */}
       {panels.open.chat && !isQuizExamMode && (

@@ -9986,6 +9986,25 @@
 }
 
 /* =========================
+   Focus Mode (Hide background)
+========================= */
+.cb-focus-overlay {
+  position: fixed;
+  inset: 0;
+  /* 패널들의 z-index(base=1000)보다 낮고, 앱 배경보다 높게 */
+  z-index: 900;
+  background: rgba(10, 10, 12, 0.92);
+  /* 완전 차단이 목적이면 blur는 없어도 됨. 원하면 아래 주석 해제 */
+  /* backdrop-filter: blur(10px); */
+}
+
+/* body 스크롤 잠금은 TS에서 overflow로 처리했지만,
+   혹시 추가로 터치/드래그 방지에 도움되게 클래스만 유지 */
+body.cb-focus-open {
+  /* 필요 시 여기에 추가 제어 가능 */
+}
+
+/* =========================
    Creator: Education Picker Modal (Light theme aligned with Creator Studio)
 ========================= */
 .cb-creator-edu-modal-overlay {

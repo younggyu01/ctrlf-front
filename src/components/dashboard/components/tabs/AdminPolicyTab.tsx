@@ -189,22 +189,21 @@ function safeTime(v?: string) {
  * - 현재 스토어 상태(groups)로부터 "결정적"으로 다음 문서 ID를 생성한다.
  */
 function nextPolicyDocumentId(groups: PolicyDocGroup[]) {
-  let max = 0;
   const existing = new Set(groups.map((g) => g.documentId.toUpperCase()));
-
-  for (const g of groups) {
-    const m = /^POL-(\d{1,})$/i.exec(g.documentId);
-    if (!m) continue;
-    const n = Number(m[1]);
-    if (Number.isFinite(n)) max = Math.max(max, n);
-  }
-
-  let next = Math.max(max + 1, groups.length + 1);
-  let candidate = `POL-${String(next).padStart(4, "0")}`;
+  const now = new Date();
+  
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  
+  let candidate = `POL-${timestamp}`;
+  
+  // 중복 시 밀리초 추가
+  let suffix = 0;
   while (existing.has(candidate.toUpperCase())) {
-    next += 1;
-    candidate = `POL-${String(next).padStart(4, "0")}`;
+    suffix += 1;
+    candidate = `POL-${timestamp}-${suffix}`;
   }
+  
   return candidate;
 }
 
@@ -625,9 +624,9 @@ export default function AdminPolicyTab() {
     name: string;
     sizeBytes: number;
   } | null>(null);
-  const [pendingFileVersionId, setPendingFileVersionId] = useState<string | null>(
-    null
-  );
+  const [pendingFileVersionId, setPendingFileVersionId] = useState<
+    string | null
+  >(null);
 
   // 전처리 미리보기 관련 상태
   const [preprocessPreview, setPreprocessPreview] =
@@ -666,21 +665,21 @@ export default function AdminPolicyTab() {
 
       // 목록 정보만으로 그룹 구성 (각 사규마다 getPolicy 호출하지 않음)
       const convertedGroups = convertPolicyListToGroups(response.items);
-      
+
       // 기존 groups에서 상세 정보가 있는 그룹들은 유지하고, 새 그룹이나 변경된 그룹만 업데이트
       setGroups((prevGroups) => {
         const prevGroupsByDocId = new Map(
           prevGroups.map((g) => [g.documentId, g])
         );
-        
+
         // 새로 가져온 그룹들로 업데이트하되, 기존에 상세 정보가 있으면 유지
         return convertedGroups.map((newGroup) => {
           const existingGroup = prevGroupsByDocId.get(newGroup.documentId);
-          
+
           // 기존 그룹이 있고, 버전 수가 같고, 버전 상태가 모두 일치하면 상세 정보 유지
           if (existingGroup) {
             // 버전 수와 상태를 비교하여 실제로 변경되었는지 확인
-            const versionsMatch = 
+            const versionsMatch =
               existingGroup.versions.length === newGroup.versions.length &&
               existingGroup.versions.every((existingVersion, idx) => {
                 const newVersion = newGroup.versions[idx];
@@ -689,14 +688,15 @@ export default function AdminPolicyTab() {
                   existingVersion.status === newVersion.status
                 );
               });
-            
+
             // 버전이 변경되지 않았고, 기존 그룹에 상세 정보가 있으면 유지
             // (상세 정보는 sourceUrl이나 attachments 등이 있는 것으로 판단)
             if (versionsMatch) {
               const hasDetailedInfo = existingGroup.versions.some(
-                (v) => v.sourceUrl || (v.attachments && v.attachments.length > 0)
+                (v) =>
+                  v.sourceUrl || (v.attachments && v.attachments.length > 0)
               );
-              
+
               if (hasDetailedInfo) {
                 // 제목만 업데이트 (제목이 변경되었을 수 있음)
                 return {
@@ -706,12 +706,12 @@ export default function AdminPolicyTab() {
               }
             }
           }
-          
+
           // 새 그룹이거나 변경된 경우 새 정보 사용
           return newGroup;
         });
       });
-      
+
       setTotalItems(response.total);
     } catch (err) {
       console.error("Failed to fetch policies:", err);
@@ -920,7 +920,7 @@ export default function AdminPolicyTab() {
           const response = await createPolicy({
             documentId: docId,
             title: "새 사규/정책",
-            domain: "POLICY", // 사규 문서는 항상 POLICY 도메인
+            domain: "사내규정", // 사규 문서는 항상 POLICY 도메인
             changeSummary: "초안 생성",
           });
 
@@ -980,7 +980,10 @@ export default function AdminPolicyTab() {
       }
 
       // 최대 시도 횟수 초과
-      showToast("danger", "사규 ID를 생성하는데 실패했습니다. 다시 시도해주세요.");
+      showToast(
+        "danger",
+        "사규 ID를 생성하는데 실패했습니다. 다시 시도해주세요."
+      );
     } catch (e) {
       const t = mapPolicyError(e);
       showToast(t.tone, t.message);
@@ -1136,11 +1139,15 @@ export default function AdminPolicyTab() {
     if (!selected || selected.status !== "DRAFT") return;
 
     // 임시 버전(version === 0 또는 temp-로 시작하는 ID)인 경우
-    const isTemporaryVersion = selected.version === 0 || selected.id.startsWith("temp-");
+    const isTemporaryVersion =
+      selected.version === 0 || selected.id.startsWith("temp-");
 
     if (isTemporaryVersion) {
       // 임시 버전은 서버에 저장되지 않았으므로 그냥 선택 해제
-      showToast("neutral", `작성 중인 초안을 취소합니다. (${selected.documentId})`);
+      showToast(
+        "neutral",
+        `작성 중인 초안을 취소합니다. (${selected.documentId})`
+      );
 
       // 선택 해제
       setSelectedVersion(null);
@@ -1163,7 +1170,10 @@ export default function AdminPolicyTab() {
     }
 
     // 저장된 초안 삭제
-    showToast("neutral", `초안을 삭제합니다. (${selected.documentId} v${selected.version})`);
+    showToast(
+      "neutral",
+      `초안을 삭제합니다. (${selected.documentId} v${selected.version})`
+    );
 
     try {
       // 상태를 DELETED로 변경
@@ -1330,13 +1340,13 @@ export default function AdminPolicyTab() {
 
   const onPickFile = () => {
     if (!selected || selected.status !== "DRAFT") return;
-    
+
     // 모달을 열 때 다른 버전의 pending 상태가 남아있지 않도록 확인
     // selected가 변경되면 pendingFileUrl도 해당 버전의 것인지 확인하고,
     // 다른 버전의 것이면 초기화해야 함
     // 하지만 pendingFileUrl은 선택된 버전과 무관하게 유지되므로,
     // 실제로는 파일 업로드 시 선택된 버전과 일치하는지 확인하는 것이 더 안전
-    
+
     setJumpToPreprocessOnClose(false);
     setFilesModalOpen(true);
   };
@@ -1526,7 +1536,11 @@ export default function AdminPolicyTab() {
               <div className="row">
                 <div className="k">파일</div>
                 <div className="v">
-                  {renderAttachmentSummary(right, pendingFileUrl, pendingFileInfo)}
+                  {renderAttachmentSummary(
+                    right,
+                    pendingFileUrl,
+                    pendingFileInfo
+                  )}
                 </div>
               </div>
               <div className="row">
@@ -1909,7 +1923,11 @@ export default function AdminPolicyTab() {
                 <div className="row">
                   <div className="k">파일</div>
                   <div className="v">
-                    {renderAttachmentSummary(right, pendingFileUrl, pendingFileInfo)}
+                    {renderAttachmentSummary(
+                      right,
+                      pendingFileUrl,
+                      pendingFileInfo
+                    )}
                   </div>
                 </div>
 
@@ -2355,53 +2373,20 @@ export default function AdminPolicyTab() {
                 // 2. Presigned URL로 S3에 파일 업로드
                 await uploadFileToS3(presignResponse.uploadUrl, file);
 
-                // 버전이 이미 존재하는 경우(version > 0) 즉시 DB에 반영
-                if (selected.version > 0) {
-                  try {
-                    // 첫 번째 파일은 replaceFile로 교체, 나머지는 updateVersion으로 추가
-                    if (results.length === 0) {
-                      // 첫 번째 파일: 기존 파일 교체
-                      await replaceFile(selected.documentId, selected.version, {
-                        fileUrl: presignResponse.fileUrl,
-                      });
-                    } else {
-                      // 추가 파일: updateVersion으로 fileUrl 업데이트 (API가 여러 파일을 지원하는 경우)
-                      // 현재 API는 단일 파일만 지원하므로 첫 번째 파일만 처리
-                      // 나머지 파일은 업로드는 성공했지만 DB 반영은 안 될 수 있음
-                      await updateVersion(selected.documentId, selected.version, {
-                        fileUrl: presignResponse.fileUrl,
-                      });
-                    }
-
-                    results.push({
-                      key: `${file.name}__${file.size}`,
-                      ok: true,
-                    });
-                  } catch (updateError) {
-                    console.error("Failed to update file in DB:", updateError);
-                    // 업로드는 성공했지만 DB 반영 실패
-                    results.push({
-                      key: `${file.name}__${file.size}`,
-                      ok: false,
-                      errorMessage: "DB 반영에 실패했습니다.",
-                    });
-                  }
-                } else {
-                  // 새 버전(version === 0)인 경우는 저장 버튼에서 처리
-                  // 첫 번째 파일만 pending 상태로 저장
-                  if (results.length === 0) {
-                    setPendingFileUrl(presignResponse.fileUrl);
-                    setPendingFileInfo({
-                      name: file.name,
-                      sizeBytes: file.size,
-                    });
-                    setPendingFileVersionId(selected.id);
-                  }
-                  results.push({
-                    key: `${file.name}__${file.size}`,
-                    ok: true,
+                // S3 업로드 성공 - DB 반영은 저장 버튼에서 처리
+                // 첫 번째 파일만 pending 상태로 저장
+                if (results.length === 0) {
+                  setPendingFileUrl(presignResponse.fileUrl);
+                  setPendingFileInfo({
+                    name: file.name,
+                    sizeBytes: file.size,
                   });
+                  setPendingFileVersionId(selected.id);
                 }
+                results.push({
+                  key: `${file.name}__${file.size}`,
+                  ok: true,
+                });
               } catch (fileError) {
                 const t = mapPolicyError(fileError);
                 results.push({
@@ -2412,46 +2397,20 @@ export default function AdminPolicyTab() {
               }
             }
 
-            // 버전이 이미 존재하는 경우 업로드 후 정보 새로고침
-            if (selected.version > 0 && results.some((r) => r.ok)) {
-              try {
-                // 버전 정보 다시 로드
-                const detail = await getPolicyVersion(
-                  selected.documentId,
-                  selected.version
-                );
-                const updatedVersion = convertVersionDetailToPolicyDocVersion(detail);
-                setSelectedVersion(updatedVersion);
-
-                // 그룹 정보도 업데이트
-                const policyDetail = await getPolicy(selected.documentId);
-                const updatedGroup = convertPolicyDetailToGroup(policyDetail);
-                setGroups((prevGroups) =>
-                  prevGroups.map((prevGroup) =>
-                    prevGroup.documentId === selected.documentId
-                      ? updatedGroup
-                      : prevGroup
-                  )
-                );
-
-                const successCount = results.filter((r) => r.ok).length;
-                if (successCount === fs.length) {
-                  showToast("neutral", `${successCount}개 파일이 업로드되었습니다.`);
-                } else {
-                  showToast(
-                    "warn",
-                    `${successCount}/${fs.length}개 파일이 업로드되었습니다.`
-                  );
-                }
-              } catch (refreshError) {
-                console.error("Failed to refresh version:", refreshError);
-              }
-            } else if (selected.version === 0 && results.some((r) => r.ok)) {
+            // 업로드 성공 시 토스트 메시지 표시 (DB 반영은 저장 버튼에서)
+            if (results.some((r) => r.ok)) {
               const successCount = results.filter((r) => r.ok).length;
-              showToast(
-                "neutral",
-                `${successCount}개 파일이 업로드되었습니다. 저장 버튼을 눌러 버전을 생성하세요.`
-              );
+              if (successCount === fs.length) {
+                showToast(
+                  "neutral",
+                  `${successCount}개 파일이 업로드되었습니다. 저장 버튼을 눌러 반영하세요.`
+                );
+              } else {
+                showToast(
+                  "warn",
+                  `${successCount}/${fs.length}개 파일이 업로드되었습니다. 저장 버튼을 눌러 반영하세요.`
+                );
+              }
             }
 
             return results;

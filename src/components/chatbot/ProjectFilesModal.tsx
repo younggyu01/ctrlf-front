@@ -407,7 +407,7 @@ export default function ProjectFilesModal(props: {
       try {
         const out = await Promise.resolve(onAddFiles(validFiles));
 
-        // (추가) 파일 단위 실패 결과 반영
+        // (추가) 파일 단위 성공/실패 결과 반영
         if (Array.isArray(out)) {
           const byKey = new Map(out.map((x) => [x.key, x]));
           setPending((prev) =>
@@ -418,7 +418,10 @@ export default function ProjectFilesModal(props: {
               const r = byKey.get(p.key);
               if (!r) return p;
 
-              if (r.ok) return p;
+              if (r.ok) {
+                // 성공: status를 "done"으로 변경
+                return { ...p, status: "done" as const };
+              }
 
               return {
                 ...p,
@@ -516,6 +519,17 @@ export default function ProjectFilesModal(props: {
                       hit.errorMessage ||
                       "업로드 실패(서버/네트워크). 잠시 후 재시도하세요.",
                   }
+                  : p
+              )
+            );
+            return;
+          }
+          // 성공: status를 "done"으로 변경
+          if (hit && hit.ok === true) {
+            setPending((prev) =>
+              prev.map((p) =>
+                p.tempId === row.tempId
+                  ? { ...p, status: "done" as const }
                   : p
               )
             );

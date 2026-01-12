@@ -1243,12 +1243,18 @@ function normalizeCreatorWorkItemFromEduVideoPair(
 
     // sourceFileUrl과 sourceFileName이 모두 있어야만 documentId를 신뢰
     // (백엔드가 리스트 조회 시 잘못된 documentIds를 반환할 수 있음)
+    // const hasValidSourceFileInfo =
+    //   sourceFileUrl &&
+    //   sourceFileUrl.trim().length > 0 &&
+    //   sourceFileName &&
+    //   sourceFileName.trim().length > 0 &&
+    //   !isUuidLike(sourceFileName);
+
     const hasValidSourceFileInfo =
       sourceFileUrl &&
       sourceFileUrl.trim().length > 0 &&
       sourceFileName &&
-      sourceFileName.trim().length > 0 &&
-      !isUuidLike(sourceFileName);
+      sourceFileName.trim().length > 0;
 
     if (validIds.length > 0 && hasValidSourceFileInfo) {
       // documentId가 있고 sourceFileUrl과 실제 파일명이 있으면 sourceFiles 재구성
@@ -1295,7 +1301,11 @@ function normalizeCreatorWorkItemFromEduVideoPair(
           return sourceFiles[0].name;
         }
         // sourceFileName이 UUID가 아니면 사용
-        if (sourceFileName && !isUuidLike(sourceFileName)) {
+        // if (sourceFileName && !isUuidLike(sourceFileName)) {
+        //   return sourceFileName;
+        // }
+
+        if (sourceFileName) {
           return sourceFileName;
         }
         // UUID이거나 비어있으면 빈 문자열
@@ -2089,6 +2099,8 @@ function validateForReview(
   //   if (!item.jobTrainingId) issues.push("직무교육(Training ID)을 선택해주세요.");
   // }
 
+  console.log(item.assets.sourceFileName);
+
   // 자료 파일: 업로드 + 문서등록(documentId)까지 완료되어야 소스셋 생성 가능
   const srcFiles = Array.isArray(item.assets.sourceFiles)
     ? item.assets.sourceFiles
@@ -2232,7 +2244,7 @@ export function useCreatorStudioController(
   // 서버 로딩
   const [items, setItems] = useState<CreatorWorkItem[]>([]);
   const [educations, setEducations] = useState<EduSummary[]>([]);
-  
+
   // items 상태의 최신 값을 보장하기 위한 ref
   const itemsRef = useRef<CreatorWorkItem[]>([]);
   useEffect(() => {
@@ -2964,18 +2976,24 @@ export function useCreatorStudioController(
       // normalizeCreatorSourceFiles 호출 전에 prevMap을 생성하여 기존 파일 정보를 보존
       const currentItems = itemsRef.current;
       const prevMap = new Map(currentItems.map((it) => [it.id, it]));
-      
+
       // 디버깅: refreshItems 호출 시점 확인
       console.log("[refreshItems] 호출됨:", {
         itemsCount: currentItems.length,
         prevMapSize: prevMap.size,
-        itemsWithSourceFiles: currentItems.filter(it => 
-          Array.isArray(it.assets?.sourceFiles) && it.assets.sourceFiles.length > 0
-        ).map(it => ({
-          id: it.id,
-          sourceFilesCount: Array.isArray(it.assets?.sourceFiles) ? it.assets.sourceFiles.length : 0,
-          sourceFileName: it.assets?.sourceFileName ?? "",
-        })),
+        itemsWithSourceFiles: currentItems
+          .filter(
+            (it) =>
+              Array.isArray(it.assets?.sourceFiles) &&
+              it.assets.sourceFiles.length > 0
+          )
+          .map((it) => ({
+            id: it.id,
+            sourceFilesCount: Array.isArray(it.assets?.sourceFiles)
+              ? it.assets.sourceFiles.length
+              : 0,
+            sourceFileName: it.assets?.sourceFileName ?? "",
+          })),
       });
 
       const normalized = normalizeCreatorSourceFiles(videos);
@@ -3051,14 +3069,20 @@ export function useCreatorStudioController(
 
       const merged = normalizedWithScriptIds.map((newItem) => {
         const prevItem = prevMap.get(newItem.id);
-        
+
         // 디버깅: prevItem 확인
-        if (prevItem && Array.isArray(prevItem.assets.sourceFiles) && prevItem.assets.sourceFiles.length > 0) {
+        if (
+          prevItem &&
+          Array.isArray(prevItem.assets.sourceFiles) &&
+          prevItem.assets.sourceFiles.length > 0
+        ) {
           console.log("[refreshItems] prevItem 발견:", {
             videoId: newItem.id,
             prevSourceFilesCount: prevItem.assets.sourceFiles.length,
             prevSourceFileName: prevItem.assets.sourceFileName,
-            newSourceFilesCount: Array.isArray(newItem.assets.sourceFiles) ? newItem.assets.sourceFiles.length : 0,
+            newSourceFilesCount: Array.isArray(newItem.assets.sourceFiles)
+              ? newItem.assets.sourceFiles.length
+              : 0,
             newSourceFileName: newItem.assets.sourceFileName,
           });
         }
@@ -3089,22 +3113,24 @@ export function useCreatorStudioController(
             !f.id.startsWith("src-legacy-") &&
             !f.id.startsWith("SRC_TMP")
         );
-        
+
         // 디버깅: prevSourceFiles 구조 확인
         if (prevSourceFiles.length > 0 && prevRealSourceFiles.length === 0) {
           console.log("[refreshItems] prevSourceFiles 필터링 결과:", {
             videoId: newItem.id,
             prevSourceFilesCount: prevSourceFiles.length,
             prevRealSourceFilesCount: prevRealSourceFiles.length,
-            prevSourceFilesSample: prevSourceFiles.slice(0, 2).map(f => ({
+            prevSourceFilesSample: prevSourceFiles.slice(0, 2).map((f) => ({
               id: f?.id,
               name: f?.name,
               hasId: "id" in (f || {}),
               idType: typeof f?.id,
-              idStartsWith: f?.id ? {
-                srcLegacy: f.id.startsWith("src-legacy-"),
-                srcTmp: f.id.startsWith("SRC_TMP"),
-              } : null,
+              idStartsWith: f?.id
+                ? {
+                    srcLegacy: f.id.startsWith("src-legacy-"),
+                    srcTmp: f.id.startsWith("SRC_TMP"),
+                  }
+                : null,
             })),
           });
         }
@@ -3222,7 +3248,7 @@ export function useCreatorStudioController(
               newSourceFileName: newItem.assets.sourceFileName,
             });
           }
-          
+
           // 기존 sourceFiles, script, scriptId, scriptApprovedAt 보존
           const mergedItem = {
             ...newItem,
@@ -4184,30 +4210,36 @@ export function useCreatorStudioController(
               },
               updatedAt: Date.now(),
             };
-            
+
             // 디버깅: 파일 업로드 후 상태 업데이트 확인
             console.log("[addSourceFilesToSelected] 상태 업데이트:", {
               videoId: videoIdSnapshot,
               documentId,
               sourceFilesCount: patched.length,
               sourceFileName: updatedItem.assets.sourceFileName,
-              sourceFiles: patched.map(f => ({ id: f.id, name: f.name })),
+              sourceFiles: patched.map((f) => ({ id: f.id, name: f.name })),
             });
 
             return updatedItem;
           });
-          
+
           // itemsRef를 즉시 업데이트하여 refreshItems가 최신 상태를 참조하도록 보장
           itemsRef.current = updated;
           console.log("[addSourceFilesToSelected] itemsRef 업데이트:", {
             itemsCount: updated.length,
-            itemsWithSourceFiles: updated.filter(it => 
-              Array.isArray(it.assets?.sourceFiles) && it.assets.sourceFiles.length > 0
-            ).map(it => ({
-              id: it.id,
-              sourceFilesCount: Array.isArray(it.assets?.sourceFiles) ? it.assets.sourceFiles.length : 0,
-              sourceFileName: it.assets?.sourceFileName ?? "",
-            })),
+            itemsWithSourceFiles: updated
+              .filter(
+                (it) =>
+                  Array.isArray(it.assets?.sourceFiles) &&
+                  it.assets.sourceFiles.length > 0
+              )
+              .map((it) => ({
+                id: it.id,
+                sourceFilesCount: Array.isArray(it.assets?.sourceFiles)
+                  ? it.assets.sourceFiles.length
+                  : 0,
+                sourceFileName: it.assets?.sourceFileName ?? "",
+              })),
           });
           return updated;
         });

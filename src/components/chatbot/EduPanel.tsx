@@ -1,8 +1,18 @@
 // src/components/chatbot/EduPanel.tsx
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import "./chatbot.css";
-import { computePanelPosition, type Anchor, type PanelSize } from "../../utils/chat";
+import {
+  computePanelPosition,
+  type Anchor,
+  type PanelSize,
+} from "../../utils/chat";
 
 import {
   getMyEducations,
@@ -86,7 +96,7 @@ const DOCK_SAFE_BOTTOM = 60;
 
 const EDU_LAYER_Z = 2147483000;
 
-const PROGRESS_TICK_MS = 15_000;
+const PROGRESS_TICK_MS = 10_000;
 
 // fetchJson이 내부에서 pending에 빠져도 UI가 무한 로딩에 갇히지 않도록 패널 레벨 타임아웃
 const EDU_LIST_TIMEOUT_MS = 4_500;
@@ -163,23 +173,35 @@ function normalizeResumeSeconds(raw: number, durationSec: number): number {
   return raw;
 }
 
-function readNumberField<T extends object>(obj: T, key: string): number | undefined {
+function readNumberField<T extends object>(
+  obj: T,
+  key: string
+): number | undefined {
   const v = (obj as unknown as Record<string, unknown>)[key];
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
-function readBoolField<T extends object>(obj: T, key: string): boolean | undefined {
+function readBoolField<T extends object>(
+  obj: T,
+  key: string
+): boolean | undefined {
   const v = (obj as unknown as Record<string, unknown>)[key];
   return typeof v === "boolean" ? v : undefined;
 }
 
-function progressFromResumeSeconds(resumeSec: number, durationSec: number): number {
+function progressFromResumeSeconds(
+  resumeSec: number,
+  durationSec: number
+): number {
   if (!Number.isFinite(durationSec) || durationSec <= 0) return 0;
   if (!Number.isFinite(resumeSec) || resumeSec <= 0) return 0;
   return clamp((resumeSec / durationSec) * 100, 0, 100);
 }
 
-function normalizeCompletedFlag(progressPercent: number, completed?: boolean): boolean {
+function normalizeCompletedFlag(
+  progressPercent: number,
+  completed?: boolean
+): boolean {
   if (completed === true) return true;
   return progressPercent >= 100;
 }
@@ -223,7 +245,10 @@ type SelectedVideo = UiVideo & {
   rawVideoUrl: string;
 };
 
-function getVideoStatus(progress: number): { label: string; key: EduVideoStatusKey } {
+function getVideoStatus(progress: number): {
+  label: string;
+  key: EduVideoStatusKey;
+} {
   if (progress <= 0) return { label: "시청전", key: "not-started" };
   if (progress >= 100) return { label: "시청완료", key: "completed" };
   return { label: "시청중", key: "in-progress" };
@@ -252,7 +277,8 @@ function isAbortError(e: unknown): boolean {
 }
 
 function readAppHeaderSafeTop(): number {
-  if (typeof window === "undefined" || typeof document === "undefined") return 0;
+  if (typeof window === "undefined" || typeof document === "undefined")
+    return 0;
 
   try {
     const rootStyle = window.getComputedStyle(document.documentElement);
@@ -282,7 +308,11 @@ function getMinTop(topSafe: number) {
   return ALLOW_OVERLAP_APP_HEADER ? 0 : topSafe;
 }
 
-function clampPanelPos(pos: { top: number; left: number }, size: Size, minTop: number) {
+function clampPanelPos(
+  pos: { top: number; left: number },
+  size: Size,
+  minTop: number
+) {
   if (typeof window === "undefined") return pos;
 
   const vw = window.innerWidth;
@@ -351,7 +381,10 @@ function derivePosByBottomRight(
   return clampPanelPos(nextPos, nextSize, minTop);
 }
 
-function mergeExternalProgress(sections: UiSection[], progressMap?: VideoProgressMap): UiSection[] {
+function mergeExternalProgress(
+  sections: UiSection[],
+  progressMap?: VideoProgressMap
+): UiSection[] {
   if (!progressMap) return sections;
 
   return sections.map((s) => ({
@@ -411,7 +444,11 @@ function toUiVideo(v: EducationVideoItem): UiVideo {
   let progress = p;
   if (completed) {
     progress = 100;
-  } else if (typeof durationSec === "number" && durationSec > 0 && typeof resumeSeconds === "number") {
+  } else if (
+    typeof durationSec === "number" &&
+    durationSec > 0 &&
+    typeof resumeSeconds === "number"
+  ) {
     progress = progressFromResumeSeconds(resumeSeconds, durationSec);
   }
 
@@ -429,7 +466,9 @@ function toUiVideo(v: EducationVideoItem): UiVideo {
 function isSectionDone(section: UiSection): boolean {
   if (section.completed) return true;
   if (!section.videos || section.videos.length === 0) return false;
-  return section.videos.every((v) => Boolean(v.completed) || (v.progress ?? 0) >= 100);
+  return section.videos.every(
+    (v) => Boolean(v.completed) || (v.progress ?? 0) >= 100
+  );
 }
 
 // “playable URL 판별”
@@ -496,7 +535,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
   initialVideo,
   onInitialVideoConsumed,
 }) => {
-  const hasDOM = typeof window !== "undefined" && typeof document !== "undefined";
+  const hasDOM =
+    typeof window !== "undefined" && typeof document !== "undefined";
 
   const initialTopSafe = hasDOM ? readAppHeaderSafeTop() : 0;
   const topSafeRef = useRef<number>(initialTopSafe);
@@ -506,7 +546,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
   const [eduError, setEduError] = useState<string | null>(null);
   const [eduReloadKey, setEduReloadKey] = useState<number>(0);
 
-  const [videosByEduId, setVideosByEduId] = useState<Record<string, VideoLoadState>>({});
+  const [videosByEduId, setVideosByEduId] = useState<
+    Record<string, VideoLoadState>
+  >({});
   const videosByEduIdRef = useRef<Record<string, VideoLoadState>>({});
 
   useEffect(() => {
@@ -515,7 +557,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
   const videosAbortRef = useRef<Map<string, AbortController>>(new Map());
 
-  const [size, setSize] = useState<Size>(() => createInitialSize(initialTopSafe));
+  const [size, setSize] = useState<Size>(() =>
+    createInitialSize(initialTopSafe)
+  );
   const [panelPos, setPanelPos] = useState(() => {
     const initialSize = createInitialSize(initialTopSafe);
 
@@ -555,57 +599,67 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
   const [sectionPages, setSectionPages] = useState<Record<string, number>>({});
 
-  const syncCachesForEducationList = useCallback((nextList: EducationItem[]) => {
-    const nextIds = new Set(nextList.map((e) => e.id));
+  const syncCachesForEducationList = useCallback(
+    (nextList: EducationItem[]) => {
+      const nextIds = new Set(nextList.map((e) => e.id));
 
-    setSectionPages((prev) => {
-      const next: Record<string, number> = {};
-      for (const id of nextIds) next[id] = prev[id] ?? 0;
-      return next;
-    });
+      setSectionPages((prev) => {
+        const next: Record<string, number> = {};
+        for (const id of nextIds) next[id] = prev[id] ?? 0;
+        return next;
+      });
 
-    setVideosByEduId((prev) => {
-      const next: Record<string, VideoLoadState> = {};
-      for (const edu of nextList) {
-        const id = edu.id;
+      setVideosByEduId((prev) => {
+        const next: Record<string, VideoLoadState> = {};
+        for (const edu of nextList) {
+          const id = edu.id;
 
-        const embedded = Array.isArray(edu.videos) ? edu.videos.map(toUiVideo) : [];
-        const hasEmbedded = embedded.length > 0;
+          const embedded = Array.isArray(edu.videos)
+            ? edu.videos.map(toUiVideo)
+            : [];
+          const hasEmbedded = embedded.length > 0;
 
-        const existing = prev[id];
+          const existing = prev[id];
 
-        if (hasEmbedded) {
-          if (existing?.status === "ready" && existing.videos.length > 0) {
-            next[id] = existing;
+          if (hasEmbedded) {
+            if (existing?.status === "ready" && existing.videos.length > 0) {
+              next[id] = existing;
+            } else {
+              next[id] = { status: "ready", videos: embedded };
+            }
           } else {
-            next[id] = { status: "ready", videos: embedded };
+            next[id] = existing ?? { status: "idle", videos: [] };
           }
-        } else {
-          next[id] = existing ?? { status: "idle", videos: [] };
+        }
+
+        videosByEduIdRef.current = next;
+
+        return next;
+      });
+
+      const abortMap = videosAbortRef.current;
+      for (const [id, controller] of abortMap.entries()) {
+        if (!nextIds.has(id)) {
+          controller.abort();
+          abortMap.delete(id);
         }
       }
+    },
+    []
+  );
 
-      videosByEduIdRef.current = next;
-
-      return next;
-    });
-
-    const abortMap = videosAbortRef.current;
-    for (const [id, controller] of abortMap.entries()) {
-      if (!nextIds.has(id)) {
-        controller.abort();
-        abortMap.delete(id);
-      }
-    }
-  }, []);
-
-  const [selectedVideo, setSelectedVideo] = useState<SelectedVideo | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<SelectedVideo | null>(
+    null
+  );
   const selectedVideoRef = useRef<SelectedVideo | null>(null);
   useEffect(() => {
     selectedVideoRef.current = selectedVideo;
   }, [selectedVideo]);
 
-  const listRestoreRef = useRef<{ size: Size; pos: { top: number; left: number } } | null>(null);
+  const listRestoreRef = useRef<{
+    size: Size;
+    pos: { top: number; left: number };
+  } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoDurationRef = useRef<number>(0);
@@ -623,7 +677,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const roundedWatchPercent = Math.round(watchPercent);
 
-  const tickHandleRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
+  const tickHandleRef = useRef<ReturnType<typeof window.setInterval> | null>(
+    null
+  );
 
   const lastTimeSampleRef = useRef<number | null>(null);
   const watchTimeAccumRef = useRef<number>(0);
@@ -666,7 +722,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
   // toast state
   // =========================
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
   const toastCooldownRef = useRef<Map<string, number>>(new Map());
 
   const removeToast = useCallback((id: string) => {
@@ -692,7 +750,12 @@ const EduPanel: React.FC<EduPanelProps> = ({
   );
 
   const pushToastOnce = useCallback(
-    (key: string, message: string, variant: ToastVariant, cooldownMs: number) => {
+    (
+      key: string,
+      message: string,
+      variant: ToastVariant,
+      cooldownMs: number
+    ) => {
       const last = toastCooldownRef.current.get(key) ?? 0;
       const n = nowMs();
       if (n - last < cooldownMs) return;
@@ -719,11 +782,15 @@ const EduPanel: React.FC<EduPanelProps> = ({
   // =========================
   // presign 결과 캐시/상태 + resolve 제어 state/ref
   // =========================
-  const presignCacheRef = useRef<Map<string, { url: string; expiresAtMs: number }>>(new Map()); // rawUrl -> playableUrl(+ttl)
+  const presignCacheRef = useRef<
+    Map<string, { url: string; expiresAtMs: number }>
+  >(new Map()); // rawUrl -> playableUrl(+ttl)
   const presignInFlightRef = useRef<Map<string, Promise<string>>>(new Map()); // rawUrl -> promise
   const presignAbortByRawRef = useRef<Map<string, AbortController>>(new Map()); // rawUrl -> controller
 
-  const [presignByVideoId, setPresignByVideoId] = useState<Record<string, PresignState>>({});
+  const [presignByVideoId, setPresignByVideoId] = useState<
+    Record<string, PresignState>
+  >({});
   const presignByVideoIdRef = useRef<Record<string, PresignState>>({});
   useEffect(() => {
     presignByVideoIdRef.current = presignByVideoId;
@@ -753,28 +820,35 @@ const EduPanel: React.FC<EduPanelProps> = ({
     watchResolvingRawRef.current = null;
   }, []);
 
-  const getKnownPlayableUrl = useCallback((videoId: string, rawUrl: string): string | undefined => {
-    const raw = (rawUrl ?? "").trim();
-    if (!raw) return undefined;
+  const getKnownPlayableUrl = useCallback(
+    (videoId: string, rawUrl: string): string | undefined => {
+      const raw = (rawUrl ?? "").trim();
+      if (!raw) return undefined;
 
-    const st = presignByVideoIdRef.current[videoId];
-    if (st && st.status === "ready") return st.url;
+      const st = presignByVideoIdRef.current[videoId];
+      if (st && st.status === "ready") return st.url;
 
-    // playable은 그대로
-    if (isPlayableUrl(raw)) return raw;
+      // playable은 그대로
+      if (isPlayableUrl(raw)) return raw;
 
-    // s3 등은 TTL 캐시만 신뢰
-    const cached = getCachedUrl(presignCacheRef.current, raw);
-    if (cached) return cached;
+      // s3 등은 TTL 캐시만 신뢰
+      const cached = getCachedUrl(presignCacheRef.current, raw);
+      if (cached) return cached;
 
-    return undefined;
-  }, []);
+      return undefined;
+    },
+    []
+  );
 
   // =========================
   // presign resolve 함수 (EduPanel 내부)
   // =========================
   const resolvePlayableUrl = useCallback(
-    async (videoId: string, rawUrl: string, opts?: { force?: boolean; watch?: boolean }) => {
+    async (
+      videoId: string,
+      rawUrl: string,
+      opts?: { force?: boolean; watch?: boolean }
+    ) => {
       const raw = (rawUrl ?? "").trim();
       if (!raw) throw new Error("EMPTY_RAW_URL");
 
@@ -822,7 +896,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
           if (!u) throw new Error("EMPTY_RESOLVED_URL");
 
           // UI 캐시는 TTL
-          presignCacheRef.current.set(raw, { url: u, expiresAtMs: Date.now() + PRESIGN_UI_CACHE_MS });
+          presignCacheRef.current.set(raw, {
+            url: u,
+            expiresAtMs: Date.now() + PRESIGN_UI_CACHE_MS,
+          });
 
           setPresignState(videoId, { status: "ready", url: u });
           return u;
@@ -834,11 +911,17 @@ const EduPanel: React.FC<EduPanelProps> = ({
             throw e;
           }
 
-          const msg = "영상 URL을 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+          const msg =
+            "영상 URL을 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.";
           setPresignState(videoId, { status: "error", message: msg });
 
           // 리스트에서도 사용자 인지가 필요하므로 토스트 1회
-          pushToastOnce(`presign:${videoId}`, "영상 URL 준비에 실패했습니다.", "error", 8000);
+          pushToastOnce(
+            `presign:${videoId}`,
+            "영상 URL 준비에 실패했습니다.",
+            "error",
+            8000
+          );
 
           throw e;
         })
@@ -997,7 +1080,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
         // timeout은 무한 로딩 대신 에러로 전환
         if (timedOut || isTimeoutError(e)) {
-          setEduError("교육 목록 요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.");
+          setEduError(
+            "교육 목록 요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요."
+          );
           if (manualReloadRef.current) {
             manualReloadRef.current = false;
             pushToast("교육 목록 새로고침에 실패했습니다.", "error");
@@ -1026,7 +1111,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
   const ensureVideosLoaded = useCallback(async (educationId: string) => {
     const state = videosByEduIdRef.current[educationId];
-    if (state && (state.status === "loading" || state.status === "ready")) return;
+    if (state && (state.status === "loading" || state.status === "ready"))
+      return;
 
     const prev = videosAbortRef.current.get(educationId);
     if (prev) prev.abort();
@@ -1169,18 +1255,29 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
       // 아니면 presign resolve
       try {
-        const resolved = await resolvePlayableUrl(video.id, raw, { watch: true });
+        const resolved = await resolvePlayableUrl(video.id, raw, {
+          watch: true,
+        });
 
         // 이미 다른 영상으로 이동한 경우 state 업데이트 금지
         const cur = selectedVideoRef.current;
         if (!cur || cur.id !== video.id) return;
 
-        setSelectedVideo((prev) => (prev && prev.id === video.id ? { ...prev, videoUrl: resolved } : prev));
+        setSelectedVideo((prev) =>
+          prev && prev.id === video.id ? { ...prev, videoUrl: resolved } : prev
+        );
       } catch (e: unknown) {
         if (isAbortError(e)) return;
       }
     },
-    [abortWatchResolve, clearSaveTimer, getKnownPlayableUrl, pushToast, resolvePlayableUrl, setPresignState]
+    [
+      abortWatchResolve,
+      clearSaveTimer,
+      getKnownPlayableUrl,
+      pushToast,
+      resolvePlayableUrl,
+      setPresignState,
+    ]
   );
 
   // =========================
@@ -1242,9 +1339,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
         // 영상 선택 (handleVideoClick 호출)
         // resumePositionSeconds가 있으면 영상의 resumeSeconds를 덮어씀
-        const videoWithResume: UiVideo = resumePositionSeconds != null
-          ? { ...targetVideo, resumeSeconds: resumePositionSeconds }
-          : targetVideo;
+        const videoWithResume: UiVideo =
+          resumePositionSeconds != null
+            ? { ...targetVideo, resumeSeconds: resumePositionSeconds }
+            : targetVideo;
 
         await handleVideoClick(
           educationId,
@@ -1358,7 +1456,12 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
         // videoId 기준 state가 resolving/ready/error면 skip (error는 자동 재시도 X)
         const st = presignByVideoId[v.id];
-        if (st?.status === "ready" || st?.status === "resolving" || st?.status === "error") continue;
+        if (
+          st?.status === "ready" ||
+          st?.status === "resolving" ||
+          st?.status === "error"
+        )
+          continue;
 
         // raw 기준 inFlight면 skip (중복 호출 방지)
         if (presignInFlightRef.current.has(raw)) continue;
@@ -1448,14 +1551,22 @@ const EduPanel: React.FC<EduPanelProps> = ({
         let newTop = resizeState.startTop;
         let newLeft = resizeState.startLeft;
 
-        const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - EDGE_MARGIN * 2);
-        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - minTop - EDGE_MARGIN);
+        const maxWidth = Math.max(
+          MIN_WIDTH,
+          window.innerWidth - EDGE_MARGIN * 2
+        );
+        const maxHeight = Math.max(
+          MIN_HEIGHT,
+          window.innerHeight - minTop - EDGE_MARGIN
+        );
 
         const proposedWidthForW = resizeState.startWidth - dx;
         const proposedHeightForN = resizeState.startHeight - dy;
 
-        if (resizeState.dir.includes("e")) newWidth = resizeState.startWidth + dx;
-        if (resizeState.dir.includes("s")) newHeight = resizeState.startHeight + dy;
+        if (resizeState.dir.includes("e"))
+          newWidth = resizeState.startWidth + dx;
+        if (resizeState.dir.includes("s"))
+          newHeight = resizeState.startHeight + dy;
 
         if (resizeState.dir.includes("w")) {
           newWidth = proposedWidthForW;
@@ -1469,15 +1580,27 @@ const EduPanel: React.FC<EduPanelProps> = ({
         const clampedWidth = clamp(newWidth, MIN_WIDTH, maxWidth);
         const clampedHeight = clamp(newHeight, MIN_HEIGHT, maxHeight);
 
-        if (resizeState.dir.includes("w") && clampedWidth !== proposedWidthForW) {
-          newLeft = resizeState.startLeft + (resizeState.startWidth - clampedWidth);
+        if (
+          resizeState.dir.includes("w") &&
+          clampedWidth !== proposedWidthForW
+        ) {
+          newLeft =
+            resizeState.startLeft + (resizeState.startWidth - clampedWidth);
         }
-        if (resizeState.dir.includes("n") && clampedHeight !== proposedHeightForN) {
-          newTop = resizeState.startTop + (resizeState.startHeight - clampedHeight);
+        if (
+          resizeState.dir.includes("n") &&
+          clampedHeight !== proposedHeightForN
+        ) {
+          newTop =
+            resizeState.startTop + (resizeState.startHeight - clampedHeight);
         }
 
         const nextSize = { width: clampedWidth, height: clampedHeight };
-        const clampedPos = clampPanelPos({ top: newTop, left: newLeft }, nextSize, minTop);
+        const clampedPos = clampPanelPos(
+          { top: newTop, left: newLeft },
+          nextSize,
+          minTop
+        );
 
         setSize(nextSize);
         setPanelPos(clampedPos);
@@ -1575,8 +1698,18 @@ const EduPanel: React.FC<EduPanelProps> = ({
   }, []);
 
   const syncProgressToParent = useCallback(
-    (videoId: string, progressPercent: number, resumeSeconds: number, completed: boolean) => {
-      onUpdateVideoProgress?.(videoId, progressPercent, resumeSeconds, completed);
+    (
+      videoId: string,
+      progressPercent: number,
+      resumeSeconds: number,
+      completed: boolean
+    ) => {
+      onUpdateVideoProgress?.(
+        videoId,
+        progressPercent,
+        resumeSeconds,
+        completed
+      );
     },
     [onUpdateVideoProgress]
   );
@@ -1608,7 +1741,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
           const durationSec = v.durationSeconds;
 
           let resume =
-            typeof nextResumeSeconds === "number" ? Math.max(0, nextResumeSeconds) : v.resumeSeconds;
+            typeof nextResumeSeconds === "number"
+              ? Math.max(0, nextResumeSeconds)
+              : v.resumeSeconds;
 
           let completed = videoCompleted ?? v.completed ?? false;
 
@@ -1636,7 +1771,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
           return { ...v, progress: p, resumeSeconds: resume, completed };
         });
 
-        const next = { ...prev, [educationId]: { ...st, videos } as VideoLoadState };
+        const next = {
+          ...prev,
+          [educationId]: { ...st, videos } as VideoLoadState,
+        };
         videosByEduIdRef.current = next;
         return next;
       });
@@ -1644,7 +1782,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
       setEducations((prev) => {
         const next = prev.map((e) => {
           if (e.id !== educationId) return e;
-          if (eduCompleted !== undefined) return { ...e, completed: eduCompleted };
+          if (eduCompleted !== undefined)
+            return { ...e, completed: eduCompleted };
 
           const st = videosByEduIdRef.current[educationId];
           if (!st || st.status !== "ready" || st.videos.length === 0) return e;
@@ -1702,12 +1841,16 @@ const EduPanel: React.FC<EduPanelProps> = ({
         const duration = videoDurationRef.current || v.duration || 0;
 
         const serverProgress =
-          typeof res?.progressPercent === "number" ? clamp(res.progressPercent, 0, 100) : undefined;
+          typeof res?.progressPercent === "number"
+            ? clamp(res.progressPercent, 0, 100)
+            : undefined;
 
         const rawResume =
           typeof res?.resumePositionSeconds === "number"
             ? res.resumePositionSeconds
-            : (res as unknown as Record<string, unknown>)["resumePosition"] as number | undefined;
+            : ((res as unknown as Record<string, unknown>)["resumePosition"] as
+                | number
+                | undefined);
 
         const normalizedResume =
           typeof rawResume === "number"
@@ -1717,7 +1860,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
         let resumeInt = Math.max(0, Math.floor(normalizedResume));
 
         const serverVideoCompleted =
-          typeof res?.videoCompleted === "boolean" ? res.videoCompleted : undefined;
+          typeof res?.videoCompleted === "boolean"
+            ? res.videoCompleted
+            : undefined;
 
         const serverEduCompleted =
           typeof res?.eduCompleted === "boolean" ? res.eduCompleted : undefined;
@@ -1725,7 +1870,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
         const localPercent = clamp(Math.round(watchPercentRef.current), 0, 100);
         const baseProgress = serverProgress ?? localPercent;
 
-        const derivedCompleted = normalizeCompletedFlag(baseProgress, serverVideoCompleted);
+        const derivedCompleted = normalizeCompletedFlag(
+          baseProgress,
+          serverVideoCompleted
+        );
         const finalCompleted = Boolean(derivedCompleted);
 
         if (finalCompleted && duration > 0) {
@@ -1744,7 +1892,12 @@ const EduPanel: React.FC<EduPanelProps> = ({
         completedSentRef.current = finalCompleted || completedSentRef.current;
 
         // 부모/로컬 반영(정규화된 값)
-        syncProgressToParent(videoId, progressToApply, resumeInt, finalCompleted);
+        syncProgressToParent(
+          videoId,
+          progressToApply,
+          resumeInt,
+          finalCompleted
+        );
 
         patchLocalVideoProgress(
           educationId,
@@ -1759,12 +1912,26 @@ const EduPanel: React.FC<EduPanelProps> = ({
           setSaveStatusTransient("saved", 1600);
 
           // 토스트는 과도하면 UX가 깨지므로 '의도된 액션'에 한해 제한적으로 표시
-          if (opts.reason === "pause" || opts.reason === "back" || opts.reason === "close") {
-            pushToastOnce(`progress-saved:${videoId}`, "진행률이 저장되었습니다.", "success", 9000);
+          if (
+            opts.reason === "pause" ||
+            opts.reason === "back" ||
+            opts.reason === "close"
+          ) {
+            pushToastOnce(
+              `progress-saved:${videoId}`,
+              "진행률이 저장되었습니다.",
+              "success",
+              9000
+            );
           }
           if (opts.reason === "ended" || opts.reason === "complete") {
             if (finalCompleted) {
-              pushToastOnce(`video-done:${videoId}`, "시청 완료 처리되었습니다.", "success", 12_000);
+              pushToastOnce(
+                `video-done:${videoId}`,
+                "시청 완료 처리되었습니다.",
+                "success",
+                12_000
+              );
             }
           }
         }
@@ -1834,7 +2001,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
       const section = sections.find((s) => s.id === sectionId);
       if (!section) return prev;
 
-      const maxPage = Math.max(0, Math.ceil(section.videos.length / pageSize) - 1);
+      const maxPage = Math.max(
+        0,
+        Math.ceil(section.videos.length / pageSize) - 1
+      );
       const current = Math.min(prev[sectionId] ?? 0, maxPage);
       const nextPage = Math.max(0, current - 1);
       return { ...prev, [sectionId]: nextPage };
@@ -1847,7 +2017,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
       const section = sections.find((s) => s.id === sectionId);
       if (!section) return prev;
 
-      const maxPage = Math.max(0, Math.ceil(section.videos.length / pageSize) - 1);
+      const maxPage = Math.max(
+        0,
+        Math.ceil(section.videos.length / pageSize) - 1
+      );
       const current = Math.min(prev[sectionId] ?? 0, maxPage);
       const nextPage = Math.min(maxPage, current + 1);
       return { ...prev, [sectionId]: nextPage };
@@ -1955,7 +2128,11 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
     // (2) 완료는 "서버 응답으로 확정"한다.
     // - 여기서는 완료를 로컬 확정/부모 반영하지 않고, 완료 플러시만 1회 트리거.
-    if (selectedVideo && !completedSentRef.current && Math.round(newPercent) >= 100) {
+    if (
+      selectedVideo &&
+      !completedSentRef.current &&
+      Math.round(newPercent) >= 100
+    ) {
       const reqPos = getResumeSeconds();
       if (completeRequestPosRef.current !== reqPos) {
         completeRequestPosRef.current = reqPos;
@@ -1979,7 +2156,8 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
     void flushProgress({ force: true, reason: "ended" });
 
-    const duration = videoDurationRef.current || videoRef.current?.duration || 0;
+    const duration =
+      videoDurationRef.current || videoRef.current?.duration || 0;
     if (duration > 0) {
       maxWatchedTimeRef.current = duration;
       setWatchPercent(100);
@@ -2034,18 +2212,25 @@ const EduPanel: React.FC<EduPanelProps> = ({
         expiresAtMs: Date.now() + 365 * 24 * 60 * 60 * 1000,
       });
       setPresignState(cur.id, { status: "ready", url: raw });
-      setSelectedVideo((prev) => (prev && prev.id === cur.id ? { ...prev, videoUrl: raw } : prev));
+      setSelectedVideo((prev) =>
+        prev && prev.id === cur.id ? { ...prev, videoUrl: raw } : prev
+      );
       return;
     }
 
     void (async () => {
       try {
-        const resolved = await resolvePlayableUrl(cur.id, raw, { force: true, watch: true });
+        const resolved = await resolvePlayableUrl(cur.id, raw, {
+          force: true,
+          watch: true,
+        });
 
         const latest = selectedVideoRef.current;
         if (!latest || latest.id !== cur.id) return;
 
-        setSelectedVideo((prev) => (prev && prev.id === cur.id ? { ...prev, videoUrl: resolved } : prev));
+        setSelectedVideo((prev) =>
+          prev && prev.id === cur.id ? { ...prev, videoUrl: resolved } : prev
+        );
       } catch (e: unknown) {
         if (isAbortError(e)) return;
       }
@@ -2057,7 +2242,12 @@ const EduPanel: React.FC<EduPanelProps> = ({
     if (!onOpenQuizPanel) return;
 
     if (!canTakeQuizForSelected) {
-      pushToastOnce("quiz-blocked", "교육 영상을 모두 시청 완료해야 퀴즈를 볼 수 있습니다.", "warn", 6000);
+      pushToastOnce(
+        "quiz-blocked",
+        "교육 영상을 모두 시청 완료해야 퀴즈를 볼 수 있습니다.",
+        "warn",
+        6000
+      );
       return;
     }
 
@@ -2110,7 +2300,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
     setSize(listSize);
 
     if (hasDOM) {
-      const pos = anchor ? computePanelPosition(anchor, listSize) : computeDockFallbackPos(listSize);
+      const pos = anchor
+        ? computePanelPosition(anchor, listSize)
+        : computeDockFallbackPos(listSize);
       setPanelPos(clampPanelPos(pos, listSize, minTop));
     } else {
       setPanelPos({ top: 80, left: 120 });
@@ -2149,8 +2341,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
   if (!hasDOM) return null;
 
-  const selectedPresignState: PresignState | undefined =
-    selectedVideo ? presignByVideoId[selectedVideo.id] : undefined;
+  const selectedPresignState: PresignState | undefined = selectedVideo
+    ? presignByVideoId[selectedVideo.id]
+    : undefined;
 
   const isResolvingSelected = selectedPresignState?.status === "resolving";
   const isErrorSelected = selectedPresignState?.status === "error";
@@ -2272,7 +2465,11 @@ const EduPanel: React.FC<EduPanelProps> = ({
       >
         <div
           className="cb-edu-panel cb-chatbot-panel"
-          style={{ width: size.width, height: size.height, position: "relative" }}
+          style={{
+            width: size.width,
+            height: size.height,
+            position: "relative",
+          }}
           onMouseDown={() => onRequestFocus?.()}
         >
           {toastStack}
@@ -2337,7 +2534,10 @@ const EduPanel: React.FC<EduPanelProps> = ({
                   >
                     ◀
                   </button>
-                  <h2 className="cb-edu-watch-title" title={selectedVideo.title}>
+                  <h2
+                    className="cb-edu-watch-title"
+                    title={selectedVideo.title}
+                  >
                     {selectedVideo.title}
                   </h2>
                 </header>
@@ -2377,8 +2577,12 @@ const EduPanel: React.FC<EduPanelProps> = ({
                         }}
                       >
                         <div>
-                          <div className="cb-edu-empty-title">영상 URL을 준비하는 중…</div>
-                          <div className="cb-edu-empty-desc">잠시만 기다려 주세요.</div>
+                          <div className="cb-edu-empty-title">
+                            영상 URL을 준비하는 중…
+                          </div>
+                          <div className="cb-edu-empty-desc">
+                            잠시만 기다려 주세요.
+                          </div>
                         </div>
                       </div>
                     ) : null}
@@ -2396,13 +2600,32 @@ const EduPanel: React.FC<EduPanelProps> = ({
                         }}
                       >
                         <div>
-                          <div className="cb-edu-empty-title">영상 재생 준비 실패</div>
-                          <div className="cb-edu-empty-desc">{selectedErrorMessage}</div>
-                          <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "center" }}>
-                            <button type="button" className="cb-btn cb-btn-primary" onClick={retryResolveSelected}>
+                          <div className="cb-edu-empty-title">
+                            영상 재생 준비 실패
+                          </div>
+                          <div className="cb-edu-empty-desc">
+                            {selectedErrorMessage}
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              marginTop: 12,
+                              justifyContent: "center",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="cb-btn cb-btn-primary"
+                              onClick={retryResolveSelected}
+                            >
                               다시 시도
                             </button>
-                            <button type="button" className="cb-btn" onClick={handleBackToList}>
+                            <button
+                              type="button"
+                              className="cb-btn"
+                              onClick={handleBackToList}
+                            >
                               목록으로
                             </button>
                           </div>
@@ -2419,23 +2642,36 @@ const EduPanel: React.FC<EduPanelProps> = ({
                             onClick={handlePlayPause}
                             disabled={!canWatchPlay}
                             aria-label={isPlaying ? "일시정지" : "재생"}
-                            title={!canWatchPlay ? "영상 URL 준비 중입니다." : undefined}
+                            title={
+                              !canWatchPlay
+                                ? "영상 URL 준비 중입니다."
+                                : undefined
+                            }
                           >
                             {isPlaying ? "❚❚" : "▶"}
                           </button>
 
-                          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                            <div className="cb-edu-watch-progress-text">{clamp(roundedWatchPercent, 0, 100)}%</div>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "flex-end",
+                              gap: 4,
+                            }}
+                          >
+                            <div className="cb-edu-watch-progress-text">
+                              {clamp(roundedWatchPercent, 0, 100)}%
+                            </div>
 
                             {/* 진행률 저장 상태(요청된 UI: 진행률/완료 상태 표시) */}
                             <div style={{ fontSize: 12, opacity: 0.82 }}>
                               {saveStatus === "saving"
                                 ? "저장중…"
                                 : saveStatus === "saved"
-                                  ? "저장됨"
-                                  : saveStatus === "error"
-                                    ? "저장 실패"
-                                    : null}
+                                ? "저장됨"
+                                : saveStatus === "error"
+                                ? "저장 실패"
+                                : null}
                             </div>
                           </div>
                         </>
@@ -2446,10 +2682,16 @@ const EduPanel: React.FC<EduPanelProps> = ({
                   <footer className="cb-edu-watch-footer">
                     <button
                       type="button"
-                      className={`cb-edu-watch-quiz-btn ${canTakeQuizForSelected ? "is-active" : ""}`}
+                      className={`cb-edu-watch-quiz-btn ${
+                        canTakeQuizForSelected ? "is-active" : ""
+                      }`}
                       onClick={handleGoToQuiz}
                       disabled={!canTakeQuizForSelected}
-                      title={!canTakeQuizForSelected ? "교육 영상 전체를 시청 완료해야 퀴즈를 볼 수 있습니다." : undefined}
+                      title={
+                        !canTakeQuizForSelected
+                          ? "교육 영상 전체를 시청 완료해야 퀴즈를 볼 수 있습니다."
+                          : undefined
+                      }
                     >
                       퀴즈 풀러가기
                     </button>
@@ -2460,7 +2702,13 @@ const EduPanel: React.FC<EduPanelProps> = ({
               // =========================
               // LIST VIEW
               // =========================
-              <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              <div
+                style={{
+                  height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
                 <header className="cb-edu-header cb-edu-header-row">
                   <h2 className="cb-edu-title">교육</h2>
 
@@ -2482,14 +2730,26 @@ const EduPanel: React.FC<EduPanelProps> = ({
                 <div className="cb-edu-body">
                   {eduLoading ? (
                     <div className="cb-edu-empty">
-                      <div className="cb-edu-empty-title">교육 목록을 불러오는 중…</div>
-                      <div className="cb-edu-empty-desc">잠시만 기다려 주세요.</div>
+                      <div className="cb-edu-empty-title">
+                        교육 목록을 불러오는 중…
+                      </div>
+                      <div className="cb-edu-empty-desc">
+                        잠시만 기다려 주세요.
+                      </div>
                     </div>
                   ) : eduError ? (
                     <div className="cb-edu-empty">
-                      <div className="cb-edu-empty-title">교육 목록 로드 실패</div>
+                      <div className="cb-edu-empty-title">
+                        교육 목록 로드 실패
+                      </div>
                       <div className="cb-edu-empty-desc">{eduError}</div>
-                      <div style={{ marginTop: 12, display: "flex", justifyContent: "center" }}>
+                      <div
+                        style={{
+                          marginTop: 12,
+                          display: "flex",
+                          justifyContent: "center",
+                        }}
+                      >
                         <button
                           type="button"
                           className="cb-btn cb-btn-primary"
@@ -2504,20 +2764,42 @@ const EduPanel: React.FC<EduPanelProps> = ({
                     </div>
                   ) : sections.length === 0 ? (
                     <div className="cb-edu-empty">
-                      <div className="cb-edu-empty-title">표시할 교육이 없습니다.</div>
-                      <div className="cb-edu-empty-desc">배정된 교육이 없거나 아직 게시되지 않았습니다.</div>
+                      <div className="cb-edu-empty-title">
+                        표시할 교육이 없습니다.
+                      </div>
+                      <div className="cb-edu-empty-desc">
+                        배정된 교육이 없거나 아직 게시되지 않았습니다.
+                      </div>
                     </div>
                   ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 14,
+                      }}
+                    >
                       {sections.map((section) => {
-                        const st = videosByEduId[section.id] ?? { status: "idle", videos: [] };
+                        const st = videosByEduId[section.id] ?? {
+                          status: "idle",
+                          videos: [],
+                        };
 
                         const pageSize = getPageSize(size.width);
-                        const maxPage = Math.max(0, Math.ceil(section.videos.length / pageSize) - 1);
-                        const currentPage = Math.min(sectionPages[section.id] ?? 0, maxPage);
+                        const maxPage = Math.max(
+                          0,
+                          Math.ceil(section.videos.length / pageSize) - 1
+                        );
+                        const currentPage = Math.min(
+                          sectionPages[section.id] ?? 0,
+                          maxPage
+                        );
 
                         const start = currentPage * pageSize;
-                        const visible = section.videos.slice(start, start + pageSize);
+                        const visible = section.videos.slice(
+                          start,
+                          start + pageSize
+                        );
 
                         const done = isSectionDone(section);
                         const showPager = section.videos.length > pageSize;
@@ -2525,34 +2807,67 @@ const EduPanel: React.FC<EduPanelProps> = ({
                         // 진행률/완료 상태(요청된 UI) — 섹션 요약
                         const total = section.videos.length;
                         const doneCount = section.videos.filter(
-                          (v) => (v.completed ?? false) || (v.progress ?? 0) >= 100
+                          (v) =>
+                            (v.completed ?? false) || (v.progress ?? 0) >= 100
                         ).length;
                         const avgProgress =
                           total > 0
                             ? Math.round(
-                              section.videos.reduce((acc, v) => acc + clamp(v.progress ?? 0, 0, 100), 0) / total
-                            )
+                                section.videos.reduce(
+                                  (acc, v) =>
+                                    acc + clamp(v.progress ?? 0, 0, 100),
+                                  0
+                                ) / total
+                              )
                             : 0;
 
                         return (
                           <div key={section.id} className="cb-edu-section">
-                            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                              <div className="cb-edu-section-title">{section.title}</div>
-
-                              <div style={{ fontSize: 12, opacity: 0.85 }}>
-                                {section.eduType ? section.eduType : "교육"} · {done ? "완료" : "진행 중"} ·{" "}
-                                {total > 0 ? `${doneCount}/${total} 완료 · ${avgProgress}%` : "0건"}
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "baseline",
+                                gap: 10,
+                              }}
+                            >
+                              <div className="cb-edu-section-title">
+                                {section.title}
                               </div>
 
-                              <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                                {section.eduType ? section.eduType : "교육"} ·{" "}
+                                {done ? "완료" : "진행 중"} ·{" "}
+                                {total > 0
+                                  ? `${doneCount}/${total} 완료 · ${avgProgress}%`
+                                  : "0건"}
+                              </div>
+
+                              <div
+                                style={{
+                                  marginLeft: "auto",
+                                  display: "flex",
+                                  gap: 8,
+                                  alignItems: "center",
+                                }}
+                              >
                                 {onOpenQuizPanel ? (
                                   <button
                                     type="button"
-                                    className={`cb-edu-watch-quiz-btn ${done ? "is-active" : ""}`}
-                                    style={{ height: 34, padding: "0 14px", fontSize: 13 }}
+                                    className={`cb-edu-watch-quiz-btn ${
+                                      done ? "is-active" : ""
+                                    }`}
+                                    style={{
+                                      height: 34,
+                                      padding: "0 14px",
+                                      fontSize: 13,
+                                    }}
                                     disabled={!done}
                                     onClick={() => onOpenQuizPanel(section.id)}
-                                    title={!done ? "교육 영상 전체를 시청 완료해야 퀴즈를 볼 수 있습니다." : undefined}
+                                    title={
+                                      !done
+                                        ? "교육 영상 전체를 시청 완료해야 퀴즈를 볼 수 있습니다."
+                                        : undefined
+                                    }
                                   >
                                     퀴즈
                                   </button>
@@ -2562,26 +2877,51 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
                             <div style={{ marginTop: 10 }}>
                               {st.status === "loading" ? (
-                                <div className="cb-edu-empty" style={{ padding: 10 }}>
-                                  <div className="cb-edu-empty-title">영상 목록 로딩 중…</div>
+                                <div
+                                  className="cb-edu-empty"
+                                  style={{ padding: 10 }}
+                                >
+                                  <div className="cb-edu-empty-title">
+                                    영상 목록 로딩 중…
+                                  </div>
                                 </div>
                               ) : st.status === "error" ? (
-                                <div className="cb-edu-empty" style={{ padding: 10 }}>
-                                  <div className="cb-edu-empty-title">영상 목록 로드 실패</div>
-                                  <div className="cb-edu-empty-desc">{st.message}</div>
-                                  <div style={{ marginTop: 10, display: "flex", justifyContent: "center" }}>
+                                <div
+                                  className="cb-edu-empty"
+                                  style={{ padding: 10 }}
+                                >
+                                  <div className="cb-edu-empty-title">
+                                    영상 목록 로드 실패
+                                  </div>
+                                  <div className="cb-edu-empty-desc">
+                                    {st.message}
+                                  </div>
+                                  <div
+                                    style={{
+                                      marginTop: 10,
+                                      display: "flex",
+                                      justifyContent: "center",
+                                    }}
+                                  >
                                     <button
                                       type="button"
                                       className="cb-btn cb-btn-primary"
-                                      onClick={() => void ensureVideosLoaded(section.id)}
+                                      onClick={() =>
+                                        void ensureVideosLoaded(section.id)
+                                      }
                                     >
                                       다시 시도
                                     </button>
                                   </div>
                                 </div>
                               ) : visible.length === 0 ? (
-                                <div className="cb-edu-empty" style={{ padding: 10 }}>
-                                  <div className="cb-edu-empty-title">영상이 없습니다.</div>
+                                <div
+                                  className="cb-edu-empty"
+                                  style={{ padding: 10 }}
+                                >
+                                  <div className="cb-edu-empty-title">
+                                    영상이 없습니다.
+                                  </div>
                                 </div>
                               ) : (
                                 <>
@@ -2590,7 +2930,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
                                       <button
                                         type="button"
                                         className="cb-edu-nav-btn"
-                                        onClick={() => handlePrevClick(section.id)}
+                                        onClick={() =>
+                                          handlePrevClick(section.id)
+                                        }
                                         disabled={currentPage <= 0}
                                         aria-label="이전"
                                         title="이전"
@@ -2603,32 +2945,57 @@ const EduPanel: React.FC<EduPanelProps> = ({
 
                                     <div className="cb-edu-videos-row">
                                       {visible.map((v) => {
-                                        const p = clamp(v.progress ?? 0, 0, 100);
+                                        const p = clamp(
+                                          v.progress ?? 0,
+                                          0,
+                                          100
+                                        );
                                         const vs = getVideoStatus(p);
-                                        const isComplete = (v.completed ?? false) || p >= 100;
+                                        const isComplete =
+                                          (v.completed ?? false) || p >= 100;
 
                                         return (
                                           <button
                                             key={v.id}
                                             type="button"
                                             className="cb-edu-video-card"
-                                            onClick={() => void handleVideoClick(section.id, section.title, v)}
+                                            onClick={() =>
+                                              void handleVideoClick(
+                                                section.id,
+                                                section.title,
+                                                v
+                                              )
+                                            }
                                           >
                                             {renderThumb(v)}
 
-                                            <div className="cb-edu-video-title" title={v.title}>
+                                            <div
+                                              className="cb-edu-video-title"
+                                              title={v.title}
+                                            >
                                               {v.title}
                                             </div>
 
                                             <div className="cb-edu-video-progress">
                                               <div className="cb-edu-video-progress-track">
-                                                <div className="cb-edu-video-progress-fill" style={{ width: `${p}%` }} />
+                                                <div
+                                                  className="cb-edu-video-progress-fill"
+                                                  style={{ width: `${p}%` }}
+                                                />
                                               </div>
                                             </div>
 
                                             <div className="cb-edu-video-meta">
-                                              <div className="cb-edu-progress-text">{Math.round(p)}%</div>
-                                              <div className={`cb-edu-status ${isComplete ? "completed" : vs.key}`}>
+                                              <div className="cb-edu-progress-text">
+                                                {Math.round(p)}%
+                                              </div>
+                                              <div
+                                                className={`cb-edu-status ${
+                                                  isComplete
+                                                    ? "completed"
+                                                    : vs.key
+                                                }`}
+                                              >
                                                 {isComplete ? "완료" : vs.label}
                                               </div>
                                             </div>
@@ -2641,7 +3008,9 @@ const EduPanel: React.FC<EduPanelProps> = ({
                                       <button
                                         type="button"
                                         className="cb-edu-nav-btn"
-                                        onClick={() => handleNextClick(section.id)}
+                                        onClick={() =>
+                                          handleNextClick(section.id)
+                                        }
                                         disabled={currentPage >= maxPage}
                                         aria-label="다음"
                                         title="다음"

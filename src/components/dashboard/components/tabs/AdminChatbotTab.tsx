@@ -150,6 +150,18 @@ const AdminChatbotTab: React.FC<AdminChatbotTabProps> = ({
     fetchData();
   }, [fetchData]);
 
+  // 자동 새로고침: 10초마다 최신 데이터 확인
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      void fetchData();
+    }, 10000); // 10초마다 새로고침
+
+    // 컴포넌트 언마운트 시 인터벌 정리
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [fetchData]);
+
   // KPI 데이터 생성
   const primaryKpis: KpiCard[] = summary
     ? [

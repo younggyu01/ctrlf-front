@@ -10,6 +10,7 @@ import {
   deleteFAQCandidate,
   type FAQCandidate,
   type FAQCandidateStatus,
+  type FAQBackendStatus,
   type AutoGenerateRequest,
 } from "../../api/faqApi";
 import { invalidateFaqListCache, invalidateFaqHomeCache } from "../../../chatbot/chatApi";
@@ -22,13 +23,19 @@ type Toast =
   | { open: false }
   | { open: true; tone: "neutral" | "warn" | "danger"; message: string };
 
-function statusLabel(status: FAQCandidateStatus): string {
+type FAQAnyStatus = FAQCandidateStatus | FAQBackendStatus;
+
+function statusLabel(status: FAQAnyStatus): string {
   switch (status) {
     case "NEW":
       return "신규";
     case "PENDING":
       return "대기중";
+    case "DRAFT":
+      return "대기중";
     case "APPROVED":
+      return "승인됨";
+    case "PUBLISHED":
       return "승인됨";
     case "REJECTED":
       return "반려됨";
@@ -37,13 +44,17 @@ function statusLabel(status: FAQCandidateStatus): string {
   }
 }
 
-function statusTone(status: FAQCandidateStatus): "neutral" | "warn" | "danger" {
+function statusTone(status: FAQAnyStatus): "neutral" | "warn" | "danger" {
   switch (status) {
     case "NEW":
       return "warn"; // 신규는 주의 표시
     case "PENDING":
       return "neutral";
+    case "DRAFT":
+      return "neutral";
     case "APPROVED":
+      return "neutral";
+    case "PUBLISHED":
       return "neutral";
     case "REJECTED":
       return "danger";

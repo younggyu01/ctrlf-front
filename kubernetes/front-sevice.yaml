@@ -4,14 +4,14 @@ kind: Service
 metadata:
   name: front-service
   namespace: argocd
-  annotations:
-    # AWS Load Balancer Controller를 사용하는 경우 (필요 시 수정)
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
 spec:
-  type: LoadBalancer
+  # 외부 노출은 Terraform의 ALB(HTTPS)에서 담당하고,
+  # ALB가 EKS 노드의 고정 NodePort(30080)로 트래픽을 전달합니다.
+  type: NodePort
   selector:
     app: front-service
   ports:
     - protocol: TCP
       port: 80
       targetPort: 80
+      nodePort: 30080

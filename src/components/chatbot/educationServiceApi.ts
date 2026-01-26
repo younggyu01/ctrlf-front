@@ -1362,6 +1362,9 @@ export async function putQuizTimer(
   init?: Pick<RequestInit, "signal" | "keepalive">
 ): Promise<{ updated: boolean } | null> {
   // 백엔드가 PUT timer를 지원하지 않으므로 no-op
+  void attemptId;
+  void payload;
+  void init;
   return null;
 }
 

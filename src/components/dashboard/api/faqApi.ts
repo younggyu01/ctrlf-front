@@ -65,6 +65,14 @@ function mapRouterDomainToFaqDomain(routerDomain?: string): string | undefined {
 export type FAQCandidateStatus = "NEW" | "PENDING" | "APPROVED" | "REJECTED";
 
 /**
+ * 백엔드에서 내려올 수 있는 상태 값 (도큐먼트/레거시)
+ * - PUBLISHED: 게시됨(=APPROVED)
+ * - DRAFT: 초안(=PENDING)
+ * - REJECTED: 반려(=REJECTED)
+ */
+export type FAQBackendStatus = "PUBLISHED" | "DRAFT" | "REJECTED";
+
+/**
  * FAQ 후보 항목 (백엔드 실제 응답 구조)
  */
 export interface FAQCandidate {
@@ -78,7 +86,7 @@ export interface FAQCandidate {
   frequency?: number; // 질문 빈도 (몇 번 질문되었는지)
   firstAskedAt?: string; // ISO 8601 형식
   lastAskedAt?: string; // ISO 8601 형식
-  status: FAQCandidateStatus;
+  status: FAQCandidateStatus | FAQBackendStatus;
   createdAt?: string; // ISO 8601 형식
   updatedAt?: string; // ISO 8601 형식
   summary?: string; // 요약
@@ -211,7 +219,11 @@ function mapStatusFromBackend(backendStatus: string): FAQCandidateStatus {
  * FAQCandidate의 상태를 백엔드 응답에서 변환
  */
 function normalizeCandidateStatus(candidate: FAQCandidate): FAQCandidate {
-  if (candidate.status && (candidate.status === "PUBLISHED" || candidate.status === "DRAFT")) {
+  if (
+    candidate.status === "PUBLISHED" ||
+    candidate.status === "DRAFT" ||
+    candidate.status === "REJECTED"
+  ) {
     return {
       ...candidate,
       status: mapStatusFromBackend(candidate.status),
@@ -354,12 +366,14 @@ export async function approveFAQCandidate(
     reviewerId: string;
     question: string;
     answer: string;
+    domain?: string;
   }
 ): Promise<FAQCandidate | null> {
   const requestBody = {
     reviewerId: params.reviewerId,
     question: params.question,
     answer: params.answer,
+    ...(params.domain ? { domain: params.domain } : {}),
   };
   
   console.log("[FAQ API] 승인 요청:", `${FAQ_API_BASE}/drafts/${candidateId}/approve`, requestBody);
